@@ -1,0 +1,183 @@
+import { useEffect, useState } from "react";
+import { api, on } from "./api";
+import { adv } from "./settings/advanced";
+import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
+import { DetailsPane } from "./components/DetailsPane";
+import { FileView } from "./components/FileView";
+import { Shell, useLayout } from "./components/Layout";
+import { Dialog, PropertiesDialog, Toast } from "./components/Overlays";
+import { SettingsView } from "./components/SettingsView";
+import { Notices } from "./components/Notices";
+import { DetachedTransfers, Transfers } from "./components/Transfers";
+import { AnalyzerView } from "./components/Analyzer";
+import { DrivesView, HomeView, SearchView } from "./components/Views";
+import { commandFor } from "./settings/keys";
+import { onJobFinished, useStore } from "./store";
+import { useAppearance } from "./useAppearance";
+import { HOME, THIS_PC, parseLocation } from "./util/path";
+import { panelsAt, type PanelId } from "./util/layout";
+
+export default function App() {
+  const ready = useStore((s) => s.ready);
+  const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
+  const activeTab = useStore((s) => s.activeTab);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
+  const os = useStore((s) => s.info?.os);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
+  const [layout] = useLayout();
+
+  useAppearance();
+
+  useEffect(() => {
+    const s = useStore.getState();
+    s.init().catch((e) => setFatal(String(e)));
+    const subscriptions = [
+      on("transfer-progress", (p) => useStore.getState().onProgress(p)),
+      on("delete-progress", (p) => useStore.getState().onDeleteProgress(p)),
+      on("job-finished", onJobFinished),
+      on("fs-changed", (dirs) => useStore.getState().bumpDirs(dirs)),
+      on("dir-updated", (l) => useStore.getState().bumpDirs([l.path])),
+      on("index-status", (indexStatus) => useStore.setState({ indexStatus })),
+      on("budget-changed", (budget) => useStore.setState({ budget })),
+      on("detached", ({ kind, open }) => {
+        const s = useStore.getState();
+        if (kind !== "settings" && kind !== "transfers") return;
+        useStore.setState({ detached: { ...s.detached, [kind]: open } });
+        // The main window notes what is detached, for "remember detached windows".
+        if (!s.isSecondary) rememberDetached({ ...s.detached, [kind]: open });
+      }),
+      on("reattach", ({ kind, payload }) => {
+        const s = useStore.getState();
+        if (kind === "settings") useStore.setState({ settingsOpen: true });
+        else if (kind === "transfers") useStore.setState({ transfersOpen: true });
+        else if (kind === "tabs") s.insertTabs(payload?.locations ?? [], payload?.index);
+      }),
+      // Settings changed in another window: follow it.
+      on("settings-changed", (next) => {
+        const cur = useStore.getState().settings;
+        if (JSON.stringify(cur) !== JSON.stringify(next)) useStore.setState({ settings: next });
+      }),
+    ];
+    return () => subscriptions.forEach((p) => void p.then((off) => off()));
+  }, []);
+
+  // Bring back panels that were detached last time, only if asked to.
+  useEffect(() => {
+    if (!ready) return;
+    const s = useStore.getState();
+    if (s.isSecondary || !adv<boolean>(s.settings, "windows.rememberDetached")) return;
+    const was = recalledDetached();
+    if (was.settings) void api.openSettingsWindow().catch(() => {});
+    if (was.transfers) void api.openTransfersWindow().catch(() => {});
+  }, [ready]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const s = useStore.getState();
+      if (s.dialog) return;
+      // While a shortcut is being recorded in Settings, leave the keys alone.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-capture-key]")) return;
+      const command = commandFor(s.settings, e);
+      if (!command) return;
+      const i = s.tabs.findIndex((t) => t.id === s.activeTab);
+      const n = s.tabs.length;
+      switch (command) {
+        case "newTab": s.newTab(); break;
+        case "closeTab": s.closeTab(s.activeTab); break;
+        case "settings": s.openSettings(); break;
+        case "nextTab": s.activate(s.tabs[(i + 1) % n].id); break;
+        case "prevTab": s.activate(s.tabs[(i + n - 1) % n].id); break;
+        case "toggleSidebar": s.updateSettings((x) => void (x.appearance.sidebarCollapsed = !x.appearance.sidebarCollapsed)); break;
+        case "toggleDetails": s.updateSettings((x) => void (x.appearance.showDetailsPane = !x.appearance.showDetailsPane)); break;
+        case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
+        case "thisPc": s.navigate(THIS_PC); break;
+        case "home": s.navigate(HOME); break;
+        default: return;
+      }
+      e.preventDefault();
+    };
+    // The webview's own right-click menu (Reload, Inspect…) is not part of the app.
+    const onContext = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (!["INPUT", "TEXTAREA"].includes(el.tagName)) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("contextmenu", onContext);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("contextmenu", onContext);
+    };
+  }, []);
+
+  if (fatal) return <div className="empty-state" data-error>{fatal}</div>;
+  if (!ready || !location) return <div className="app-loading" />;
+
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers") return <DetachedTransfers />;
+
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <SettingsView detached />;
+
+  const loc = parseLocation(location);
+  const topFirst = panelsAt(layout, "top")[0];
+  const tabsOwnWindowButtons = topFirst === "tabs";
+
+  const render = (id: PanelId, dock: string) => {
+    const vertical = dock === "left" || dock === "right";
+    switch (id) {
+      case "tabs":
+        return <TabBar controls={tabsOwnWindowButtons && dock === "top"} vertical={vertical} />;
+      case "address":
+        return <Toolbar />;
+      case "commands":
+        return <CommandBar vertical={vertical} onFilter={setFilterAnchor} />;
+      case "sidebar":
+        return <Sidebar />;
+      case "details":
+        return showDetails && loc.kind === "folder" ? <DetailsPane /> : null;
+    }
+  };
+
+  return (
+    <div className="app" data-os={os}>
+      {!(tabsOwnWindowButtons && layout.tabs.dock === "top" && !layout.tabs.collapsed) && <CaptionStrip />}
+      <Shell
+        render={render}
+        content={
+          <div className="content-inner" key={activeTab}>
+            {loc.kind === "home" && <HomeView />}
+            {loc.kind === "thispc" && <DrivesView />}
+            {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} />}
+            {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
+            {loc.kind === "folder" && <FileView path={loc.path} />}
+          </div>
+        }
+      />
+      <Transfers />
+      <Notices />
+      {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
+      {settingsOpen && <SettingsView />}
+      <PropertiesDialog />
+      <Dialog />
+      <Toast />
+    </div>
+  );
+}
+
+const DETACHED_KEY = "fast.detached";
+
+function rememberDetached(flags: { settings: boolean; transfers: boolean }) {
+  try {
+    localStorage.setItem(DETACHED_KEY, JSON.stringify(flags));
+  } catch {
+    /* storage unavailable: the panels simply come back docked */
+  }
+}
+
+function recalledDetached(): { settings: boolean; transfers: boolean } {
+  try {
+    return { settings: false, transfers: false, ...JSON.parse(localStorage.getItem(DETACHED_KEY) ?? "{}") };
+  } catch {
+    return { settings: false, transfers: false };
+  }
+}

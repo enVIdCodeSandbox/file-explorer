@@ -1,0 +1,220 @@
+/*
+ * Design tokens. Every colour, radius, size and font in the app comes from a
+ * variable defined here, so a theme only needs to override variables.
+ * Custom CSS from Settings > Themes is loaded after this file.
+ * See docs/THEMING.md.
+ */
+
+:root {
+  /* Typography */
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", "Noto Sans", sans-serif;
+  --font-mono: "Cascadia Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-size: 13px;
+  --font-size-small: 12px;
+
+  /* Shape */
+  --radius: 8px;
+  --radius-small: 4px;
+  --row-height: 26px;
+  --sidebar-width: 220px;
+  --details-width: 300px;
+
+  /* Accent (set from Settings > Appearance; themes may override) */
+  --accent: #4cc2ff;
+  --accent-text: #00131f;
+  --danger: #ff6b6b;
+  --warning: #ffb347;
+}
+
+:root[data-density="comfortable"] {
+  --row-height: 34px;
+  --font-size: 14px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1c1c;            /* window background, tab strip */
+  --surface: #272727;       /* content area, active tab, toolbar */
+  --surface-raised: #2d2d2d;/* menus, dialogs, cards */
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #f2f2f2;
+  --text-muted: #a3a3a3;
+  --selection: color-mix(in srgb, var(--accent) 24%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 55%, transparent);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --icon-folder: #f2c14e;
+  --icon-file: #9aa0a6;
+  --icon-page: #33363b;
+  --treemap-text: #ffffff;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-hover: rgba(0, 0, 0, 0.045);
+  --surface-active: rgba(0, 0, 0, 0.08);
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.2);
+  --text: #1b1b1b;
+  --text-muted: #616161;
+  --selection: color-mix(in srgb, var(--accent) 18%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  --icon-folder: #e6a700;
+  --icon-file: #6b7280;
+  --icon-page: #f4f5f7;
+  --treemap-text: #ffffff;
+  --danger: #c42b1c;
+}
+
+/* ---- Built-in themes (ids match src/util/themes.ts) ---- */
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #0b1220; --surface: #111a2e; --surface-raised: #16213a;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #e6edf7; --text-muted: #8fa0ba;
+  --accent: #5aa9ff; --accent-text: #00101f;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #f2c14e; --icon-file: #8fa0ba; --icon-page: #1a2540;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --bg: #121212; --surface: #1b1b1b; --surface-raised: #222222;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #e8e8e8; --text-muted: #9a9a9a;
+  --accent: #b8b8b8; --accent-text: #111111;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #d6b25e; --icon-file: #9a9a9a; --icon-page: #2a2a2a;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="nord"] {
+  color-scheme: dark;
+  --bg: #2e3440; --surface: #3b4252; --surface-raised: #434c5e;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #eceff4; --text-muted: #a9b4c8;
+  --accent: #88c0d0; --accent-text: #102027;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #ebcb8b; --icon-file: #a9b4c8; --icon-page: #434c5e;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="dracula"] {
+  color-scheme: dark;
+  --bg: #21222c; --surface: #282a36; --surface-raised: #303245;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #f8f8f2; --text-muted: #a4a8c4;
+  --accent: #bd93f9; --accent-text: #1b1030;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #f1fa8c; --icon-file: #a4a8c4; --icon-page: #343746;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="solarized-dark"] {
+  color-scheme: dark;
+  --bg: #002b36; --surface: #073642; --surface-raised: #0b4150;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #eee8d5; --text-muted: #93a1a1;
+  --accent: #2aa198; --accent-text: #002b36;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #b58900; --icon-file: #93a1a1; --icon-page: #0b4150;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="forest"] {
+  color-scheme: dark;
+  --bg: #10190f; --surface: #182518; --surface-raised: #1e301e;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #e3efe0; --text-muted: #9ab596;
+  --accent: #6fcf7a; --accent-text: #0a1f0d;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #d9b44a; --icon-file: #9ab596; --icon-page: #203320;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="solarized-light"] {
+  color-scheme: light;
+  --bg: #eee8d5; --surface: #fdf6e3; --surface-raised: #fffaf0;
+  --surface-hover: rgba(0,0,0,.05); --surface-active: rgba(0,0,0,.09);
+  --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.26);
+  --text: #073642; --text-muted: #586e75;
+  --accent: #268bd2; --accent-text: #ffffff;
+  --selection: color-mix(in srgb, var(--accent) 20%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.18);
+  --icon-folder: #b58900; --icon-file: #586e75; --icon-page: #f3ecd6;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="sepia"] {
+  color-scheme: light;
+  --bg: #e9dfcc; --surface: #f6efe0; --surface-raised: #fbf6ea;
+  --surface-hover: rgba(0,0,0,.05); --surface-active: rgba(0,0,0,.09);
+  --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.26);
+  --text: #3b2f1e; --text-muted: #7a6a52;
+  --accent: #a8631a; --accent-text: #ffffff;
+  --selection: color-mix(in srgb, var(--accent) 20%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.18);
+  --icon-folder: #c18a1d; --icon-file: #7a6a52; --icon-page: #efe5cf;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="rose"] {
+  color-scheme: light;
+  --bg: #f6e8ee; --surface: #fff7fa; --surface-raised: #ffffff;
+  --surface-hover: rgba(0,0,0,.05); --surface-active: rgba(0,0,0,.09);
+  --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.26);
+  --text: #3a1d2a; --text-muted: #8a5a6f;
+  --accent: #d6334c; --accent-text: #ffffff;
+  --selection: color-mix(in srgb, var(--accent) 20%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.18);
+  --icon-folder: #e0a21b; --icon-file: #8a5a6f; --icon-page: #fbeaf1;
+  --treemap-text: #ffffff;
+}
+:root[data-theme="contrast-dark"] {
+  color-scheme: dark;
+  --bg: #000000; --surface: #000000; --surface-raised: #000000;
+  --surface-hover: rgba(255,255,255,.06); --surface-active: rgba(255,255,255,.11);
+  --border: rgba(255,255,255,.09); --border-strong: rgba(255,255,255,.2);
+  --text: #ffffff; --text-muted: #e0e0e0;
+  --accent: #ffff00; --accent-text: #000000;
+  --selection: color-mix(in srgb, var(--accent) 26%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.5);
+  --icon-folder: #ffd400; --icon-file: #e0e0e0; --icon-page: #111111;
+  --treemap-text: #ffffff;
+  --border: #ffffff; --border-strong: #ffffff; --surface-hover: rgba(255,255,0,.18); --surface-active: rgba(255,255,0,.3);
+}
+:root[data-theme="contrast-light"] {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-raised: #ffffff;
+  --surface-hover: rgba(0,0,0,.05); --surface-active: rgba(0,0,0,.09);
+  --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.26);
+  --text: #000000; --text-muted: #1a1a1a;
+  --accent: #0000cc; --accent-text: #ffffff;
+  --selection: color-mix(in srgb, var(--accent) 20%, transparent);
+  --selection-border: color-mix(in srgb, var(--accent) 60%, transparent);
+  --shadow: 0 8px 28px rgba(0,0,0,.18);
+  --icon-folder: #8a5a00; --icon-file: #1a1a1a; --icon-page: #f2f2f2;
+  --treemap-text: #ffffff;
+  --border: #000000; --border-strong: #000000; --surface-hover: rgba(0,0,204,.12); --surface-active: rgba(0,0,204,.22); --danger: #a00000;
+}

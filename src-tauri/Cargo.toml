@@ -1,0 +1,23 @@
+[package]
+name = "fast-file-explorer"
+description = "FAST File Explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "fast-file-explorer"
+
+[lib]
+name = "fast_explorer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+fast-core = { path = "../crates/fast-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+parking_lot = "0.12"
+tokio = { version = "1", features = ["sync"] }

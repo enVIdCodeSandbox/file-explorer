@@ -1,0 +1,157 @@
+name: Build
+
+# Tests on every push and pull request, installers for every supported
+# platform, and a draft GitHub release when a version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# You can also run it by hand from the Actions tab ("Run workflow").
+
+on:
+  push:
+    branches: [main, tauri-rewrite]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Linux gates the build. Windows and macOS results are reported but do not
+    # block installers, so one platform-specific test cannot stop a release.
+    continue-on-error: ${{ matrix.os != 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      # The engine has no system dependencies, so it is tested on every OS.
+      # The desktop shell is also compiled and tested where its libraries exist.
+      - name: Test the engine
+        if: "!startsWith(matrix.os, 'ubuntu')"
+        run: cargo test -p fast-core
+      - name: Test the engine and the desktop shell
+        if: startsWith(matrix.os, 'ubuntu')
+        run: cargo test --workspace
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  bundle:
+    name: Installers (${{ matrix.name }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64 (.deb .rpm .AppImage)
+            artifact: linux-x64
+            os: ubuntu-22.04
+            args: "--bundles deb,rpm,appimage"
+            targets: ""
+          - name: Windows x64 (.msi .exe)
+            artifact: windows-x64
+            os: windows-latest
+            args: "--bundles nsis,msi"
+            targets: ""
+          - name: macOS universal (.dmg, Apple silicon and Intel)
+            artifact: macos-universal
+            os: macos-latest
+            args: "--target universal-apple-darwin --bundles dmg,app"
+            targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          # These two need runners that not every account has, or a toolchain
+          # the runner image may lack. A failure here does not fail the run.
+          - name: Windows ARM64 (.exe)
+            artifact: windows-arm64
+            os: windows-latest
+            args: "--target aarch64-pc-windows-msvc --bundles nsis"
+            targets: "aarch64-pc-windows-msvc"
+            optional: true
+          - name: Linux ARM64 (.deb .rpm .AppImage)
+            artifact: linux-arm64
+            os: ubuntu-22.04-arm
+            args: "--bundles deb,rpm,appimage"
+            targets: ""
+            optional: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+    env:
+      # AppImage tooling runs without FUSE on CI machines.
+      APPIMAGE_EXTRACT_AND_RUN: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.artifact }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Build installers
+        run: npx tauri build ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.artifact }}
+          path: |
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.rpm
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/release/bundle/**/*.dmg
+            target/*/release/bundle/**/*.deb
+            target/*/release/bundle/**/*.rpm
+            target/*/release/bundle/**/*.AppImage
+            target/*/release/bundle/**/*.msi
+            target/*/release/bundle/**/*.exe
+            target/*/release/bundle/**/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: List what will be attached
+        run: find installers -type f | sort
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: installers/**

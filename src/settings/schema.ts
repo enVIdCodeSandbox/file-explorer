@@ -1,0 +1,161 @@
+// Declarative description of every setting. The settings screen, its search
+// box and its sections are all generated from this list, so adding a setting
+// means adding one entry here (and the field in crates/fast-core/src/settings.rs).
+
+import type { Settings } from "../api";
+import { ADVANCED, adv } from "./advanced";
+
+export type Control =
+  | { type: "toggle" }
+  | { type: "select"; options: { value: string; label: string }[] }
+  | { type: "number"; min: number; max: number; step?: number; unit?: string }
+  | { type: "text"; placeholder?: string }
+  | { type: "color" }
+  | { type: "css" }
+  | { type: "menuItems" }
+  | { type: "themes" }
+  | { type: "font" }
+  | { type: "imports" }
+  | { type: "layout" }
+  | { type: "storage" };
+
+export interface SettingDef {
+  /** Dotted path into the Settings object, e.g. "general.showHidden". */
+  key: string;
+  section: string;
+  label: string;
+  description?: string;
+  control: Control;
+  /** Only shown on these operating systems. */
+  os?: string[];
+  /** Extra words the settings search should match. */
+  keywords?: string;
+}
+
+export const SECTIONS = [
+  "General",
+  "Appearance",
+  "Themes",
+  "Layout",
+  "Navigation pane",
+  "Performance",
+  "Storage",
+  "File transfers",
+  "Search",
+  "Notifications",
+  "Right-click menu",
+  "Terminal",
+  "Advanced",
+  "About",
+] as const;
+
+const toggle: Control = { type: "toggle" };
+
+export const SETTINGS: SettingDef[] = [
+  // ---- General ----
+  { key: "general.startPage", section: "General", label: "Open new tabs to", control: { type: "select", options: [{ value: "home", label: "Home" }, { value: "thisPc", label: "This PC (drives)" }] } },
+  { key: "general.restoreSession", section: "General", label: "Reopen tabs from last time", description: "Tabs and tab groups are saved as you work and restored at launch.", control: toggle, keywords: "session remember startup" },
+  { key: "general.showHidden", section: "General", label: "Show hidden files and folders", control: toggle, keywords: "dotfiles" },
+  { key: "general.showExtensions", section: "General", label: "Show file name extensions", control: toggle },
+  { key: "general.foldersFirst", section: "General", label: "List folders before files", control: toggle, keywords: "sort" },
+  { key: "general.deleteToTrash", section: "General", label: "Delete moves items to the Recycle Bin / Trash", description: "Turn off to delete permanently. Shift+Delete always deletes permanently.", control: toggle },
+  { key: "general.confirmDelete", section: "General", label: "Ask before deleting", control: toggle, keywords: "confirm" },
+  { key: "general.nativeProperties", section: "General", label: "Use the system's Properties window", description: "Opens Windows' own Properties (or the equivalent). Turn off to always use the app's own window, which also works where the system has none.", control: toggle, keywords: "properties dialog native" },
+  { key: "general.shellExtras", section: "General", label: "Add entries from other programs to the right-click menu", description: "Edit with…, Open with, archivers and similar. They load a moment after the menu opens, so the menu itself is never slowed down. Turn off to skip them.", control: toggle, keywords: "context menu shell extensions 7-zip open with send to" },
+
+  // ---- Appearance ----
+  { key: "appearance.accent", section: "Appearance", label: "Accent colour", control: { type: "color" } },
+  { key: "appearance.density", section: "Appearance", label: "Row density", description: "Compact fits as many rows as Windows 10 did.", control: { type: "select", options: [{ value: "compact", label: "Compact" }, { value: "comfortable", label: "Comfortable" }] }, keywords: "spacing size" },
+  { key: "appearance.viewLevel", section: "Appearance", label: "Folder view", description: "Ctrl + scroll over a folder changes this too, and it is remembered.", control: { type: "select", options: [{ value: "0", label: "Details" }, { value: "1", label: "List" }, { value: "2", label: "Small icons" }, { value: "3", label: "Medium icons" }, { value: "4", label: "Large icons" }, { value: "5", label: "Extra large icons" }] }, keywords: "icons thumbnails details list size" },
+  { key: "appearance.showDriveSpace", section: "Appearance", label: "Show drive space on This PC", description: "Free or used space under every drive (choose which on the This PC page).", control: toggle, keywords: "storage capacity" },
+  { key: "appearance.hideNetworkAddress", section: "Appearance", label: "Hide server addresses in network drive names", description: "Shows \"games (S:)\" instead of \"games (\\\\192.168.1.5) (S:)\". Any drive can override this from its right-click menu.", control: toggle, keywords: "ip network share unc" },
+  { key: "appearance.showDetailsPane", section: "Appearance", label: "Show the details pane", control: toggle, keywords: "properties preview" },
+  { key: "appearance.driveChart", section: "Appearance", label: "Drive space display", control: { type: "select", options: [{ value: "bar", label: "Bars" }, { value: "donut", label: "Rings" }] }, keywords: "pie donut chart this pc" },
+  { key: "appearance.driveMetric", section: "Appearance", label: "Drive space shows", control: { type: "select", options: [{ value: "used", label: "Space used" }, { value: "free", label: "Space free" }] } },
+
+  // ---- Themes ----
+  { key: "appearance.theme", section: "Themes", label: "Colour theme", description: "Thirteen built in. The accent colour in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colours scheme" },
+  { key: "appearance.style.font", section: "Themes", label: "Font", description: "Built-in stacks, or a font file you import below.", control: { type: "font" }, keywords: "typeface text" },
+  { key: "appearance.style.fontSize", section: "Themes", label: "Text size", control: { type: "number", min: 10, max: 22, unit: "px" } },
+  { key: "appearance.style.radius", section: "Themes", label: "Corner roundness", control: { type: "number", min: 0, max: 20, unit: "px" }, keywords: "rounded square corners" },
+  { key: "appearance.style.menu", section: "Themes", label: "Menu style", control: { type: "select", options: [{ value: "glass", label: "Glass (blurred)" }, { value: "flat", label: "Flat" }, { value: "outlined", label: "Outlined" }, { value: "floating", label: "Floating card" }] }, keywords: "context menu popup" },
+  { key: "appearance.style.icons", section: "Themes", label: "Icon style", control: { type: "select", options: [{ value: "outline", label: "Outline" }, { value: "bold", label: "Bold" }, { value: "thin", label: "Thin" }] }, keywords: "toolbar glyphs" },
+  { key: "appearance.style.folderColor", section: "Themes", label: "Folder colour", control: { type: "select", options: [{ value: "classic", label: "Classic yellow" }, { value: "blue", label: "Blue" }, { value: "mono", label: "Grey" }, { value: "accent", label: "Match accent" }] }, keywords: "folder icon" },
+  { key: "appearance.style.background", section: "Themes", label: "Window background", control: { type: "select", options: [{ value: "plain", label: "Plain" }, { value: "gradient", label: "Soft gradient" }, { value: "aurora", label: "Aurora" }, { value: "dusk", label: "Dusk" }, { value: "mist", label: "Mist" }, { value: "image", label: "My picture (import below)" }] }, keywords: "wallpaper backdrop" },
+  { key: "appearance.style.imports", section: "Themes", label: "Import fonts, style sheets and pictures", description: "Files are copied into the app's own folder. A style sheet is plain CSS that can override any variable or class (see docs/THEMING.md).", control: { type: "imports" }, keywords: "custom font ttf otf woff css background image" },
+  { key: "appearance.customCss", section: "Themes", label: "Custom CSS", description: "Applied on top of the built-in theme as you type. Every colour, radius and size is a CSS variable; see docs/THEMING.md for the full list and the app's class names.", control: { type: "css" }, keywords: "theme style skin stylesheet" },
+
+  // ---- Layout ----
+  { key: "appearance.layout", section: "Layout", label: "Window layout", description: "Every part of the window is a panel: dock it to any edge, float it, make it pop out from a button, collapse it or hide it.", control: { type: "layout" }, keywords: "dock move drag panels toolbar tabs sidebar position" },
+
+  // ---- Navigation pane ----
+  { key: "appearance.showFrequent", section: "Navigation pane", label: "Show Frequently used", description: "The folders you open most.", control: toggle },
+  { key: "appearance.showPinned", section: "Navigation pane", label: "Show Pinned", control: toggle },
+  { key: "appearance.showDrives", section: "Navigation pane", label: "Show Drives", control: toggle },
+  { key: "appearance.sidebarCollapsed", section: "Navigation pane", label: "Collapse to icons only", description: "Drag the pane's edge to resize it, or drag it nearly shut.", control: toggle },
+  { key: "appearance.sidebarWidth", section: "Navigation pane", label: "Width", control: { type: "number", min: 150, max: 480, step: 10, unit: "px" } },
+
+  // ---- Performance ----
+  { key: "performance.priority", section: "Performance", label: "Resource use", description: "Automatic adapts threads, caches and background work to your CPU, memory and battery. Manual uses the limits below exactly.", control: { type: "select", options: [{ value: "dynamic", label: "Automatic" }, { value: "manual", label: "Manual" }] }, keywords: "priority dynamic battery cpu ram" },
+  { key: "performance.maxThreads", section: "Performance", label: "Maximum threads", description: "0 uses one per CPU core.", control: { type: "number", min: 0, max: 128 }, keywords: "cpu cores parallel" },
+  { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings.", control: { type: "number", min: 16, max: 16384, step: 16, unit: "MB" }, keywords: "ram memory" },
+  { key: "performance.reduceOnBattery", section: "Performance", label: "Do less on battery", description: "Pauses background indexing and uses fewer threads when unplugged.", control: toggle, keywords: "laptop power" },
+  { key: "performance.backgroundIndexing", section: "Performance", label: "Index files in the background", description: "Keeps search instant. Without it, searches scan the folder each time.", control: toggle, keywords: "cache search" },
+  { key: "performance.indexAllDrives", section: "Performance", label: "Index all local drives", description: "Otherwise only your home folder is indexed. Network shares are never indexed automatically.", control: toggle },
+  { key: "performance.metadataCaching", section: "Performance", label: "Cache folder listings", description: "Folders you revisit appear instantly and refresh in the background.", control: toggle, keywords: "metadata cache" },
+  { key: "performance.predictivePrefetch", section: "Performance", label: "Preload folders you are likely to open", description: "Loads a folder when you point at it, and the ones you usually open next.", control: toggle, keywords: "predict prefetch hover" },
+  { key: "performance.lazyLoading", section: "Performance", label: "Lazy rendering", description: "Only draws rows near the screen. Turning this off renders further ahead and uses more memory.", control: toggle, keywords: "virtual scroll" },
+  { key: "performance.thumbnails", section: "Performance", label: "Show image thumbnails", control: toggle, keywords: "preview pictures" },
+  { key: "performance.thumbnailSize", section: "Performance", label: "Thumbnail size", control: { type: "number", min: 48, max: 256, step: 16, unit: "px" } },
+
+  // ---- Storage ----
+  { key: "storage.caches", section: "Storage", label: "What the app stores", description: "Each kind of cache, how much space it takes, and a button to clear just that one.", control: { type: "storage" }, keywords: "cache clear thumbnails index disk usage snapshots history space" },
+
+  // ---- File transfers ----
+  { key: "transfer.conflict", section: "File transfers", label: "When a file already exists", control: { type: "select", options: [{ value: "ask", label: "Ask me" }, { value: "keepBoth", label: "Keep both" }, { value: "overwrite", label: "Replace" }, { value: "skip", label: "Skip" }] }, keywords: "conflict duplicate overwrite" },
+  { key: "transfer.maxParallel", section: "File transfers", label: "Parallel file streams", description: "0 lets the app choose per job from file sizes and drive types.", control: { type: "number", min: 0, max: 64 }, keywords: "threads workers" },
+  { key: "transfer.largeFileThresholdMb", section: "File transfers", label: "Treat files as large from", description: "Large files are copied a few at a time with big buffers; smaller ones in parallel.", control: { type: "number", min: 1, max: 4096, unit: "MB" } },
+  { key: "transfer.preserveTimestamps", section: "File transfers", label: "Keep original modified dates", control: toggle, keywords: "timestamps mtime" },
+  { key: "transfer.rememberDeviceSpeeds", section: "File transfers", label: "Remember drive speeds", description: "Uses past transfers between the same drives to estimate time accurately from the first second.", control: toggle, keywords: "eta estimate" },
+  { key: "transfer.historyLimit", section: "File transfers", label: "Transfers to remember", description: "A few bytes each. The most recent ones teach the app how long similar copies take. 0 remembers none; clear them in Storage.", control: { type: "number", min: 0, max: 5000, step: 50 }, keywords: "history prediction model" },
+
+  // ---- Search ----
+  { key: "search.scopeToCurrentFolder", section: "Search", label: "Search inside the current folder", description: "Turn off to search everything indexed, wherever you are.", control: toggle, keywords: "scope" },
+  { key: "general.openSearchResultInNewTab", section: "Search", label: "Open results in a new tab", description: "Keeps the search results available in their own tab.", control: toggle },
+  { key: "search.includeHidden", section: "Search", label: "Include hidden items in results", control: toggle },
+  { key: "search.limit", section: "Search", label: "Maximum results", control: { type: "number", min: 10, max: 10000, step: 10 } },
+
+  // ---- Right-click menu ----
+  { key: "contextMenu.hidden", section: "Right-click menu", label: "Entries shown in the right-click menu", control: { type: "menuItems" }, keywords: "context menu customize" },
+
+  // ---- Terminal ----
+  { key: "terminal.windowsShell", section: "Terminal", label: "Terminal to open", control: { type: "select", options: [{ value: "cmd", label: "Command Prompt" }, { value: "powershell", label: "PowerShell" }, { value: "wt", label: "Windows Terminal" }] }, os: ["windows"], keywords: "cmd command prompt shell" },
+  { key: "terminal.macTerminal", section: "Terminal", label: "Terminal app", control: { type: "text", placeholder: "Terminal" }, os: ["macos"], keywords: "iterm shell" },
+  { key: "terminal.linuxTerminal", section: "Terminal", label: "Terminal program", description: "Leave empty to detect one automatically.", control: { type: "text", placeholder: "e.g. konsole" }, os: ["linux"], keywords: "shell gnome-terminal" },
+];
+
+/** Advanced options appear in Settings like any other entry (and in search). */
+const sectionOf = (d: (typeof ADVANCED)[number]) =>
+  d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+
+for (const d of ADVANCED) {
+  SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });
+}
+
+export function getSetting(settings: Settings, key: string): unknown {
+  if (key.startsWith("advanced.")) return adv(settings, key.slice("advanced.".length));
+  const v = key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], settings);
+  // The view level is stored as a number but edited as a drop-down of strings.
+  return key === "appearance.viewLevel" ? String(v) : v;
+}
+
+export function setSetting(settings: Settings, key: string, value: unknown): void {
+  if (key.startsWith("advanced.")) {
+    settings.advanced = { ...settings.advanced, [key.slice("advanced.".length)]: value };
+    return;
+  }
+  const parts = key.split(".");
+  const last = parts.pop()!;
+  const target = parts.reduce<Record<string, unknown>>((o, k) => o[k] as Record<string, unknown>, settings as unknown as Record<string, unknown>);
+  target[last] = key === "appearance.viewLevel" ? Number(value) : value;
+}

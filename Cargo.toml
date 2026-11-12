@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/fast-core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Image decoding is the hot path for thumbnails; keep it fast in dev builds too.
+[profile.dev.package.image]
+opt-level = 3
