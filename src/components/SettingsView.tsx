@@ -2,6 +2,7 @@
 // src/settings/schema.ts. Changes apply and save immediately.
 
 import { About } from "./About";
+import { Docs } from "./Docs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../api";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -271,6 +272,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
               </section>
             </>
           )}
+          {!q && section === "Documentation" && <Docs />}
           {!q && section === "About" && (
             <section>
               <h3>About</h3>

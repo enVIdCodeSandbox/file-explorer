@@ -5,7 +5,8 @@ import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from 
 import { DetailsPane } from "./components/DetailsPane";
 import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
-import { Dialog, PropertiesDialog, Toast } from "./components/Overlays";
+import { Dialog, DragOverlay, PropertiesDialog, Toast } from "./components/Overlays";
+import { ShareDialog } from "./components/Share";
 import { SettingsView } from "./components/SettingsView";
 import { Notices } from "./components/Notices";
 import { DetachedTransfers, Transfers } from "./components/Transfers";
@@ -15,6 +16,7 @@ import { commandFor } from "./settings/keys";
 import { onJobFinished, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
 import { HOME, THIS_PC, parseLocation } from "./util/path";
+import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 
 export default function App() {
@@ -48,12 +50,21 @@ export default function App() {
         // The main window notes what is detached, for "remember detached windows".
         if (!s.isSecondary) rememberDetached({ ...s.detached, [kind]: open });
       }),
-      on("reattach", ({ kind, payload }) => {
-        const s = useStore.getState();
+      on("reattach", ({ kind }) => {
         if (kind === "settings") useStore.setState({ settingsOpen: true });
         else if (kind === "transfers") useStore.setState({ transfersOpen: true });
-        else if (kind === "tabs") s.insertTabs(payload?.locations ?? [], payload?.index);
       }),
+      // A tab was dragged here from another window: slot it in under the pointer.
+      on("tab-drop", ({ location, x }) => {
+        const slots = [...document.querySelectorAll<HTMLElement>(".tab-bar .tab[data-tab-id]")];
+        const index = slots.filter((el) => {
+          const b = el.getBoundingClientRect();
+          return x > b.left + b.width / 2;
+        }).length;
+        useStore.getState().insertTabs([location], index);
+      }),
+      // Files dragged in from other programs.
+      listenForExternalDrops().then((off) => () => off()),
       // Settings changed in another window: follow it.
       on("settings-changed", (next) => {
         const cur = useStore.getState().settings;
@@ -158,6 +169,8 @@ export default function App() {
       {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
       {settingsOpen && <SettingsView />}
       <PropertiesDialog />
+      <ShareDialog />
+      <DragOverlay />
       <Dialog />
       <Toast />
     </div>

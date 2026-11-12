@@ -131,8 +131,8 @@
 :root[data-focus="off"] :focus-visible { outline: none; }
 :root[data-motion="off"] * { transition: none !important; animation: none !important; }
 :root[data-scrollbars="thin"] ::-webkit-scrollbar { width: 8px; height: 8px; }
-:root[data-scrollbars="hidden"] ::-webkit-scrollbar-thumb { background: transparent; }
-:root[data-scrollbars="hidden"] *:hover::-webkit-scrollbar-thumb { background: var(--border-strong); }
+:root[data-scrollbars="hidden"] ::-webkit-scrollbar-thumb { background-color: transparent; }
+:root[data-scrollbars="hidden"] *:hover::-webkit-scrollbar-thumb { background-color: var(--border-strong); }
 .file-tile[data-layout="inline"] { flex-direction: row; justify-content: flex-start; text-align: left; padding: 2px 8px; }
 .file-tile[data-layout="inline"] .file-name { text-align: left; }
 .file-icon { flex: none; }
@@ -257,13 +257,21 @@
 .notice-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
 
 /* ---- Sidebar sections that scroll on their own ------------------------------ */
-.side-section[data-scroll] { overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
-.side-section[data-scroll]::-webkit-scrollbar { width: 6px; }
+.side-section[data-scroll] { overflow-y: auto; overflow-x: hidden; }
+.side-section[data-scroll]::-webkit-scrollbar { width: 10px; }
+/* Lists in the sidebar keep a quiet scrollbar until the pointer is over them. */
+.side-section[data-scroll]::-webkit-scrollbar-thumb { background-color: transparent; }
+.side-section[data-scroll]:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 40%, transparent); }
+.side-section[data-scroll]:hover::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--text-muted) 75%, transparent); }
 .sidebar[data-collapsed] .side-section[data-scroll] { scrollbar-width: none; }
 .side-heading { cursor: default; }
 
 /* ---- Tabs: height, scrolling, drag shadow ------------------------------------- */
 .tab-strip { display: flex; align-items: flex-end; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+/* Tabs open at their full width and share the row once it is full, down to the minimum; only then does the bar scroll. */
+.tab-strip:not([data-vertical]) .tab-bar { flex: 0 1 auto; }
+.tab-strip:not([data-vertical]) .tab-slot { flex: 0 1 var(--tab-width, 200px); width: var(--tab-width, 200px); min-width: var(--tab-min-width, 90px); }
+.tab-strip:not([data-vertical]) .tab-slot .tab { flex: 1 1 auto; width: 100%; min-width: var(--tab-min-width, 90px); }
 .tab-strip[data-vertical] { flex-direction: column; align-items: stretch; }
 .tab-strip .tab-bar { flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .tab-strip[data-vertical] .tab-bar { overflow-x: hidden; overflow-y: auto; max-height: 60vh; }
@@ -334,3 +342,27 @@
 .proc-list li { display: flex; justify-content: space-between; gap: 12px; }
 .about .details-list { display: block; margin: 0; }
 .about .about-row dt, .about .about-row dd { margin: 0; padding: 0; }
+
+/* ---- Dragging ------------------------------------------------------------ */
+body[data-dragging], body[data-dragging] * { cursor: default !important; user-select: none !important; -webkit-user-select: none !important; }
+.drag-ghost { position: fixed; z-index: 90; pointer-events: none; display: flex; align-items: center; gap: 8px; max-width: 320px; padding: 4px 10px; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-small); box-shadow: var(--shadow); font-size: var(--font-size-small); }
+.drag-ghost[data-ok] { border-color: var(--accent); }
+.drag-ghost-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.drag-ghost-count { min-width: 18px; padding: 0 5px; text-align: center; border-radius: 9px; background: var(--accent); color: var(--accent-text); font-size: 11px; }
+.drag-ghost-text { color: var(--text-muted); white-space: nowrap; }
+.drag-ghost[data-ok] .drag-ghost-text { color: var(--text); }
+[data-drop-over] { background: color-mix(in srgb, var(--accent) 28%, transparent) !important; outline: 1px solid var(--accent); outline-offset: -1px; }
+.file-scroller[data-drop-over] { background: transparent !important; outline-width: 2px; }
+[data-insert] { position: relative; }
+[data-insert]::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--accent); border-radius: 1px; pointer-events: none; }
+[data-insert="before"]::after { top: -1px; }
+[data-insert="after"]::after { bottom: -1px; }
+.file-row[data-dragging], .file-tile[data-dragging] { opacity: 0.55; }
+.force-stop { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 2px; font-size: var(--font-size-small); }
+.force-stop .secondary { height: 24px; padding: 0 10px; border: 1px solid var(--danger); color: var(--danger); border-radius: var(--radius-small); }
+.force-stop .secondary:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.graph-streak { stroke-width: 1.5; stroke-dasharray: 5 3; opacity: .75; }
+.graph-streak.bytes { stroke: var(--accent); }
+.graph-streak.files { stroke: var(--warning); }
+.graph-head.bytes { fill: var(--accent); }
+.graph-head.files { fill: var(--warning); }

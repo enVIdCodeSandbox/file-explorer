@@ -4,7 +4,7 @@
 
 | Check | Result |
 |---|---|
-| Engine unit tests (`cargo test -p fast-core`) | 47 pass on Linux |
+| Engine unit tests (`cargo test -p fast-core`) | All pass on Linux (`cargo test --workspace`) |
 | Engine type-check for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` | Passes (compile check only, not run) |
 | Frontend type-check, unit tests, production build | Pass |
 | App launched on Linux (WebKitGTK) | Browsing, thumbnails, tabs and groups, search, disk usage, This PC, settings, right-click menu, copy and paste of a 303-file folder all exercised |
@@ -19,19 +19,22 @@
    network drives.
 2. **Live folder watching** (`notify` crate) for open tabs, so changes made by
    other programs appear without F5.
-3. **System clipboard and drag and drop**, so files move between this app and
-   others. Needs per-OS code (CF_HDROP, NSPasteboard, `text/uri-list`).
+3. **Run-test the system clipboard, drag-out and drops from other programs**
+   on Windows and macOS (written with `clipboard-rs`, `drag` and Tauri's drop
+   events, see INTERFACE.md; none of them has run on those systems).
 4. **Incremental index updates.** Today the index is rebuilt by a full rescan.
    Windows: optional elevated helper reading the NTFS MFT and USN journal for
    near-instant builds and live updates. macOS: FSEvents. Linux: fanotify.
-5. **Remote protocols.** Port SFTP, FTP, WebDAV and rsync from the Electron
-   version behind a `Source`/`Sink` trait in the transfer engine.
+5. **Remote protocols.** Port SFTP, FTP and WebDAV from the Electron
+   version behind a `Source`/`Sink` trait in the transfer engine. (rsync, rclone,
+   SMB-tuned and NFS-tuned copies already exist as copy methods; see TRANSFERS.md.)
 6. **Transfer benchmarks** against the native tools on SSD, HDD and SMB, then
-   tune thresholds and worker counts from data. Add unbuffered I/O for very
+   tune thresholds and worker counts from data. The method chooser already
+   learns per machine; benchmarks would tune its starting point. Add unbuffered I/O for very
    large files on Windows if the numbers support it.
 7. **Undo**, **archives** (zip browse/extract/create), **"Open with"**,
    batch rename.
-8. **Tabs:** drag to reorder, drag out to a new window.
+8. **Tabs:** drag to reorder within the strip.
 9. **Details:** EXIF, audio/video metadata, owner names, Windows ACL summary.
 10. **Drive health** (SMART). Needs elevated access on every OS; show it only
     when available.
@@ -42,7 +45,10 @@
 
 ## Known limits in this build
 
-* Copy, cut and paste work inside the app only.
+* Cut and paste into another program arrives as a copy (operating systems do not let the sender mark "cut").
+* SMB-tuned copies on Windows need Robocopy `/COMPRESS` (Windows 11 / Server 2022 or later); otherwise Robocopy or the built-in engine is used.
+* rclone is used only when installed; the app does not bundle it.
+* The temporary download link works only while the app runs. On the network it is plain HTTP; over the internet it goes through a Cloudflare quick tunnel (needs `cloudflared` installed; not run-tested here because it needs the real service). No other tunnel providers, passwords or uploads to a hosting service yet.
 * A folder open in a tab does not update when another program changes it,
   until it is revisited or refreshed.
 * Folder listings are sent to the interface whole. Folders with several

@@ -22,7 +22,7 @@ import {
 } from "../util/analysis";
 import { formatCount, formatDate, formatDuration, formatSize, kindOf, unitBytes } from "../util/format";
 import { analyzeLocation, baseName, isInside, parentPath } from "../util/path";
-import { colorFor, layoutTree, type Tile } from "../util/treemap";
+import { colorFor, layoutNested, typeColor, type Tile } from "../util/treemap";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileIcon, Icon } from "./Icons";
 import { useShellItems } from "./shellMenu";
@@ -124,8 +124,9 @@ export function AnalyzerView({ path }: { path: string }) {
     const isolated = exts.size ? isolate(focused, exts, names) : focused;
     return isolated ? hideSmall(isolated, minBytes) : null;
   }, [focused, exts, names, minBytes]);
-  const tiles = useMemo(() => (shown ? layoutTree(shown, { x: 0, y: 0, w: size.w, h: size.h }) : []), [shown, size.w, size.h]);
+  const tiles = useMemo(() => (shown ? layoutNested(shown, { x: 0, y: 0, w: size.w, h: size.h }) : []), [shown, size.w, size.h]);
   const needle = text.trim().toLowerCase();
+  const hoverTile = hover?.tile ?? null;
 
   useEffect(() => {
     const c = canvas.current;
@@ -139,35 +140,68 @@ export function AnalyzerView({ path }: { path: string }) {
     const textColor = getComputedStyle(c).getPropertyValue("--treemap-text") || "#fff";
     ctx.font = "11px system-ui, sans-serif";
     ctx.textBaseline = "top";
+    const frameFill = (depth: number) => `hsl(220 9% ${17 + Math.min(depth, 6) * 2.5}%)`;
+    const fits = (text: string, room: number) => {
+      if (ctx.measureText(text).width <= room) return text;
+      let end = text.length;
+      while (end > 1 && ctx.measureText(`${text.slice(0, end)}…`).width > room) end--;
+      return end > 1 ? `${text.slice(0, end)}…` : "";
+    };
     for (const t of tiles) {
-      // While searching, files that do not match fade back.
-      ctx.globalAlpha = needle && !t.node.isDir && !t.node.name.toLowerCase().includes(needle) ? 0.2 : 1;
-      ctx.fillStyle = colorFor(t.node.name, t.node.isDir);
+      const dim = needle && !t.frame && !t.node.isDir && !t.node.name.toLowerCase().includes(needle);
+      ctx.globalAlpha = dim ? 0.2 : 1;
+      if (t.frame) {
+        ctx.fillStyle = frameFill(t.depth);
+        ctx.fillRect(t.x, t.y, t.w, t.h);
+        ctx.strokeStyle = "rgba(255,255,255,.14)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1);
+        if (t.header) {
+          ctx.fillStyle = textColor;
+          ctx.font = "600 11px system-ui, sans-serif";
+          const label = fits(t.node.name, t.w - 10 - 56);
+          ctx.fillText(label, t.x + 5, t.y + 4);
+          ctx.font = "11px system-ui, sans-serif";
+          ctx.globalAlpha = 0.65;
+          ctx.textAlign = "right";
+          ctx.fillText(formatSize(t.node.size), t.x + t.w - 5, t.y + 4);
+          ctx.textAlign = "left";
+          ctx.globalAlpha = 1;
+        }
+        continue;
+      }
+      // A file takes its type's colour; a folder too small to open takes the colour of what mostly fills it.
+      const lead = t.node.isDir ? t.node.types[0] : undefined;
+      ctx.fillStyle = t.node.isDir && lead ? typeColor(names[lead[0]] === NO_EXT ? "" : (names[lead[0]] ?? "")) : colorFor(t.node.name, t.node.isDir);
       ctx.fillRect(t.x + 0.5, t.y + 0.5, Math.max(0, t.w - 1), Math.max(0, t.h - 1));
       // A soft highlight gives the cushion look that separates neighbours.
       const g = ctx.createLinearGradient(t.x, t.y, t.x + t.w, t.y + t.h);
-      g.addColorStop(0, "rgba(255,255,255,.18)");
-      g.addColorStop(1, "rgba(0,0,0,.22)");
+      g.addColorStop(0, "rgba(255,255,255,.2)");
+      g.addColorStop(1, "rgba(0,0,0,.25)");
       ctx.fillStyle = g;
       ctx.fillRect(t.x + 0.5, t.y + 0.5, Math.max(0, t.w - 1), Math.max(0, t.h - 1));
-      if (t.w > 64 && t.h > 30) {
+      if (t.w > 56 && t.h > 28) {
         ctx.fillStyle = textColor;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(t.x, t.y, t.w - 4, t.h);
-        ctx.clip();
-        ctx.fillText(t.node.name, t.x + 5, t.y + 5);
-        ctx.fillText(formatSize(t.node.size), t.x + 5, t.y + 18);
-        ctx.restore();
+        const name = fits(t.node.name, t.w - 10);
+        if (name) ctx.fillText(name, t.x + 5, t.y + 5);
+        if (t.h > 42) {
+          ctx.globalAlpha = 0.75;
+          ctx.fillText(formatSize(t.node.size), t.x + 5, t.y + 18);
+        }
       }
     }
     ctx.globalAlpha = 1;
-  }, [tiles, size, needle]);
+  }, [tiles, size, needle, names]);
 
   const tileAt = (e: React.MouseEvent): Tile | undefined => {
     const r = canvas.current!.getBoundingClientRect();
     const [x, y] = [e.clientX - r.left, e.clientY - r.top];
-    return tiles.find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
+    // Contents are listed after their folder's frame, so the last hit is the deepest.
+    for (let i = tiles.length - 1; i >= 0; i--) {
+      const t = tiles[i];
+      if (x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h) return t;
+    }
+    return undefined;
   };
 
   /** The top-level child of the focused folder that contains a tile. */
@@ -453,6 +487,7 @@ export function AnalyzerView({ path }: { path: string }) {
               if (t?.node.path) openMenu(e.clientX, e.clientY, { path: t.node.path, name: t.node.name, isDir: t.node.isDir });
             }}
           />
+          {hoverTile && <div className="treemap-hover" style={{ left: hoverTile.x, top: hoverTile.y, width: hoverTile.w, height: hoverTile.h }} />}
           {shown && shown.size === 0 && <div className="treemap-empty muted">Nothing matches these filters.</div>}
           {hover && (
             <div className="tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
@@ -510,7 +545,7 @@ export function AnalyzerView({ path }: { path: string }) {
                   title="Click to show only this type. Ctrl-click adds more."
                   onClick={(e) => toggleExt(r.ext, e.ctrlKey || e.metaKey || e.shiftKey)}
                 >
-                  <span className="type-swatch" style={{ background: r.ext === NO_EXT ? colorFor("x", false) : colorFor(`x.${r.ext}`, false) }} />
+                  <span className="type-swatch" style={{ background: typeColor(r.ext === NO_EXT ? "" : r.ext) }} />
                   <span className="grow file-name">{r.ext === NO_EXT ? r.ext : `.${r.ext}`}</span>
                   <span className="muted">{((r.bytes / typeTotal) * 100).toFixed(1)}%</span>
                   <strong>{formatSize(r.bytes)}</strong>

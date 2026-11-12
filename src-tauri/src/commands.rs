@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
-type CmdResult<T> = Result<T, String>;
+pub type CmdResult<T> = Result<T, String>;
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -307,7 +307,7 @@ pub fn known_folders() -> Vec<Place> {
 // ---------------------------------------------------------------------------
 
 fn index_roots(st: &Shared) -> Vec<PathBuf> {
-    if st.settings.read().performance.index_all_drives {
+    if st.settings.read().performance.index_drives {
         let mounts: Vec<PathBuf> = st
             .drives
             .read()
@@ -329,53 +329,117 @@ fn index_roots(st: &Shared) -> Vec<PathBuf> {
 }
 
 fn publish_index_status(app: &AppHandle, st: &Shared, state: &str) {
-    let idx = st.index.read().clone();
+    let set = st.index.read().clone();
+    let ready = set.parts().len();
     let status = IndexStatus {
         state: state.to_string(),
-        entries: idx.len(),
-        memory_bytes: idx.memory_bytes(),
-        built_at: idx.built_at,
-        truncated: idx.truncated,
-        roots: idx.roots.iter().map(|&r| idx.name(r).to_string()).collect(),
+        entries: set.len(),
+        memory_bytes: set.memory_bytes(),
+        built_at: set.built_at(),
+        truncated: set.truncated(),
+        roots: set.root_names(),
+        drives_ready: ready,
+        drives_total: index_roots(st).len().max(ready),
     };
     *st.index_status.lock() = status.clone();
     let _ = app.emit("index-status", status);
 }
 
-/// Scan the configured roots and swap the new index in. Runs on the caller's
-/// thread, so call it from a background thread.
+/// Where one drive's saved index lives.
+fn part_file(st: &Shared, root: &Path) -> PathBuf {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in root.to_string_lossy().bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    st.paths.index.join(format!("{h:016x}.bin"))
+}
+
+/// Scan the drives and swap each one in as soon as it is done, so search can
+/// use the first drive while the others are still being read. Drives are read
+/// side by side (they are usually separate disks), within the thread budget.
+/// Runs on the caller's thread, so call it from a background thread.
 pub fn rebuild_index(app: &AppHandle, st: &Shared) {
     if st.index_busy.swap(true, Ordering::SeqCst) {
         return;
     }
+    *st.drives.write() = drives::list_drives();
+    let roots = index_roots(st);
+    // A drive that went away takes its index with it.
+    {
+        let names: Vec<String> = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
+        let mut w = st.index.write();
+        *w = Arc::new(w.retain_roots(&names));
+    }
     publish_index_status(app, st, "scanning");
     let budget = st.budget.read().clone();
-    let roots = index_roots(st);
-    let idx = Index::scan(
-        &roots,
-        &ScanOptions { threads: budget.index_threads, max_entries: budget.index_max_entries, ..Default::default() },
-    );
-    let _ = idx.save(&st.paths.index);
-    *st.index.write() = Arc::new(idx);
+    let workers = budget.index_threads.max(1).min(roots.len().max(1)).min(4);
+    let per_root_threads = (budget.index_threads / workers).max(1);
+    let cap = budget.index_max_entries;
+    let per_root_cap = if cap == 0 { 0 } else { (cap / roots.len().max(1)).max(cap / 3) };
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some(root) = roots.get(i) else { break };
+                let idx = Index::scan(
+                    std::slice::from_ref(root),
+                    &ScanOptions { threads: per_root_threads, max_entries: per_root_cap, ..Default::default() },
+                );
+                let _ = idx.save(&part_file(st, root));
+                {
+                    let mut w = st.index.write();
+                    *w = Arc::new(w.with_part(Arc::new(idx)));
+                }
+                publish_index_status(app, st, "scanning");
+            });
+        }
+    });
     st.index_busy.store(false, Ordering::SeqCst);
     publish_index_status(app, st, "ready");
 }
 
-/// Load the saved index (instant search right after launch), then refresh it
-/// in the background if the resource budget allows.
+/// How often the background index is refreshed while the app is open.
+const REFRESH_SECS: u64 = 30 * 60;
+
+/// Load the saved index of every drive at once (search works the moment the
+/// window opens), then refresh in the background if the budget allows, and
+/// again every half hour.
 pub fn start_indexing(app: AppHandle, st: Shared) {
     std::thread::Builder::new()
         .name("indexer".into())
         .spawn(move || {
             publish_index_status(&app, &st, "loading");
-            if let Ok(idx) = Index::load(&st.paths.index) {
-                *st.index.write() = Arc::new(idx);
+            // Older versions kept one file for everything.
+            if let Some(dir) = st.paths.index.parent() {
+                let _ = std::fs::remove_file(dir.join("index.bin"));
             }
             *st.drives.write() = drives::list_drives();
+            let roots = index_roots(&st);
+            std::thread::scope(|scope| {
+                for root in &roots {
+                    scope.spawn(|| {
+                        let Ok(idx) = Index::load(&part_file(&st, root)) else { return };
+                        // Only trust a file that really is this drive's index.
+                        if idx.roots.first().map(|&r| idx.name(r) == root.to_string_lossy()) != Some(true) {
+                            return;
+                        }
+                        {
+                            let mut w = st.index.write();
+                            *w = Arc::new(w.with_part(Arc::new(idx)));
+                        }
+                        publish_index_status(&app, &st, "loading");
+                    });
+                }
+            });
             let has_index = !st.index.read().is_empty();
             publish_index_status(&app, &st, if has_index { "ready" } else { "idle" });
-            if st.budget.read().background_indexing {
-                rebuild_index(&app, &st);
+            loop {
+                if st.budget.read().background_indexing {
+                    rebuild_index(&app, &st);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(REFRESH_SECS));
             }
         })
         .expect("spawn indexer");
@@ -396,21 +460,34 @@ pub async fn reindex(app: AppHandle, state: State<'_, Shared>) -> CmdResult<()> 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
+    /// What the index knew straight away. More may follow as `search-hits` events.
     hits: Vec<Hit>,
-    /// "index": answered from the cache. "live": the folder was scanned now.
+    /// "index": answered from the cache. "live": some folders are being read now.
     source: &'static str,
     complete: bool,
+    /// True while a live walk is still streaming results.
+    searching: bool,
     elapsed_ms: f64,
     searched_entries: usize,
 }
 
-/// How long a live scan result is reused while the user keeps typing.
-const ADHOC_TTL_SECS: u64 = 60;
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SearchBatch {
+    id: u64,
+    hits: Vec<Hit>,
+    scanned: usize,
+    done: bool,
+}
 
+/// Search. Whatever the index covers is answered at once, from memory. Any
+/// folder it does not cover yet (a drive still being indexed, a folder made a
+/// moment ago) is walked live on another thread, and its matches are sent as
+/// `search-hits` events as they are found, so nothing waits for a full scan.
 #[tauri::command]
-pub async fn search(state: State<'_, Shared>, query: String, scope: Option<String>) -> CmdResult<SearchResponse> {
+pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, scope: Option<String>, id: u64) -> CmdResult<SearchResponse> {
     let st = state.inner().clone();
-    // Cancel whatever search was running: only the newest query matters.
+    // Only the newest query matters: stop whatever was still running.
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut slot = st.search_cancel.lock();
@@ -425,64 +502,56 @@ pub async fn search(state: State<'_, Shared>, query: String, scope: Option<Strin
             (s.search.limit.clamp(10, 10_000), s.search.include_hidden || s.general.show_hidden)
         };
         let scope_path = scope.map(PathBuf::from);
-        let idx = st.index.read().clone();
+        let set = st.index.read().clone();
 
-        // 1. The cache, when it covers what is being searched.
-        let covered = !idx.is_empty()
-            && match &scope_path {
-                Some(p) => idx.find_path(p).is_some(),
-                None => true,
-            };
-        if covered {
-            let hits = idx.search(&q, scope_path.as_deref(), include_hidden, limit);
-            return Ok(SearchResponse {
-                hits,
-                source: "index",
-                complete: !idx.truncated,
-                elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
-                searched_entries: idx.len(),
-            });
-        }
-
-        // 2. The drive itself: scan the scope now, in parallel.
-        let root = match scope_path.or_else(platform::home_dir) {
-            Some(r) => r,
-            None => return Err("nothing to search".into()),
-        };
-        let reuse = st
-            .adhoc
-            .lock()
-            .as_ref()
-            .filter(|(p, at, _)| *p == root && at.elapsed().as_secs() < ADHOC_TTL_SECS)
-            .map(|(_, _, i)| i.clone());
-        let live = match reuse {
-            Some(i) => i,
+        let (hits, live_roots): (Vec<Hit>, Vec<PathBuf>) = match &scope_path {
+            Some(p) if set.covers(p) => (set.search(&q, Some(p), include_hidden, limit), vec![]),
+            Some(p) => (vec![], vec![p.clone()]),
             None => {
-                let budget = st.budget.read().clone();
-                let scanned = Arc::new(Index::scan(
-                    &[root.clone()],
-                    &ScanOptions {
-                        threads: budget.io_threads,
-                        max_entries: budget.index_max_entries,
-                        cancel: Some(&cancel),
-                        ..Default::default()
-                    },
-                ));
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("superseded".into());
-                }
-                *st.adhoc.lock() = Some((root.clone(), Instant::now(), scanned.clone()));
-                scanned
+                let pending = index_roots(&st).into_iter().filter(|r| !set.has_root_for(r)).collect();
+                (set.search(&q, None, include_hidden, limit), pending)
             }
         };
-        let hits = live.search(&q, None, include_hidden, limit);
-        Ok(SearchResponse {
+        let mut response = SearchResponse {
             hits,
-            source: "live",
-            complete: !live.truncated,
+            source: "index",
+            complete: !set.truncated(),
+            searching: false,
             elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
-            searched_entries: live.len(),
-        })
+            searched_entries: set.len(),
+        };
+        if live_roots.is_empty() || q.is_empty() {
+            return Ok(response);
+        }
+        response.source = "live";
+        response.complete = false;
+        response.searching = true;
+
+        let threads = st.budget.read().io_threads.clamp(4, 16);
+        std::thread::Builder::new()
+            .name("live-search".into())
+            .spawn(move || {
+                let opts = fast_core::search::LiveOptions {
+                    threads,
+                    include_hidden,
+                    cancel: &cancel,
+                    skip: fast_core::index::default_skip_list(),
+                };
+                let mut base = 0usize;
+                for root in &live_roots {
+                    let seen = fast_core::search::live_search(root, &q, &opts, |hits, so_far| {
+                        if !hits.is_empty() && !cancel.load(Ordering::Relaxed) {
+                            let _ = app.emit("search-hits", SearchBatch { id, hits, scanned: base + so_far, done: false });
+                        }
+                    });
+                    base += seen;
+                }
+                if !cancel.load(Ordering::Relaxed) {
+                    let _ = app.emit("search-hits", SearchBatch { id, hits: Vec::new(), scanned: base, done: true });
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(response)
     })
     .await
 }
@@ -613,7 +682,6 @@ fn fs_changed(app: &AppHandle, st: &Shared, dirs: Vec<PathBuf>) {
             cache.invalidate(d);
         }
     }
-    *st.adhoc.lock() = None;
     let dirs: Vec<String> = dirs.iter().map(|d| d.to_string_lossy().into_owned()).collect();
     let _ = app.emit("fs-changed", dirs);
 }
@@ -657,19 +725,33 @@ fn remember_transfer(st: &Shared, p: &Progress) {
 pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: TransferSpec) -> CmdResult<u64> {
     let st = state.inner().clone();
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
-    let (budget, drive_list) = (st.budget.read().clone(), st.drives.read().clone());
-    let (remember, limit) = {
+    let (mut budget, drive_list) = (st.budget.read().clone(), st.drives.read().clone());
+    let (remember, limit, explore) = {
         let s = st.settings.read();
+        // The progress rate follows the device (slower on laptops and weak
+        // machines) unless it was set by hand.
+        if s.transfer.progress_interval_ms > 0 {
+            budget.progress_ms = s.transfer.progress_interval_ms.clamp(50, 2000);
+        }
+        spec.method = fast_core::transfer::method::MethodPref::from_setting(&s.transfer.method);
         spec.preserve_times = s.transfer.preserve_timestamps;
         spec.large_threshold = s.transfer.large_file_threshold_mb.max(1) * 1024 * 1024;
         spec.max_parallel = s.transfer.max_parallel;
-        (s.transfer.remember_device_speeds, s.transfer.history_limit)
+        (s.transfer.remember_device_speeds, s.transfer.history_limit, s.transfer.try_other_methods)
     };
     // After the sources are scanned, the engine asks what similar past
     // transfers say about this one.
     let predict: Option<Predictor> = (remember && limit > 0).then(|| {
         let st = st.clone();
         Box::new(move |q: &fast_core::history::Query| st.history.lock().predict(q, now_secs())) as Predictor
+    });
+
+    // ...and which method (built-in, Robocopy, rsync) did best on jobs like it.
+    let choose: Option<fast_core::transfer::method::MethodChooser> = (remember && limit > 0).then(|| {
+        let st = st.clone();
+        Box::new(move |q: &fast_core::history::Query, can: &[fast_core::transfer::method::Method]| {
+            st.history.lock().choose_method(q, can, explore, now_secs())
+        }) as fast_core::transfer::method::MethodChooser
     });
 
     let touched = Job::Transfer { spec: spec.clone() }.touched_dirs();
@@ -683,7 +765,7 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
         }
         let _ = app.emit("transfer-progress", p);
     };
-    let handle = transfer::start(id, spec, budget, drive_list, predict, on_progress);
+    let handle = transfer::start_with(id, spec, budget, drive_list, predict, choose, on_progress);
     let mut transfers = st.transfers.lock();
     transfers.insert(id, handle.clone());
     // A tiny job can finish before the handle is stored; do not leak it.
@@ -718,6 +800,38 @@ pub fn transfer_control(state: State<'_, Shared>, id: u64, action: String) -> Cm
     Ok(())
 }
 
+/// Answer the "file already exists" question a running transfer is showing.
+/// `answer` is `skip`, `replace` or `keepBoth`; with `all`, it applies to every
+/// later conflict in the same transfer.
+#[tauri::command]
+pub fn transfer_resolve(state: State<'_, Shared>, id: u64, answer: String, all: bool) -> CmdResult<()> {
+    let r = match answer.as_str() {
+        "skip" => fast_core::transfer::Resolution::Skip,
+        "replace" => fast_core::transfer::Resolution::Replace,
+        "keepBoth" => fast_core::transfer::Resolution::KeepBoth,
+        other => return Err(format!("unknown answer {other}")),
+    };
+    let transfers = state.transfers.lock();
+    transfers.get(&id).ok_or("transfer not found")?.resolve(r, all);
+    Ok(())
+}
+
+/// Stop a transfer without waiting for it to answer. A normal cancel is a
+/// request the copy has to notice, and one stuck waiting on a dead network
+/// drive never does. This asks it to stop, stops any copy tool outright, and
+/// lets go of the job at once; whatever it is stuck in is abandoned and ends
+/// whenever the drive finally answers (or when the app closes).
+#[tauri::command]
+pub fn transfer_force_stop(state: State<'_, Shared>, id: u64) -> CmdResult<()> {
+    if let Some(r) = cancel_elevated(&state, id) {
+        return r;
+    }
+    if let Some(h) = state.transfers.lock().remove(&id) {
+        h.cancel();
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Operations that may need administrator rights
 // ---------------------------------------------------------------------------
@@ -746,7 +860,13 @@ struct JobFinished {
 /// events and the outcome as a `job-finished` event. If the person dismisses
 /// the prompt, nothing runs and `job-finished` says `declined`.
 #[tauri::command]
-pub async fn elevated_start(app: AppHandle, state: State<'_, Shared>, job: Job) -> CmdResult<u64> {
+pub async fn elevated_start(app: AppHandle, state: State<'_, Shared>, mut job: Job) -> CmdResult<u64> {
+    // The elevated helper has no window to ask in, so it never overwrites without being told to.
+    if let Job::Transfer { spec } = &mut job {
+        if spec.conflict == fast_core::transfer::Conflict::Ask {
+            spec.conflict = fast_core::transfer::Conflict::Skip;
+        }
+    }
     let st = state.inner().clone();
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     std::thread::Builder::new()
@@ -1202,11 +1322,10 @@ pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -
         if wants("listings") {
             st.folder_sizes.lock().clear();
             st.listings.lock().clear();
-            *st.adhoc.lock() = None;
         }
         if wants("index") {
-            *st.index.write() = Arc::new(Index::default());
-            let _ = std::fs::remove_file(&st.paths.index);
+            *st.index.write() = Arc::new(fast_core::indexset::IndexSet::default());
+            let _ = std::fs::remove_dir_all(&st.paths.index);
             publish_index_status(&app, &st, "idle");
         }
         if wants("thumbnails") {
@@ -1628,10 +1747,10 @@ pub async fn import_settings(app: AppHandle, state: State<'_, Shared>, json: Str
 /// Open another window showing `location` in its only tab, near the given
 /// screen position. Used when a tab is dragged out of the tab bar.
 #[tauri::command]
-pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: String, x: Option<f64>, y: Option<f64>, index: Option<usize>) -> CmdResult<()> {
+pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: String, x: Option<f64>, y: Option<f64>) -> CmdResult<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let n = state.next_id.fetch_add(1, Ordering::Relaxed);
-    let script = format!("window.__OPEN__ = {}; window.__INDEX__ = {};", serde_json::to_string(&location).map_err(err)?, index.map(|i| i.to_string()).unwrap_or_else(|| "null".into()));
+    let script = format!("window.__OPEN__ = {};", serde_json::to_string(&location).map_err(err)?);
     let mut builder = WebviewWindowBuilder::new(&app, format!("window-{n}"), WebviewUrl::App("index.html".into()))
         .title("FAST File Explorer")
         .inner_size(1100.0, 720.0)
@@ -1652,6 +1771,41 @@ pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: Str
     Ok(())
 }
 
+
+/// A tab was let go at screen position (x, y) of the calling window. If that
+/// is over the tab bar of another app window, hand the tab to it (it picks the
+/// slot from the position) and report true; the caller then removes its copy.
+/// With `close_source` the calling window had only that tab, so it closes.
+#[tauri::command]
+pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: String, x: f64, y: f64, close_source: bool) -> CmdResult<bool> {
+    use tauri::Manager;
+    const TAB_BAR_HEIGHT: f64 = 46.0; // logical px: title bar with tabs
+    let scale = window.scale_factor().map_err(err)?;
+    let (px, py) = (x * scale, y * scale);
+    for (label, target) in app.webview_windows() {
+        if label == window.label() || !(label == "main" || label.starts_with("window-")) {
+            continue;
+        }
+        if target.is_minimized().unwrap_or(false) || !target.is_visible().unwrap_or(true) {
+            continue;
+        }
+        let (Ok(pos), Ok(size), Ok(ts)) = (target.outer_position(), target.outer_size(), target.scale_factor()) else { continue };
+        let (left, top) = (pos.x as f64, pos.y as f64);
+        let inside = px >= left && px <= left + size.width as f64 && py >= top && py <= top + TAB_BAR_HEIGHT * ts;
+        if !inside {
+            continue;
+        }
+        let payload = serde_json::json!({ "location": location, "x": (px - left) / ts, "y": (py - top) / ts });
+        app.emit_to(label.as_str(), "tab-drop", payload).map_err(err)?;
+        let _ = target.unminimize();
+        let _ = target.set_focus();
+        if close_source {
+            let _ = window.close();
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
 
 /// Open one of the app's panels as its own native window (it moves, resizes
 /// and closes like any window). Asking again focuses the open one. Windows
@@ -1787,4 +1941,31 @@ fn expand_env(text: &str) -> String {
         i += 1;
     }
     out
+}
+
+
+// ---- Temporary download links ------------------------------------------------
+
+/// Start serving one file at a secret, temporary address.
+#[tauri::command]
+pub async fn share_start(state: State<'_, Shared>, path: String, minutes: u64, max_downloads: u32, lan: bool, internet: bool) -> CmdResult<fast_core::share::ShareInfo> {
+    let state = state.inner().clone();
+    blocking(move || state.shares.start(std::path::Path::new(&path), fast_core::share::ShareOptions { minutes, max_downloads, lan, internet })).await
+}
+
+/// Is the tunnel program for sharing over the internet installed?
+#[tauri::command]
+pub async fn share_internet_available() -> CmdResult<bool> {
+    blocking(|| Ok(fast_core::share::tunnel_program().is_some())).await
+}
+
+#[tauri::command]
+pub async fn share_stop(state: State<'_, Shared>, id: String) -> CmdResult<()> {
+    state.shares.stop(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn share_list(state: State<'_, Shared>) -> CmdResult<Vec<fast_core::share::ShareInfo>> {
+    Ok(state.shares.list())
 }

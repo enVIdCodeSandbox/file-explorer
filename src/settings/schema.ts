@@ -46,6 +46,7 @@ export const SECTIONS = [
   "Right-click menu",
   "Terminal",
   "Advanced",
+  "Documentation",
   "About",
 ] as const;
 
@@ -101,7 +102,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings.", control: { type: "number", min: 16, max: 16384, step: 16, unit: "MB" }, keywords: "ram memory" },
   { key: "performance.reduceOnBattery", section: "Performance", label: "Do less on battery", description: "Pauses background indexing and uses fewer threads when unplugged.", control: toggle, keywords: "laptop power" },
   { key: "performance.backgroundIndexing", section: "Performance", label: "Index files in the background", description: "Keeps search instant. Without it, searches scan the folder each time.", control: toggle, keywords: "cache search" },
-  { key: "performance.indexAllDrives", section: "Performance", label: "Index all local drives", description: "Otherwise only your home folder is indexed. Network shares are never indexed automatically.", control: toggle },
+  { key: "performance.indexDrives", section: "Performance", label: "Index all local drives", description: "Every local drive is indexed in the background so search answers instantly. Turn off to index only your home folder. Network shares are never indexed automatically.", control: toggle },
   { key: "performance.metadataCaching", section: "Performance", label: "Cache folder listings", description: "Folders you revisit appear instantly and refresh in the background.", control: toggle, keywords: "metadata cache" },
   { key: "performance.predictivePrefetch", section: "Performance", label: "Preload folders you are likely to open", description: "Loads a folder when you point at it, and the ones you usually open next.", control: toggle, keywords: "predict prefetch hover" },
   { key: "performance.lazyLoading", section: "Performance", label: "Lazy rendering", description: "Only draws rows near the screen. Turning this off renders further ahead and uses more memory.", control: toggle, keywords: "virtual scroll" },
@@ -112,12 +113,15 @@ export const SETTINGS: SettingDef[] = [
   { key: "storage.caches", section: "Storage", label: "What the app stores", description: "Each kind of cache, how much space it takes, and a button to clear just that one.", control: { type: "storage" }, keywords: "cache clear thumbnails index disk usage snapshots history space" },
 
   // ---- File transfers ----
-  { key: "transfer.conflict", section: "File transfers", label: "When a file already exists", control: { type: "select", options: [{ value: "ask", label: "Ask me" }, { value: "keepBoth", label: "Keep both" }, { value: "overwrite", label: "Replace" }, { value: "skip", label: "Skip" }] }, keywords: "conflict duplicate overwrite" },
+  { key: "transfer.conflict", section: "File transfers", label: "When a file already exists", description: "Ask me shows, for each file that exists on both sides, how the two compare and lets you Replace, Skip or Keep both, for that file or for all that follow. Folders with the same name are merged, and the files inside are asked about one by one.", control: { type: "select", options: [{ value: "ask", label: "Ask me" }, { value: "keepBoth", label: "Keep both" }, { value: "overwrite", label: "Replace" }, { value: "skip", label: "Skip" }] }, keywords: "conflict duplicate overwrite" },
   { key: "transfer.maxParallel", section: "File transfers", label: "Parallel file streams", description: "0 lets the app choose per job from file sizes and drive types.", control: { type: "number", min: 0, max: 64 }, keywords: "threads workers" },
   { key: "transfer.largeFileThresholdMb", section: "File transfers", label: "Treat files as large from", description: "Large files are copied a few at a time with big buffers; smaller ones in parallel.", control: { type: "number", min: 1, max: 4096, unit: "MB" } },
   { key: "transfer.preserveTimestamps", section: "File transfers", label: "Keep original modified dates", control: toggle, keywords: "timestamps mtime" },
   { key: "transfer.rememberDeviceSpeeds", section: "File transfers", label: "Remember drive speeds", description: "Uses past transfers between the same drives to estimate time accurately from the first second.", control: toggle, keywords: "eta estimate" },
   { key: "transfer.historyLimit", section: "File transfers", label: "Transfers to remember", description: "A few bytes each. The most recent ones teach the app how long similar copies take. 0 remembers none; clear them in Storage.", control: { type: "number", min: 0, max: 5000, step: 50 }, keywords: "history prediction model" },
+  { key: "transfer.method", section: "File transfers", label: "Copy method", description: "Automatic starts with the built-in engine, then learns from your own transfers which method is fastest for each pair of drives. SMB-tuned and NFS-tuned only apply when a network share of that kind is involved; rclone only when it is installed. A method that cannot run on a particular job falls back to the built-in engine.", control: { type: "select", options: [{ value: "auto", label: "Automatic (learn from results)" }, { value: "native", label: "Built-in engine" }, { value: "robocopy", label: "Robocopy (Windows)" }, { value: "rsync", label: "rsync (macOS / Linux)" }, { value: "smb", label: "SMB-tuned (Windows shares; Robocopy with compression)" }, { value: "nfs", label: "NFS-tuned (rsync, whole-file)" }, { value: "rclone", label: "rclone (if installed)" }] }, keywords: "robocopy rsync rclone smb nfs algorithm engine network share" },
+  { key: "transfer.tryOtherMethods", section: "File transfers", label: "Try other methods on big copies", description: "Lets a large copy now and then use another available method so the app can measure which is faster on your drives. Off keeps everything on the built-in engine.", control: toggle, keywords: "learn explore robocopy rsync" },
+  { key: "transfer.progressIntervalMs", section: "File transfers", label: "Progress update rate", description: "Milliseconds between progress updates. 0 chooses by power: 100 on desktops, 250 on laptops and mid-range machines, 500 on weak ones or low battery.", control: { type: "number", min: 0, max: 2000, step: 50, unit: "ms" }, keywords: "polling refresh rate interval" },
 
   // ---- Search ----
   { key: "search.scopeToCurrentFolder", section: "Search", label: "Search inside the current folder", description: "Turn off to search everything indexed, wherever you are.", control: toggle, keywords: "scope" },

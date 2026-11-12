@@ -1,6 +1,7 @@
 // Floating UI: modal dialogs, toasts and the in-app Properties window.
 
 import { useEffect, useRef, useState } from "react";
+import { useDragView } from "../dnd";
 import { useStore } from "../store";
 import { DetailsPane } from "./DetailsPane";
 import { Icon } from "./Icons";
@@ -101,6 +102,19 @@ export function PropertiesDialog() {
         </div>
         <DetailsPane paths={paths} embedded />
       </div>
+    </div>
+  );
+}
+
+/** The label that follows the pointer while something is being dragged. */
+export function DragOverlay() {
+  const view = useDragView((s) => s.view);
+  if (!view) return null;
+  return (
+    <div className="drag-ghost" data-ok={view.ok || undefined} style={{ left: view.x + 14, top: view.y + 12 }}>
+      <span className="drag-ghost-name">{view.label}</span>
+      {view.count > 1 && <span className="drag-ghost-count">{view.count}</span>}
+      {view.text && <span className="drag-ghost-text">{view.text}</span>}
     </div>
   );
 }

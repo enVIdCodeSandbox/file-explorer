@@ -85,6 +85,8 @@ export interface FolderStats {
 }
 
 export interface Hit {
+  /** Relevance: exact name > prefix > word start > anywhere. */
+  score: number;
   path: string;
   name: string;
   isDir: boolean;
@@ -98,6 +100,21 @@ export interface SearchResponse {
   complete: boolean;
   elapsedMs: number;
   searchedEntries: number;
+  /** True while a live walk is still streaming results. */
+  searching: boolean;
+}
+
+export interface ShareInfo {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  url: string;
+  expiresAt: number;
+  maxDownloads: number;
+  downloads: number;
+  lan: boolean;
+  internet: boolean;
 }
 
 export interface SizeNode {
@@ -135,7 +152,20 @@ export interface AnalysisProgress {
 }
 
 export type TransferOp = "copy" | "move";
-export type Conflict = "skip" | "overwrite" | "keepBoth";
+export type Conflict = "ask" | "skip" | "overwrite" | "keepBoth";
+
+/** A file that exists on both sides, waiting for an answer while the transfer runs. */
+export interface ConflictInfo {
+  name: string;
+  src: string;
+  dst: string;
+  srcSize: number;
+  dstSize: number;
+  /** Seconds since 1970. */
+  srcModified: number | null;
+  dstModified: number | null;
+  number: number;
+}
 
 export interface TransferSpec {
   sources: string[];
@@ -155,6 +185,7 @@ export interface Progress {
   op: TransferOp;
   phase: "scanning" | "running" | "paused" | "done" | "cancelled" | "failed";
   strategy: "rename" | "largeSequential" | "smallParallel" | "mixed" | null;
+  method?: "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs" | null;
   destDir: string;
   filesTotal: number;
   filesDone: number;
@@ -166,6 +197,8 @@ export interface Progress {
   etaSecs: number | null;
   /** 0 = rough guess, 1 = settled. */
   etaConfidence: number;
+  /** Set while the transfer waits for an answer about a file that already exists. */
+  conflict?: ConflictInfo | null;
   display: "bytes" | "files" | "mixed";
   overheadShare: number;
   current: string;
@@ -326,7 +359,7 @@ export interface Settings {
     maxThreads: number;
     maxCacheMb: number;
     backgroundIndexing: boolean;
-    indexAllDrives: boolean;
+    indexDrives: boolean;
     lazyLoading: boolean;
     metadataCaching: boolean;
     thumbnails: boolean;
@@ -341,6 +374,9 @@ export interface Settings {
     maxParallel: number;
     rememberDeviceSpeeds: boolean;
     historyLimit: number;
+    method: "auto" | "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs";
+    tryOtherMethods: boolean;
+    progressIntervalMs: number;
   };
   search: { limit: number; includeHidden: boolean; scopeToCurrentFolder: boolean };
   contextMenu: { hidden: string[] };
@@ -419,6 +455,8 @@ export interface IndexStatus {
   builtAt: number;
   truncated: boolean;
   roots: string[];
+  drivesReady: number;
+  drivesTotal: number;
 }
 
 export interface AppInfo {
@@ -452,7 +490,7 @@ export const api = {
   knownFolders: () => invoke<{ label: string; path: string }[]>("known_folders"),
   indexStatus: () => invoke<IndexStatus>("index_status"),
   reindex: () => invoke<void>("reindex"),
-  search: (query: string, scope: string | null) => invoke<SearchResponse>("search", { query, scope }),
+  search: (query: string, scope: string | null, id: number) => invoke<SearchResponse>("search", { query, scope, id }),
   analysisSnapshot: (path: string) => invoke<AnalysisResult | null>("analysis_snapshot", { path }),
   analyzeStart: (path: string) => invoke<void>("analyze_start", { path }),
   analyzeCancel: (path: string) => invoke<void>("analyze_cancel", { path }),
@@ -460,6 +498,14 @@ export const api = {
   checkConflicts: (sources: string[], destDir: string) =>
     invoke<string[]>("check_conflicts", { sources, destDir }),
   transferStart: (spec: TransferSpec) => invoke<number>("transfer_start", { spec }),
+  /** Put files on the system clipboard, so other programs can paste them. */
+  clipboardSetFiles: (paths: string[]) => invoke<void>("clipboard_set_files", { paths }),
+  clipboardGetFiles: () => invoke<string[]>("clipboard_get_files"),
+  /** Start the system drag with these files, to drop them into another program. */
+  dragOut: (paths: string[]) => invoke<void>("drag_out", { paths }),
+  transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>
+    invoke<void>("transfer_resolve", { id, answer, all }),
+  transferForceStop: (id: number) => invoke<void>("transfer_force_stop", { id }),
   transferControl: (id: number, action: "pause" | "resume" | "cancel") =>
     invoke<void>("transfer_control", { id, action }),
   checkAccess: (job: Job) => invoke<AccessCheck>("check_access", { job }),
@@ -493,9 +539,15 @@ export const api = {
   resolvePath: (input: string) => invoke<{ path: string; isDir: boolean }>("resolve_path", { input }),
   systemReport: () => invoke<FullReport>("system_report"),
   openTransfersWindow: () => invoke<void>("open_transfers_window"),
-  openWindow: (location: string, x?: number, y?: number, index?: number) => invoke<void>("open_window", { location, x, y, index }),
+  openWindow: (location: string, x?: number, y?: number) => invoke<void>("open_window", { location, x, y }),
+  /** Drop a tab on another window's tab bar. True when one took it. */
+  shareStart: (path: string, minutes: number, maxDownloads: number, lan: boolean, internet = false) => invoke<ShareInfo>("share_start", { path, minutes, maxDownloads, lan, internet }),
+  shareInternetAvailable: () => invoke<boolean>("share_internet_available"),
+  shareStop: (id: string) => invoke<void>("share_stop", { id }),
+  shareList: () => invoke<ShareInfo[]>("share_list"),
+  dropTab: (location: string, x: number, y: number, closeSource: boolean) => invoke<boolean>("drop_tab", { location, x, y, closeSource }),
   openSettingsWindow: () => invoke<void>("open_settings_window"),
-  reattach: (kind: "settings" | "transfers" | "tabs", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
+  reattach: (kind: "settings" | "transfers", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
   folderSizesStart: (dir: string, names: string[], refresh: boolean) => invoke<void>("folder_sizes_start", { dir, names, refresh }),
   cacheUsage: () => invoke<CacheEntry[]>("cache_usage"),
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
@@ -523,8 +575,10 @@ export interface BackendEvents {
   "fs-changed": string[];
   "index-status": IndexStatus;
   "budget-changed": Budget;
+  "search-hits": { id: number; hits: Hit[]; scanned: number; done: boolean };
   detached: { kind: "settings" | "transfers" | string; open: boolean };
-  reattach: { kind: "settings" | "transfers" | "tabs" | string; payload?: { locations?: string[]; index?: number } | null };
+  reattach: { kind: "settings" | "transfers" | string; payload?: unknown };
+  "tab-drop": { location: string; x: number; y: number };
   "settings-changed": Settings;
 }
 

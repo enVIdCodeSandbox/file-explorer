@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mergeHits } from "./searchHits";
 import { configureFormat, formatMemory, formatDuration, formatEta, formatRate, formatSize, kindOf, steadyFraction } from "./format";
 import { baseName, crumbs, joinPath, parentPath, parseLocation, searchLocation } from "./path";
 import { layoutTree, squarify } from "./treemap";
@@ -105,7 +106,7 @@ describe("treemap", () => {
   });
 });
 
-import { driveName, driveRemote, hidesAddress } from "./drives";
+import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "./drives";
 import type { Drive } from "../api";
 
 describe("drive names", () => {
@@ -127,7 +128,7 @@ describe("drive names", () => {
   });
   it("uses a local name only while the system name is unchanged", () => {
     const a = { hideNetworkAddress: false, driveNames: { "S:\\": { name: "Games", base: drive.name, hideAddress: null } } } as never;
-    expect(driveName(drive, a)).toBe("Games");
+    expect(driveName(drive, a)).toBe("Games (S:)");
     expect(driveName({ ...drive, name: "Games renamed (S:)" }, a)).toBe("Games renamed (S:)");
   });
 });
@@ -210,5 +211,70 @@ describe("size units", () => {
     expect(formatMemory(16 * 1024 ** 3)).toBe("16 GB");
     set("binary");
     expect(formatMemory(16 * 1024 ** 3)).toBe("16 GiB");
+  });
+});
+
+describe("streamed search results", () => {
+  const hit = (name: string, score: number, path = `/x/${name}`) => ({ name, score, path, isDir: false, size: 0, modified: 0 });
+  it("merges batches best-first without duplicates and respects the limit", () => {
+    const first = [hit("report.pdf", 70)];
+    const merged = mergeHits(first, [hit("annual-report.pdf", 50), hit("report.pdf", 70), hit("report", 100)], 3);
+    expect(merged.map((h) => h.name)).toEqual(["report", "report.pdf", "annual-report.pdf"]);
+    // Equal scores: the shorter name wins the last slot.
+    expect(mergeHits(merged, [hit("zzz-report.txt", 50)], 3).map((h) => h.name)).toEqual(["report", "report.pdf", "zzz-report.txt"]);
+    expect(mergeHits(merged, [], 3)).toBe(merged);
+  });
+});
+
+describe("drive names keep their letter", () => {
+  const drive = { mount: "S:\\", name: "games (\\\\192.168.100.1) (S:)", media: "network", remote: "\\\\192.168.100.1\\games" } as unknown as import("../api").Drive;
+  const base = { driveNames: {}, hideNetworkAddress: false } as unknown as import("../api").Settings["appearance"];
+  it("shows the system name unchanged", () => {
+    expect(driveName(drive, base)).toBe("games (\\\\192.168.100.1) (S:)");
+  });
+  it("re-adds the letter to a renamed drive, and ignores one typed in the name", () => {
+    const named = { ...base, driveNames: { "S:\\": { name: "Games (Z:)", base: drive.name, hideAddress: null } } };
+    expect(driveName(drive, named)).toBe("Games (S:)");
+    expect(driveName(drive, { ...base, hideNetworkAddress: true })).toBe("games (S:)");
+    expect(withoutLetter("Games (S:)")).toBe("Games");
+  });
+  it("leaves drives that have no letter alone", () => {
+    const mac = { mount: "/Volumes/Backup", name: "Backup", media: "external", remote: null } as unknown as import("../api").Drive;
+    expect(driveName(mac, base)).toBe("Backup");
+    expect(driveLetter(mac)).toBeNull();
+  });
+});
+
+
+import { resolveFolderDrop, volumeOf } from "../dnd";
+
+describe("dropping onto a folder", () => {
+  const d = (mount: string): Drive => ({ name: mount, mount, fs: "ntfs", total: 1, available: 1, media: "ssd", removable: false, readOnly: false, online: true, remote: null } as Drive);
+  const drives = [d("C:\\"), d("D:\\")];
+  const none = { ctrl: false, shift: false };
+
+  it("moves on the same drive and copies to another", () => {
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\b", none, drives)).toMatchObject({ ok: true, op: "move" });
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "D:\\b", none, drives)).toMatchObject({ ok: true, op: "copy" });
+  });
+  it("Ctrl copies and Shift moves, wherever it goes", () => {
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\b", { ctrl: true, shift: false }, drives).op).toBe("copy");
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "D:\\b", { ctrl: false, shift: true }, drives).op).toBe("move");
+  });
+  it("does nothing when dropped where it already is, unless copying", () => {
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\a", none, drives).ok).toBe(false);
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\A\\", none, drives).ok).toBe(false);
+    expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\a", { ctrl: true, shift: false }, drives)).toMatchObject({ ok: true, op: "copy" });
+  });
+  it("refuses a folder dropped into itself or something inside it", () => {
+    expect(resolveFolderDrop(["C:\\a"], "C:\\a", none, drives).ok).toBe(false);
+    expect(resolveFolderDrop(["C:\\a"], "C:\\a\\deep\\er", none, drives).ok).toBe(false);
+    expect(resolveFolderDrop(["C:\\a"], "C:\\ab", none, drives).ok).toBe(true);
+  });
+  it("tells drives apart on unix paths too", () => {
+    const unix = [d("/"), d("/mnt/usb")];
+    expect(volumeOf("/home/me/x", unix)).toBe("/");
+    expect(volumeOf("/mnt/usb/x", unix)).toBe("/mnt/usb");
+    expect(resolveFolderDrop(["/home/me/x"], "/mnt/usb/in", none, unix).op).toBe("copy");
   });
 });

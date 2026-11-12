@@ -3,7 +3,7 @@
 
 use fast_core::drives::Drive;
 use fast_core::entry::FileEntry;
-use fast_core::index::Index;
+use fast_core::indexset::IndexSet;
 use fast_core::predict::Predictor;
 use fast_core::resources::Budget;
 use fast_core::session::Session;
@@ -39,7 +39,7 @@ impl Paths {
             history: config.join("transfer-history.bin"),
             usage: cache.join("usage"),
             scratch: cache.join("elevated"),
-            index: cache.join("index.bin"),
+            index: cache.join("index"),
             thumbs: cache.join("thumbnails"),
         }
     }
@@ -55,6 +55,9 @@ pub struct IndexStatus {
     pub built_at: i64,
     pub truncated: bool,
     pub roots: Vec<String>,
+    /// Drives whose index is ready, of the drives being indexed.
+    pub drives_ready: usize,
+    pub drives_total: usize,
 }
 
 /// Small LRU of directory listings, validated against the folder's
@@ -137,12 +140,10 @@ pub struct AppState {
     pub settings: RwLock<Settings>,
     pub session: Mutex<Session>,
     pub budget: RwLock<Budget>,
-    pub index: RwLock<Arc<Index>>,
+    /// One index per drive, each swapped in as soon as it is ready.
+    pub index: RwLock<Arc<IndexSet>>,
     pub index_status: Mutex<IndexStatus>,
     pub index_busy: AtomicBool,
-    /// Result of the last live (non-indexed) scan, reused while the user
-    /// keeps typing in the same search scope.
-    pub adhoc: Mutex<Option<(PathBuf, std::time::Instant, Arc<Index>)>>,
     pub search_cancel: Mutex<Arc<AtomicBool>>,
     /// Stops the running folder-size job when another folder is opened.
     pub size_cancel: Mutex<Arc<AtomicBool>>,
@@ -163,6 +164,8 @@ pub struct AppState {
     /// Running disk-usage scans, by scanned path.
     pub analyses: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub drives: RwLock<Vec<Drive>>,
+    /// Temporary download links that are currently being served.
+    pub shares: fast_core::share::Shares,
     pub thumb_permits: Arc<tokio::sync::Semaphore>,
     pub started: std::time::Instant,
 }

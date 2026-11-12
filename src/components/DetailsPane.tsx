@@ -19,6 +19,122 @@ function Row({ label, value, mono }: { label: string; value: React.ReactNode; mo
   );
 }
 
+/** What a group of selected items adds up to. */
+function MultiSummary({ paths }: { paths: string[] }) {
+  const [items, setItems] = useState<Details[] | null>(null);
+  const [folders, setFolders] = useState<FolderStats | "loading" | null>(null);
+  const key = paths.join("\n");
+
+  useEffect(() => {
+    setItems(null);
+    setFolders(null);
+    let alive = true;
+    // Short pause so dragging a selection over many rows does not stat them all at each step.
+    const t = setTimeout(async () => {
+      const got: Details[] = [];
+      const queue = paths.slice(0, 500);
+      await Promise.all(
+        Array.from({ length: 6 }, async () => {
+          for (let p = queue.shift(); p !== undefined && alive; p = queue.shift()) {
+            const d = await api.getDetails(p).catch(() => null);
+            if (d) got.push(d);
+          }
+        }),
+      );
+      if (alive) setItems(got);
+    }, 120);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  const title = <div className="details-title"><strong>{paths.length.toLocaleString()} items selected</strong></div>;
+  if (!items) return <>{title}<p className="muted">Adding up…</p></>;
+
+  const dirs = items.filter((d) => d.kind === "folder");
+  const files = items.filter((d) => d.kind !== "folder");
+  const fileBytes = files.reduce((n, d) => n + d.size, 0);
+  const onDisk = files.reduce((n, d) => n + (d.sizeOnDisk ?? d.size), 0);
+  const times = items.map((d) => d.modified).filter((m): m is number => m != null);
+  const parents = new Set(items.map((d) => d.parent));
+  const byType = new Map<string, { count: number; bytes: number }>();
+  for (const d of files) {
+    const label = typeLabel(d.name, false);
+    const e = byType.get(label) ?? { count: 0, bytes: 0 };
+    byType.set(label, { count: e.count + 1, bytes: e.bytes + d.size });
+  }
+  const types = [...byType.entries()].sort((a, b) => b[1].bytes - a[1].bytes);
+  const big = [...files].sort((a, b) => b.size - a.size)[0];
+  const stats = folders && folders !== "loading" ? folders : null;
+  const measure = () => {
+    setFolders("loading");
+    void Promise.all(dirs.map((d) => api.folderStats(d.path).catch(() => null))).then((all) => {
+      const ok = all.filter((x): x is FolderStats => !!x);
+      setFolders({
+        files: ok.reduce((n, x) => n + x.files, 0),
+        folders: ok.reduce((n, x) => n + x.folders, 0),
+        totalBytes: ok.reduce((n, x) => n + x.totalBytes, 0),
+        maxDepth: Math.max(0, ...ok.map((x) => x.maxDepth)),
+        largest: [],
+        byType: [],
+        newest: null,
+        oldest: null,
+        emptyFolders: ok.reduce((n, x) => n + x.emptyFolders, 0),
+        complete: ok.every((x) => x.complete),
+      });
+    });
+  };
+
+  return (
+    <>
+      {title}
+      <dl className="details-list">
+        <Row label="Contains" value={[files.length && `${formatCount(files.length)} file${files.length === 1 ? "" : "s"}`, dirs.length && `${formatCount(dirs.length)} folder${dirs.length === 1 ? "" : "s"}`].filter(Boolean).join(" and ")} />
+        <Row label="Size" value={files.length ? `${formatSize(fileBytes)}${dirs.length ? " in the files" : ""}` : undefined} />
+        <Row label="On disk" value={files.length && onDisk !== fileBytes ? formatSize(onDisk) : undefined} />
+        <Row label="Largest file" value={big ? `${big.name} (${formatSize(big.size)})` : undefined} />
+        <Row label="Location" value={parents.size === 1 ? [...parents][0] : `${parents.size} different folders`} mono />
+        <Row label="Oldest change" value={times.length ? formatDate(Math.min(...times)) : undefined} />
+        <Row label="Newest change" value={times.length ? formatDate(Math.max(...times)) : undefined} />
+        <Row label="Read-only" value={items.some((d) => d.readonly) ? `${items.filter((d) => d.readonly).length} of ${items.length}` : undefined} />
+        <Row label="Hidden" value={items.some((d) => d.hidden) ? `${items.filter((d) => d.hidden).length} of ${items.length}` : undefined} />
+        {paths.length > items.length && <Row label="Note" value={`Totals cover the first ${items.length} items.`} />}
+      </dl>
+      {types.length > 0 && (
+        <div className="details-section">
+          <strong>Types</strong>
+          {types.slice(0, 8).map(([label, t]) => (
+            <div key={label} className="type-row">
+              <span className="type-name" title={label}>{label}</span>
+              <span className="muted">×{t.count}</span>
+              <span className="grow" />
+              <span className="type-size">{formatSize(t.bytes)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {dirs.length > 0 && (
+        <div className="details-section">
+          {stats ? (
+            <dl className="details-list">
+              <Row label="Inside folders" value={`${formatCount(stats.files)} files, ${formatCount(stats.folders)} folders`} />
+              <Row label="Folders' size" value={`${stats.complete ? "" : "≥ "}${formatSize(stats.totalBytes)}`} />
+              <Row label="Everything" value={`${formatSize(stats.totalBytes + fileBytes)}`} />
+              <Row label="Empty folders" value={stats.emptyFolders ? formatCount(stats.emptyFolders) : undefined} />
+            </dl>
+          ) : (
+            <button className="secondary" disabled={folders === "loading"} onClick={measure}>
+              {folders === "loading" ? "Measuring…" : `Measure ${dirs.length === 1 ? "the folder" : `${dirs.length} folders`}`}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: boolean } = {}) {
   const liveSelection = useStore((s) => s.selection);
   const selection = paths ?? liveSelection;
@@ -57,9 +173,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   if (selection.length > 1) {
     return (
       <aside className="details-pane" data-embedded={embedded || undefined}>
-        <div className="details-title">
-          <strong>{selection.length} items selected</strong>
-        </div>
+        <MultiSummary paths={selection} />
       </aside>
     );
   }

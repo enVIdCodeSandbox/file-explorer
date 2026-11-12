@@ -21,3 +21,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 parking_lot = "0.12"
 tokio = { version = "1", features = ["sync"] }
+
+# Desktop only: system clipboard with files, and dragging files out to other apps.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+clipboard-rs = "0.3"
+drag = "2"

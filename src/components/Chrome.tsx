@@ -12,7 +12,6 @@ import {
   deletePaths,
   promptText,
   showProperties,
-  tabOrigin,
   tabTitle,
   thisPcLabel,
   undoLast,
@@ -32,6 +31,7 @@ import {
   parseLocation,
   searchLocation,
 } from "../util/path";
+import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileIcon, Icon } from "./Icons";
 
@@ -83,7 +83,6 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
   const tabs = useStore((s) => s.tabs);
   const groups = useStore((s) => s.groups);
   const activeTab = useStore((s) => s.activeTab);
-  const secondary = useStore((s) => s.isSecondary);
   const { activate, closeTab, closeOthers, duplicateTab, newTab, groupTab, newGroupFromTab, updateGroup } =
     useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -245,6 +244,8 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
                 className="tab"
                 role="tab"
                 data-tab-id={t.id}
+                data-drop="tab"
+                data-drop-path={isAppLocation(t.location) ? undefined : t.location}
                 aria-selected={t.id === activeTab}
                 data-active={t.id === activeTab || undefined}
                 data-grouped={group ? true : undefined}
@@ -279,16 +280,6 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       <button className="tab-new" aria-label="New tab" title="New tab (Ctrl+T)" onClick={() => newTab()}>
         <Icon name="plus" size={14} />
       </button>
-      {secondary && (
-        <button
-          className="tab-new reattach-tabs"
-          aria-label="Move back to the main window"
-          title="Move these tabs back to the main window, where they were"
-          onClick={() => void api.reattach("tabs", { locations: tabs.map((t) => t.location), index: tabOrigin() }).catch((e) => useStore.getState().showToast(String(e)))}
-        >
-          <Icon name="popin" size={14} />
-        </button>
-      )}
      </div>
      {!vertical && <div className="title-drag" data-tauri-drag-region />}
      {controls && os !== "macos" && <WindowControls />}
@@ -455,6 +446,8 @@ export function Toolbar() {
               <span key={`${i}-${c.path}`} className="crumb-wrap">
                 <button
                   className="crumb"
+                  data-drop={isAppLocation(c.path) ? undefined : "folder"}
+                  data-drop-path={isAppLocation(c.path) ? undefined : c.path}
                   aria-label={c.label || "This PC"}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -552,13 +545,12 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
   const os = useStore((s) => s.info?.os);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location ?? HOME);
   const selection = useStore((s) => s.selection);
-  const clipboard = useStore((s) => s.clipboard);
   const undoCount = useStore((s) => s.undo.length);
   const sort = useStore((s) => s.sort);
   const filter = useStore((s) => s.filter);
   const drives = useStore((s) => s.drives);
   const settings = useStore((s) => s.settings)!;
-  const { setClipboard, startTransfer, setSort, updateSettings, setViewLevel, showToast, refreshDrives } = useStore.getState();
+  const { setClipboard, setSort, updateSettings, setViewLevel, showToast, refreshDrives } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   const loc = parseLocation(location);
@@ -629,7 +621,8 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
 
   const share = (e: React.MouseEvent) =>
     below(e, [
-      { id: "copyPath", label: "Copy as path", icon: "copy", run: () => void navigator.clipboard.writeText(selection.join("\n")).then(() => showToast("Path copied.")) },
+      { id: "shareLink", label: "Temporary download link…", icon: "share", run: () => useStore.setState({ shareFor: selection }) },
+      { id: "copyPath", label: "Copy as path", icon: "copy", separatorBefore: true, run: () => void navigator.clipboard.writeText(selection.join("\n")).then(() => showToast("Path copied.")) },
       { id: "copyName", label: "Copy name", run: () => void navigator.clipboard.writeText(selection.map(baseName).join("\n")).then(() => showToast("Name copied.")) },
       {
         id: "copyLink",
@@ -689,10 +682,10 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
       <span className="cmd-sep" />
       {button("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, title: "Cut (Ctrl+X)" })}
       {button("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, title: "Copy (Ctrl+C)" })}
-      {button("paste", "Paste", "paste", () => clipboard && folder && void startTransfer(clipboard.paths, folder, clipboard.op).then(() => clipboard.op === "move" && setClipboard(null)), { disabled: !clipboard || !inFolder, title: "Paste (Ctrl+V)" })}
+      {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: "Paste (Ctrl+V)" })}
       {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length !== 1, title: "Rename (F2)" })}
       {button("share", "Share", "share", share, { disabled: !hasSel, caret: true })}
-      {button("delete", "Delete", "trash", () => void deletePaths(selection), { disabled: !hasSel, title: "Delete (Del)" })}
+      {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: "Delete (Del) — Shift+click deletes permanently" })}
       <span className="cmd-sep" />
       {button("sort", "Sort", "sort", sortMenu, { disabled: !inFolder, caret: true })}
       {button("view", "View", "view", viewMenu, { caret: true })}
@@ -807,10 +800,12 @@ const MAX_WIDTH = 480;
 
 export function Sidebar() {
   const pins = useStore((s) => s.pins);
+  const places = useStore((s) => s.places);
   const drives = useStore((s) => s.drives);
   const frequent = useStore((s) => s.frequent);
   const info = useStore((s) => s.info);
   const appearance = useStore((s) => s.settings!.appearance);
+  const settings = useStore((s) => s.settings);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
   const { navigate, newTab, togglePin, addRecent, showToast, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -853,11 +848,15 @@ export function Sidebar() {
     label: string,
     target: string,
     icon: React.ReactNode,
-    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string },
+    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload },
   ) => (
     <button
       key={key}
       className="side-item"
+      data-drop={extra?.drop}
+      data-drop-path={extra?.drop && !extra.isFile ? target : undefined}
+      data-pin-index={extra?.pinIndex}
+      onPointerDown={extra?.drag ? (e) => beginDrag(e, () => extra.drag!) : undefined}
       data-active={location === target || undefined}
       title={extra?.tip ?? (isAppLocation(target) ? label : `${label}\n${target}`)}
       onClick={() => {
@@ -900,19 +899,28 @@ export function Sidebar() {
       ],
     });
   };
-  const heading = (text: string, rowsKey?: string, flag?: "showFrequent" | "showPinned" | "showDrives") =>
+  const heading = (text: string, rowsKey?: string, flag?: "showFrequent" | "showPinned" | "showDrives", id?: string) =>
     collapsed ? (
       <div className="side-divider" key={text} />
     ) : (
-      <div className="side-heading" key={text} onContextMenu={rowsKey && flag ? (e) => sectionMenu(e, rowsKey, flag) : undefined} title={rowsKey ? "Right-click for options" : undefined}>
+      <div
+        className="side-heading"
+        key={text}
+        data-drop={id === "pinned" ? "pins" : undefined}
+        data-pin-count={id === "pinned" ? pins.length : undefined}
+        onPointerDown={id ? (e) => beginDrag(e, () => ({ paths: [], dirs: [], section: id, label: text })) : undefined}
+        onContextMenu={rowsKey && flag ? (e) => sectionMenu(e, rowsKey, flag) : undefined}
+        title={rowsKey ? "Drag to move this section · right-click for options" : undefined}
+      >
         {text}
       </div>
     );
   /** A section's rows, with their own scroll bar past the chosen number. */
   const section = (rowsKey: string, rows: React.ReactNode) => {
     const n = adv<number>(useStore.getState().settings, rowsKey);
+    const isPins = rowsKey === "sidebar.pinnedRows";
     return (
-      <div className="side-section" data-scroll={n > 0 || undefined} style={n > 0 ? { maxHeight: `calc(${n} * var(--side-row, 30px))` } : undefined}>
+      <div className="side-section" data-drop={isPins ? "pins" : undefined} data-pin-count={isPins ? pins.length : undefined} data-scroll={n > 0 || undefined} style={n > 0 ? { maxHeight: `calc(${n} * var(--side-row, 30px))` } : undefined}>
         {rows}
       </div>
     );
@@ -920,6 +928,70 @@ export function Sidebar() {
   const driveIcon = (d: Drive) => <Icon name={d.media === "network" ? "network" : "drive"} />;
   const pinnedPaths = new Set(pins.map((p) => p.path));
   const frequentShown = frequent.filter((p) => !pinnedPaths.has(p)).slice(0, adv<number>(useStore.getState().settings, "files.frequentCount"));
+
+  const blocks: Record<string, React.ReactNode> = {
+    frequent: (
+      <div key="frequent" className="side-group" data-drop="section" data-section="frequent">
+        {appearance.showFrequent && frequentShown.length > 0 && (
+        <>
+          {heading("Frequently used", "sidebar.frequentRows", "showFrequent", "frequent")}
+          {section(
+            "sidebar.frequentRows",
+            frequentShown.map((p) =>
+              item(`freq-${p}`, baseName(p), p, <FileIcon kind="folder" />, {
+                drop: "folder",
+                drag: { paths: [p], dirs: [true], label: baseName(p) },
+                menu: [{ id: "pin", label: "Pin to sidebar", run: () => togglePin(p) }],
+              }),
+            ),
+          )}
+        </>
+      )}
+      </div>
+    ),
+    pinned: (
+      <div key="pinned" className="side-group" data-drop="section" data-section="pinned">
+        {appearance.showPinned && (
+        <>
+          {heading("Pinned", "sidebar.pinnedRows", "showPinned", "pinned")}
+          {pins.length === 0 && !collapsed && <div className="side-empty" data-drop="pins" data-pin-count={0}>Drag a folder here to pin it.</div>}
+          {section(
+            "sidebar.pinnedRows",
+            pins.map((p, i) =>
+              item(`pin-${p.path}`, p.label, p.path, <FileIcon kind={p.isFile ? "file" : "folder"} name={p.isFile ? p.label : places.some((pl) => pl.path === p.path) ? p.label : undefined} />, {
+                isFile: p.isFile,
+                drop: "pinitem",
+                pinIndex: i,
+                drag: { paths: [p.path], dirs: [!p.isFile], pinIndex: i, label: p.label },
+                menu: [{ id: "unpin", label: "Unpin", run: () => togglePin(p.path) }],
+              }),
+            ),
+          )}
+        </>
+      )}
+      </div>
+    ),
+    drives: (
+      <div key="drives" className="side-group" data-drop="section" data-section="drives">
+        {appearance.showDrives && (
+        <>
+          {heading("Drives", "sidebar.drivesRows", "showDrives", "drives")}
+          {section(
+            "sidebar.drivesRows",
+            drives.map((d) =>
+              item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
+                drop: d.online ? "folder" : undefined,
+                sub: d.online ? undefined : "offline",
+                tip: driveRemote(d, appearance) ? `${driveName(d, appearance)}\n${d.remote}` : undefined,
+                menu: [{ id: "analyze", label: "Analyze disk usage", run: () => navigate(analyzeLocation(d.mount)) }],
+              }),
+            ),
+          )}
+        </>
+      )}
+      </div>
+    ),
+  };
 
   return (
     <div className="sidebar-wrap" style={{ width }}>
@@ -937,51 +1009,7 @@ export function Sidebar() {
       {item("thispc", thisPcLabel(info?.os), THIS_PC, <Icon name="pc" />)}
       {info?.home && item("analyze", "Disk usage", analyzeLocation(info.home), <Icon name="chart" />, { tip: "Disk usage" })}
 
-      {appearance.showFrequent && frequentShown.length > 0 && (
-        <>
-          {heading("Frequently used", "sidebar.frequentRows", "showFrequent")}
-          {section(
-            "sidebar.frequentRows",
-            frequentShown.map((p) =>
-              item(`freq-${p}`, baseName(p), p, <FileIcon kind="folder" />, {
-                menu: [{ id: "pin", label: "Pin to sidebar", run: () => togglePin(p) }],
-              }),
-            ),
-          )}
-        </>
-      )}
-
-      {appearance.showPinned && (
-        <>
-          {heading("Pinned", "sidebar.pinnedRows", "showPinned")}
-          {pins.length === 0 && !collapsed && <div className="side-empty">Right-click a folder to pin it.</div>}
-          {section(
-            "sidebar.pinnedRows",
-            pins.map((p) =>
-              item(`pin-${p.path}`, p.label, p.path, <FileIcon kind={p.isFile ? "file" : "folder"} name={p.isFile ? p.label : undefined} />, {
-                isFile: p.isFile,
-                menu: [{ id: "unpin", label: "Unpin", run: () => togglePin(p.path) }],
-              }),
-            ),
-          )}
-        </>
-      )}
-
-      {appearance.showDrives && (
-        <>
-          {heading("Drives", "sidebar.drivesRows", "showDrives")}
-          {section(
-            "sidebar.drivesRows",
-            drives.map((d) =>
-              item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
-                sub: d.online ? undefined : "offline",
-                tip: driveRemote(d, appearance) ? `${driveName(d, appearance)}\n${d.remote}` : undefined,
-                menu: [{ id: "analyze", label: "Analyze disk usage", run: () => navigate(analyzeLocation(d.mount)) }],
-              }),
-            ),
-          )}
-        </>
-      )}
+      {sidebarOrder(settings).map((id) => blocks[id])}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </nav>
     <div

@@ -2,9 +2,10 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Drive, type Hit, type SearchResponse } from "../api";
+import { mergeHits } from "../util/searchHits";
+import { api, on, type Drive, type Hit, type SearchResponse } from "../api";
 import { ask, deletePaths, thisPcLabel, useStore } from "../store";
-import { driveName, driveRemote, hidesAddress } from "../util/drives";
+import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
 import { applyFilter } from "../util/filter";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
 import { analyzeLocation, baseName, parentPath } from "../util/path";
@@ -129,16 +130,19 @@ export function DrivesView() {
   const renameDrive = async (d: Drive) => {
     const r = await ask({
       title: "Rename drive",
-      message: "This changes the name shown in this app only. If you rename the drive in the system later, that name is used instead. Leave empty to use the system's name.",
-      input: driveName(d, appearance),
+      message: `This changes the name shown in this app only. If you rename the drive in the system later, that name is used instead. Leave empty to use the system's name.${
+        driveLetter(d) ? ` The drive letter (${driveLetter(d)}) is always shown and cannot be changed.` : ""
+      }`,
+      input: withoutLetter(driveName(d, appearance)),
       buttons: [
         { id: "ok", label: "Rename", primary: true },
         { id: "cancel", label: "Cancel" },
       ],
     });
     if (r?.button !== "ok") return;
-    const name = r.input.trim();
-    setAlias(d, { name: name === d.name ? "" : name });
+    // A typed letter is ignored: only the name before it can change.
+    const name = withoutLetter(r.input.trim());
+    setAlias(d, { name: name === withoutLetter(d.name) ? "" : name });
   };
 
   const groups: [string, Drive[]][] = [
@@ -266,6 +270,8 @@ export function DrivesView() {
 // Search results
 // ---------------------------------------------------------------------------
 
+let searchSeq = 0;
+
 export function SearchView({ query, scope }: { query: string; scope: string | null }) {
   const settings = useStore((s) => s.settings)!;
   const indexStatus = useStore((s) => s.indexStatus);
@@ -277,20 +283,41 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
   const [menu, setMenu] = useState<MenuState | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
+  // Results arrive in two parts: what the index knew at once, then batches
+  // streamed from folders it does not cover yet. Each search has its own id,
+  // so late batches from an older query are ignored.
+  const [scanned, setScanned] = useState(0);
   useEffect(() => {
     let alive = true;
+    const id = ++searchSeq;
+    const limit = settings.search.limit;
     setBusy(true);
     setError(null);
-    api
-      .search(query, scope)
-      .then((r) => alive && (setResult(r), setBusy(false)))
+    setScanned(0);
+    const sub = on("search-hits", (b) => {
+      if (!alive || b.id !== id) return;
+      setResult((cur) => (cur ? { ...cur, hits: mergeHits(cur.hits, b.hits, limit), searching: !b.done } : cur));
+      setScanned(b.scanned);
+      if (b.done) setBusy(false);
+    });
+    // Subscribe before asking, so no early batch can be missed.
+    void sub
+      .then(() => api.search(query, scope, id))
+      .then((r) => {
+        if (!alive) return;
+        // A batch can beat the response here: keep anything already merged.
+        setResult((cur) => (cur && cur.hits.length ? { ...r, hits: mergeHits(r.hits, cur.hits, limit), searching: r.searching && cur.searching !== false } : r));
+        if (!r.searching) setBusy(false);
+      })
       .catch((e) => {
         // "superseded" means a newer query replaced this one.
         if (alive && String(e) !== "superseded") (setError(String(e)), setBusy(false));
       });
     return () => {
       alive = false;
+      void sub.then((off) => off());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, scope]);
 
   const filter = useStore((s) => s.filter);
@@ -327,15 +354,17 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
     else navigate(dir);
   };
 
+  const ms = result ? (result.elapsedMs < 10 ? result.elapsedMs.toFixed(1) : Math.round(result.elapsedMs)) : 0;
+  const count = `${formatCount(hits.length)}${hits.length >= settings.search.limit ? "+" : ""} result${hits.length === 1 ? "" : "s"}`;
   const summary = error
     ? error
     : !result
       ? "Searching…"
-      : `${formatCount(hits.length)}${hits.length >= settings.search.limit ? "+" : ""} result${hits.length === 1 ? "" : "s"} in ${
-          result.elapsedMs < 10 ? result.elapsedMs.toFixed(1) : Math.round(result.elapsedMs)
-        } ms · ${formatCount(result.searchedEntries)} items searched ${
-          result.source === "index" ? "from the index" : "by scanning the folder"
-        }${result.complete ? "" : " (partial)"}`;
+      : result.searching
+        ? `${count} so far · looking through folders that are not indexed yet (${formatCount(scanned)} items checked)`
+        : `${count} in ${ms} ms · ${formatCount(result.searchedEntries)} items searched ${
+            result.source === "index" ? "from the index" : "by reading the folder"
+          }${result.complete ? "" : " (partial)"}`;
 
   return (
     <div className="file-view search-view">
@@ -343,7 +372,9 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
         <span>{summary}</span>
         <span className="muted">
           {scope ? `in ${scope}` : "everywhere indexed"}
-          {indexStatus?.state === "scanning" ? " · index is updating" : ""}
+          {indexStatus?.state === "scanning"
+            ? ` · indexing drives (${indexStatus.drivesReady} of ${indexStatus.drivesTotal} ready)`
+            : ""}
         </span>
       </div>
       {busy && <div className="loading-bar" />}

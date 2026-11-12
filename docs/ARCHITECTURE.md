@@ -173,3 +173,19 @@ Settings, the advanced Transfers view and dragged-out tabs can each live in thei
 ## Thumbnails
 
 `Thumb.tsx` queues requests in a small scheduler: newest first, at most `thumbThreads + 1` in flight, starts spaced 16 ms apart, and requests for tiles that scrolled away are dropped before they start. The backend caps decoder memory and decodes on a bounded blocking pool, so listing and rendering never wait on image work.
+
+## Temporary download links (`fast-core/src/share.rs`)
+
+"Share → Temporary download link…" starts a small HTTP server for one file. The address holds a random 128-bit token (`getrandom`), so it cannot be guessed. The server only serves that file (no path from the request is ever used, so there is no traversal), ends on expiry or after the allowed number of complete downloads, and allows at most 8 simultaneous connections. Interrupted downloads do not use up the allowance. It is plain HTTP, reachable on the local network (or only this computer, by choice), and only while the app runs. With "internet" selected the server listens on loopback only and a `cloudflared tunnel --url http://127.0.0.1:<port>` child process (a Cloudflare quick tunnel) provides the public https address, parsed from its output (`find_tunnel_url`). The tunnel is killed when the share is stopped, expires or is used up, and by `stop_all` when the app exits. Folders are refused; archive them first. Windows may ask the firewall for permission the first time.
+
+## Tabs and windows
+
+Tabs open at `tabs.width` and shrink together down to `tabs.minWidth` before the bar scrolls. A window made by dragging a tab out is an ordinary new window. Dropping a tab on another window's tab bar calls `drop_tab`, which hit-tests every app window by screen position, emits `tab-drop` to the one under the pointer (it picks the slot), and closes the source window if it had no other tab.
+
+## Disk usage map
+
+`layoutNested` draws folders as frames holding their own contents (WinDirStat-style grouping); files take their type's colour, the same colour as in the type list. Frames precede their contents in the tile list, so the last tile under a point is the deepest.
+
+## Mapped drives when run as administrator
+
+An elevated process runs in a different logon session and does not see the user's mapped drive letters. The drive list also reads `HKCU\Network` and mounts those shares by UNC path, keeping the letter in the name.

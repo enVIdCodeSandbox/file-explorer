@@ -325,15 +325,25 @@ mod tests {
 /// prediction: the projected finish time must stop moving around.
 #[derive(Debug, Default)]
 pub struct EtaTracker {
-    /// Projected finish times (seconds since copying began), newest last.
-    finishes: std::collections::VecDeque<f64>,
+    /// (seconds since copying began, projected finish time), newest last.
+    finishes: std::collections::VecDeque<(f64, f64)>,
     shown: Option<f64>,
     trusted: bool,
+    /// How much a speed test or earlier transfers already vouch for the first
+    /// estimate (0..=1), so it can be trusted sooner.
+    head_start: f64,
 }
 
-const TRACKER_SAMPLES: usize = 20;
+/// Stability is judged over this many seconds of recent estimates.
+const STABILITY_WINDOW: f64 = 5.0;
+
+const TRACKER_SAMPLES: usize = 64;
 
 impl EtaTracker {
+    pub fn with_head_start(head_start: f64) -> Self {
+        EtaTracker { head_start: head_start.clamp(0.0, 0.9), ..Default::default() }
+    }
+
     /// `raw` is the model's estimate; `dt` the seconds since the last call;
     /// `done` the finished share of the job (0..=1); `copying` seconds spent copying.
     /// Returns the smoothed estimate and the confidence.
@@ -344,15 +354,17 @@ impl EtaTracker {
             self.trusted = false;
             return (None, 0.0);
         };
-        self.finishes.push_back(copying + raw);
-        if self.finishes.len() > TRACKER_SAMPLES {
+        self.finishes.push_back((copying, copying + raw));
+        while self.finishes.len() > TRACKER_SAMPLES || self.finishes.front().is_some_and(|f| copying - f.0 > STABILITY_WINDOW) {
             self.finishes.pop_front();
         }
-        let data = (copying / 4.0).max(done / 0.04).min(1.0);
-        let stability = if self.finishes.len() < 8 {
+        let data = (copying / 2.5).max(done / 0.04).max(self.head_start).min(1.0);
+        // Needs a few estimates over at least most of a second, however often they arrive.
+        let span = self.finishes.front().map(|f| copying - f.0).unwrap_or(0.0);
+        let stability = if self.finishes.len() < 3 || span < 0.8 {
             0.0
         } else {
-            let (lo, hi) = self.finishes.iter().fold((f64::MAX, f64::MIN), |(l, h), &f| (l.min(f), h.max(f)));
+            let (lo, hi) = self.finishes.iter().fold((f64::MAX, f64::MIN), |(l, h), &(_, f)| (l.min(f), h.max(f)));
             (1.0 - (hi - lo) / raw.max(2.0) / 0.2).clamp(0.0, 1.0)
         };
         let mut confidence = data * stability;

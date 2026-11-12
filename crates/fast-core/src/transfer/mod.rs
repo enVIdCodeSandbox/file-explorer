@@ -2,9 +2,11 @@
 
 pub mod engine;
 pub mod eta;
+pub mod method;
+pub mod probe;
 pub mod strategy;
 
-pub use engine::{start, Conflict, Op, Phase, Predictor, Progress, TransferHandle, TransferSpec};
+pub use engine::{start, start_with, Conflict, ConflictInfo, Op, Resolution, Phase, Predictor, Progress, TransferHandle, TransferSpec};
 pub use eta::{DisplayMode, EtaModel, EtaParams};
 pub use strategy::{Plan, Strategy};
 

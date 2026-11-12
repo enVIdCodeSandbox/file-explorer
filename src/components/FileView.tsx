@@ -19,6 +19,7 @@ import {
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
 import { formatDate, formatSize, kindOf, typeLabel } from "../util/format";
 import { adv } from "../settings/advanced";
+import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, joinPath, parentPath } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileIcon } from "./Icons";
@@ -59,7 +60,7 @@ export function FileView({ path }: { path: string }) {
   const filter = useStore((s) => s.filter);
   const command = useStore((s) => s.command);
   const pendingSelect = useStore((s) => s.pendingSelect);
-  const { navigate, newTab, setSelection, setClipboard, startTransfer, togglePin, addRecent, showToast, setSort, setViewLevel } =
+  const { navigate, newTab, setSelection, setClipboard, startTransfer, pasteInto, togglePin, addRecent, showToast, setSort, setViewLevel } =
     useStore.getState();
 
   const level = VIEW_LEVELS[Math.max(0, Math.min(VIEW_LEVELS.length - 1, settings.appearance.viewLevel))];
@@ -230,11 +231,7 @@ export function FileView({ path }: { path: string }) {
     }
   };
 
-  const paste = () => {
-    if (!clipboard) return;
-    void startTransfer(clipboard.paths, path, clipboard.op);
-    if (clipboard.op === "move") setClipboard(null);
-  };
+  const paste = () => void pasteInto(path);
 
   const create = async (folder: boolean) => {
     const name = await promptText(folder ? "New folder" : "New file", folder ? "New folder" : "New file.txt");
@@ -312,18 +309,19 @@ export function FileView({ path }: { path: string }) {
             label: "Share",
             icon: "share",
             children: [
-              { id: "share-path", label: "Copy as path", run: () => void navigator.clipboard.writeText(paths.join("\n")) },
+              { id: "share-link", label: "Temporary download link…", icon: "share", run: () => useStore.setState({ shareFor: paths }) },
+              { id: "share-path", separatorBefore: true, label: "Copy as path", run: () => void navigator.clipboard.writeText(paths.join("\n")) },
               { id: "share-name", label: "Copy name", run: () => void navigator.clipboard.writeText(paths.map((p) => p.split(/[\\/]/).pop()).join("\n")) },
             ],
           },
           sendTo.length > 0 && { id: "sendTo", label: "Send to", icon: "forward", children: sendTo },
           { id: "cut", label: "Cut", shortcut: "Ctrl+X", icon: "cut", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
           { id: "copy", label: "Copy", shortcut: "Ctrl+C", icon: "copy", run: () => setClipboard({ paths, op: "copy" }) },
-          single?.isDir && clipboard && {
+          single?.isDir && {
             id: "paste",
             label: "Paste into folder",
             icon: "paste",
-            run: () => void startTransfer(clipboard.paths, fullPath(single.name), clipboard.op),
+            run: () => void pasteInto(fullPath(single.name)),
           },
           single && {
             id: "createShortcut",
@@ -340,7 +338,7 @@ export function FileView({ path }: { path: string }) {
           { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => void showProperties(paths) },
         ]
       : [
-          { id: "paste", label: "Paste", shortcut: "Ctrl+V", icon: "paste", disabled: !clipboard, run: paste },
+          { id: "paste", label: "Paste", shortcut: "Ctrl+V", icon: "paste", run: paste },
           { id: "newFolder", label: "New folder", shortcut: "Ctrl+Shift+N", icon: "folderOpen", separatorBefore: true, run: () => void create(true) },
           { id: "newFile", label: "New file", icon: "newItem", run: () => void create(false) },
           {
@@ -395,21 +393,38 @@ export function FileView({ path }: { path: string }) {
   };
 
   // ---- Selection ----------------------------------------------------------
+  // Selection works like a spreadsheet: Ctrl+click starts a new range at that
+  // item and keeps everything chosen before, and Shift+click reshapes only the
+  // range that began at the last click, so several runs can be built up.
+  const base = useRef<Set<string>>(new Set()); // chosen before the current range began
+  const lastSet = useRef<Set<string> | null>(null); // the selection this logic last produced
+  const commit = (next: Set<string>) => {
+    lastSet.current = next;
+    setSelected(next);
+  };
   const selectIndex = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
     const entry = entries[i];
     if (!entry) return;
     cursor.current = i;
+    const ctrl = e.ctrlKey || e.metaKey;
+    // If the selection was changed some other way (select all, a rubber band), what is selected now is the base.
+    if (selected !== lastSet.current) base.current = new Set(selected);
     if (e.shiftKey) {
-      const [a, b] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
-      setSelected(new Set(entries.slice(a, b + 1).map((x) => x.name)));
-    } else if (e.ctrlKey || e.metaKey) {
+      const [lo, hi] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
+      const next = new Set(base.current);
+      for (const x of entries.slice(lo, hi + 1)) next.add(x.name);
+      if (ctrl) base.current = new Set(next);
+      commit(next);
+    } else if (ctrl) {
       const next = new Set(selected);
       next.has(entry.name) ? next.delete(entry.name) : next.add(entry.name);
-      setSelected(next);
+      base.current = new Set(next);
       anchor.current = i;
+      commit(next);
     } else {
-      setSelected(new Set([entry.name]));
+      base.current = new Set();
       anchor.current = i;
+      commit(new Set([entry.name]));
     }
   };
 
@@ -479,7 +494,27 @@ export function FileView({ path }: { path: string }) {
     return i > 0 ? e.name.slice(0, i) : e.name;
   };
 
+  /** What a drag that starts on `e` carries: the whole selection if `e` is in it, else just `e`. */
+  const dragPayload = (e: FileEntry): DragPayload => {
+    const names = selected.has(e.name) ? entries.filter((x) => selected.has(x.name)) : [e];
+    return {
+      paths: names.map((x) => fullPath(x.name)),
+      dirs: names.map((x) => x.isDir),
+      label: names.length === 1 ? names[0].name : `${names.length} items`,
+    };
+  };
+
   const itemProps = (e: FileEntry, i: number) => ({
+    "data-drop": e.isDir ? "folder" : undefined,
+    "data-drop-path": e.isDir ? fullPath(e.name) : undefined,
+    onPointerDown: (ev: React.PointerEvent) => {
+      // Ctrl and Shift are for choosing several items, not for dragging.
+      if (renaming || ev.ctrlKey || ev.shiftKey || ev.metaKey) return;
+      beginDrag(ev, () => {
+        if (!selected.has(e.name)) setSelected(new Set([e.name]));
+        return dragPayload(e);
+      });
+    },
     "data-selected": selected.has(e.name) || undefined,
     "data-cut": cut?.has(fullPath(e.name)) || undefined,
     "data-hidden": e.isHidden || undefined,
@@ -576,6 +611,8 @@ export function FileView({ path }: { path: string }) {
       <div
         ref={scroller}
         className="file-scroller"
+        data-drop="folder"
+        data-drop-path={path}
         tabIndex={0}
         onKeyDown={onKeyDown}
         onMouseDown={() => setSelected(new Set())}

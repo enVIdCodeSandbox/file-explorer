@@ -1,7 +1,7 @@
 // Inline SVG icons: no icon font or image requests, and they inherit
 // `currentColor`, so themes can recolour them with CSS alone.
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { fileTypeOf } from "../util/fileTypes";
 
 const PATHS: Record<string, string> = {
@@ -115,7 +115,27 @@ const GLYPH_PATHS: Record<string, React.ReactNode> = {
 };
 
 /** File-type glyph: a folder shape, or a page drawn per extension/category. */
+/** Well-known folders get their own mark on the folder shape. Keys are the English place names. */
+const PLACE_MARKS: Record<string, { color: string; mark: ReactNode }> = {
+  downloads: { color: "#2fa56b", mark: <path d="M8 6.4v4.2M6.2 8.9 8 10.7l1.8-1.8" /> },
+  documents: { color: "#4f8fe0", mark: <path d="M6.2 6.3h3.6M6.2 8.1h3.6M6.2 9.9h2.2" /> },
+  pictures: { color: "#2aa3b8", mark: <path d="m5.6 10.7 1.8-2.2 1.2 1.3.9-1 1.1 1.9zM6.4 6.9h.01" /> },
+  music: { color: "#d4609a", mark: <path d="M9.6 6.1v4M9.6 6.1 7 6.7v3.7M7 10.4a.9.9 0 1 1-.01 0M9.6 10.1a.9.9 0 1 1-.01 0" /> },
+  videos: { color: "#8b6bd6", mark: <path d="M6.9 6.4v4.2l3.3-2.1z" /> },
+  desktop: { color: "#3b82d6", mark: <path d="M5.4 6.2h5.2v3.4H5.4zM7 11h2" /> },
+};
+
 export function FileIcon({ kind, size = 16, name }: { kind: string; size?: number; name?: string }) {
+  if (kind === "folder" && name && PLACE_MARKS[name.toLowerCase()]) {
+    const { color, mark } = PLACE_MARKS[name.toLowerCase()];
+    return (
+      <svg className="file-icon" data-kind="folder" data-place={name.toLowerCase()} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M1.5 4.2c0-.7.5-1.2 1.2-1.2h3.1l1.4 1.4h6.1c.7 0 1.2.5 1.2 1.2v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill={color} />
+        <path d="M1.5 5.6h13v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill="rgba(255,255,255,.18)" />
+        <g fill="none" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">{mark}</g>
+      </svg>
+    );
+  }
   if (kind === "folder") {
     const color = KIND_COLORS.folder;
     return (

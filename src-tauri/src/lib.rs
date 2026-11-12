@@ -1,10 +1,10 @@
 //! Tauri shell: wires the UI-agnostic `fast-core` engine to the webview.
 
 mod commands;
+mod native_dnd;
 mod state;
 
 use fast_core::history::History;
-use fast_core::index::Index;
 use fast_core::predict::Predictor;
 use fast_core::resources;
 use fast_core::session::Session;
@@ -36,6 +36,7 @@ pub fn run() {
                 started: std::time::Instant::now(),
                 thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
                 drives: RwLock::new(session.drives.clone()),
+                shares: Default::default(),
                 predictor: Mutex::new(Predictor::load(&paths.predictor)),
                 history: Mutex::new(History::load(&paths.history)),
                 deletes: Mutex::new(HashMap::new()),
@@ -44,10 +45,9 @@ pub fn run() {
                 settings: RwLock::new(settings),
                 session: Mutex::new(session),
                 budget: RwLock::new(budget),
-                index: RwLock::new(Arc::new(Index::default())),
+                index: RwLock::new(Arc::new(fast_core::indexset::IndexSet::default())),
                 index_status: Mutex::new(IndexStatus { state: "idle".into(), ..Default::default() }),
                 index_busy: AtomicBool::new(false),
-                adhoc: Mutex::new(None),
                 search_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
                 size_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
                 folder_sizes: Mutex::new(HashMap::new()),
@@ -92,6 +92,14 @@ pub fn run() {
             commands::get_details,
             commands::folder_stats,
             commands::open_window,
+            commands::drop_tab,
+            native_dnd::clipboard_set_files,
+            native_dnd::clipboard_get_files,
+            native_dnd::drag_out,
+            commands::share_start,
+            commands::share_stop,
+            commands::share_internet_available,
+            commands::share_list,
             commands::system_report,
             commands::open_transfers_window,
             commands::open_settings_window,
@@ -111,6 +119,8 @@ pub fn run() {
             commands::check_conflicts,
             commands::transfer_start,
             commands::transfer_control,
+            commands::transfer_force_stop,
+            commands::transfer_resolve,
             commands::check_access,
             commands::elevated_start,
             commands::delete_start,
@@ -142,8 +152,17 @@ pub fn run() {
             commands::network_disconnect,
             commands::clear_cache,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running FAST File Explorer");
+        .build(tauri::generate_context!())
+        .expect("error while building FAST File Explorer")
+        .run(|app, event| {
+            // Links only work while the app runs: end them (and any tunnel process) on the way out.
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(state) = app.try_state::<state::Shared>() {
+                    state.shares.stop_all();
+                }
+            }
+        });
 }
 
 /// Headless mode used for operations run through the OS's administrator

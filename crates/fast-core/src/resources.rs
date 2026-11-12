@@ -42,6 +42,9 @@ pub struct Budget {
     pub background_indexing: bool,
     pub prefetch: bool,
     pub thumbnails: bool,
+    /// How often a running transfer reports progress, in milliseconds. Slower
+    /// on weak machines and laptops, where redrawing costs real battery and CPU.
+    pub progress_ms: u64,
 }
 
 /// Rough bytes per index entry: 40-byte node plus two copies of an average name.
@@ -61,6 +64,7 @@ impl Budget {
             background_indexing: false,
             prefetch: false,
             thumbnails: true,
+            progress_ms: 500,
         }
     }
 }
@@ -114,6 +118,11 @@ pub fn compute(perf: &Performance, sys: &SystemSnapshot) -> Budget {
         background_indexing: bg && perf.background_indexing,
         prefetch: prefetch && perf.predictive_prefetch && perf.metadata_caching,
         thumbnails: perf.thumbnails,
+        progress_ms: match tier {
+            Tier::Full | Tier::Manual => 100,
+            Tier::Balanced => 250,
+            Tier::Saver => 500,
+        },
     }
 }
 

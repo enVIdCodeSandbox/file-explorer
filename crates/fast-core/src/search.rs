@@ -56,6 +56,37 @@ impl Query {
         q
     }
 
+    /// Whether a name (already lower-cased) satisfies every condition of the
+    /// query. Shared by the index scan and the live walk, so both agree.
+    pub fn matches_name(&self, lower: &[u8], is_dir: bool, size: u64) -> bool {
+        if let Some(d) = self.want_dir {
+            if is_dir != d {
+                return false;
+            }
+        }
+        if self.min_size.map(|m| size < m).unwrap_or(false) || self.max_size.map(|m| size > m).unwrap_or(false) {
+            return false;
+        }
+        if self.terms.iter().any(|t| memmem::find(lower, t.as_bytes()).is_none()) {
+            return false;
+        }
+        if self.globs.iter().any(|g| !glob_match(g.as_bytes(), lower)) {
+            return false;
+        }
+        if let Some(ext) = &self.ext {
+            let ok = lower.iter().rposition(|&b| b == b'.').map(|i| &lower[i + 1..] == ext.as_bytes()).unwrap_or(false);
+            if !ok || is_dir {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The longest plain term, used to rank results.
+    pub fn anchor(&self) -> Option<&str> {
+        self.terms.iter().max_by_key(|t| t.len()).map(|s| s.as_str())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
             && self.globs.is_empty()
@@ -118,8 +149,18 @@ pub struct Hit {
     pub size: u64,
     /// Milliseconds since the Unix epoch.
     pub modified: i64,
-    #[serde(skip)]
+    /// Relevance: exact name > prefix > word start > anywhere.
     pub score: u32,
+}
+
+/// Best first; ties go to the shorter name, then alphabetical order, so the
+/// order never depends on how a filesystem happened to list a folder.
+pub fn rank(a: &Hit, b: &Hit) -> std::cmp::Ordering {
+    b.score
+        .cmp(&a.score)
+        .then_with(|| a.name.len().cmp(&b.name.len()))
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        .then_with(|| a.path.cmp(&b.path))
 }
 
 /// Upper bound on candidates ranked per query, to bound worst-case latency
@@ -150,36 +191,9 @@ impl Index {
             if !include_hidden && node.is_hidden() {
                 return;
             }
-            if let Some(d) = q.want_dir {
-                if node.is_dir() != d {
-                    return;
-                }
-            }
-            if q.min_size.map(|m| node.size < m).unwrap_or(false)
-                || q.max_size.map(|m| node.size > m).unwrap_or(false)
-            {
-                return;
-            }
             let name = self.lower_name(id);
-            for t in &q.terms {
-                if memmem::find(name, t.as_bytes()).is_none() {
-                    return;
-                }
-            }
-            for g in &q.globs {
-                if !glob_match(g.as_bytes(), name) {
-                    return;
-                }
-            }
-            if let Some(ext) = &q.ext {
-                let ok = name
-                    .iter()
-                    .rposition(|&b| b == b'.')
-                    .map(|i| &name[i + 1..] == ext.as_bytes())
-                    .unwrap_or(false);
-                if !ok || node.is_dir() {
-                    return;
-                }
+            if !q.matches_name(name, node.is_dir(), node.size) {
+                return;
             }
             if let Some(s) = scope_id {
                 if id == s || !self.is_under(id, s) {
@@ -222,13 +236,20 @@ impl Index {
         // Best score first; ties broken by shorter name, then alphabetically,
         // so the order never depends on how the filesystem happened to list a
         // folder (it differs between machines). Index order is the last resort.
-        scored.sort_unstable_by(|&(sa, a), &(sb, b)| {
+        let cmp = |&(sa, a): &(u32, u32), &(sb, b): &(u32, u32)| {
             sb.cmp(&sa)
                 .then_with(|| self.node(a).name_len_hint().cmp(&self.node(b).name_len_hint()))
                 .then_with(|| self.lower_name(a).cmp(self.lower_name(b)))
                 .then_with(|| self.name(a).cmp(self.name(b)))
                 .then_with(|| a.cmp(&b))
-        });
+        };
+        // Only the best `limit` are ever shown, so pick them in linear time and
+        // sort just those, instead of sorting every candidate.
+        if limit > 0 && scored.len() > limit {
+            scored.select_nth_unstable_by(limit - 1, cmp);
+            scored.truncate(limit);
+        }
+        scored.sort_unstable_by(cmp);
         scored.truncate(limit);
         scored
             .into_iter()
@@ -245,6 +266,113 @@ impl Index {
             })
             .collect()
     }
+}
+
+/// Settings for [`live_search`].
+pub struct LiveOptions<'a> {
+    pub threads: usize,
+    pub include_hidden: bool,
+    pub cancel: &'a std::sync::atomic::AtomicBool,
+    pub skip: Vec<std::path::PathBuf>,
+}
+
+/// Search a folder that has no index yet by walking it, and hand matches to
+/// `emit` as they are found instead of after the whole walk: the first results
+/// arrive in milliseconds, whatever the size of the drive.
+///
+/// The walk goes breadth first, so shallow (usually more relevant) matches come
+/// first, and is split into chunks of folders read in parallel, so a slow disk
+/// or network share keeps every thread busy. Returns the number of entries
+/// looked at. `emit` gets `(matches, entries_seen_so_far)`.
+pub fn live_search(root: &Path, q: &Query, opts: &LiveOptions, mut emit: impl FnMut(Vec<Hit>, usize)) -> usize {
+    use rayon::prelude::*;
+    use std::sync::atomic::Ordering;
+    const CHUNK: usize = 48;
+    if q.is_empty() {
+        return 0;
+    }
+    let anchor = q.anchor().map(|a| a.as_bytes().to_vec());
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(opts.threads.max(1)).build().ok();
+    let mut frontier: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    let mut seen = 0usize;
+    // Folders one level deeper than the chunk being read, kept for the next round.
+    let mut next: Vec<std::path::PathBuf> = Vec::new();
+    while !frontier.is_empty() {
+        let mut queue = std::mem::take(&mut frontier);
+        queue.reverse(); // pop from the front, in order
+        while !queue.is_empty() {
+            if opts.cancel.load(Ordering::Relaxed) {
+                return seen;
+            }
+            let take = queue.len().min(CHUNK);
+            let chunk: Vec<std::path::PathBuf> = queue.split_off(queue.len() - take);
+            let work = || -> Vec<(Vec<std::path::PathBuf>, Vec<Hit>, usize)> {
+                chunk
+                    .par_iter()
+                    .map(|dir| walk_one(dir, q, anchor.as_deref(), opts))
+                    .collect()
+            };
+            let results = match &pool {
+                Some(p) => p.install(work),
+                None => work(),
+            };
+            let mut batch: Vec<Hit> = Vec::new();
+            for (dirs, hits, count) in results {
+                seen += count;
+                next.extend(dirs);
+                batch.extend(hits);
+            }
+            if !batch.is_empty() {
+                batch.sort_by(rank);
+                emit(batch, seen);
+            }
+        }
+        frontier = std::mem::take(&mut next);
+    }
+    emit(Vec::new(), seen);
+    seen
+}
+
+fn walk_one(dir: &Path, q: &Query, anchor: Option<&[u8]>, opts: &LiveOptions) -> (Vec<std::path::PathBuf>, Vec<Hit>, usize) {
+    let mut dirs = Vec::new();
+    let mut hits = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return (dirs, hits, 0) };
+    let mut count = 0;
+    for e in rd.flatten() {
+        count += 1;
+        let Ok(ft) = e.file_type() else { continue };
+        let is_dir = ft.is_dir(); // symlinks are never followed
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let lower = name.to_lowercase();
+        let path = e.path();
+        if is_dir && !opts.skip.iter().any(|s| s == &path) {
+            dirs.push(path.clone());
+        }
+        // Size is only needed when the query filters on it.
+        let needs_meta = q.min_size.is_some() || q.max_size.is_some();
+        let early = if needs_meta { None } else { Some(0u64) };
+        let size = match early {
+            Some(s) => s,
+            None => e.metadata().map(|m| if is_dir { 0 } else { m.len() }).unwrap_or(0),
+        };
+        if !q.matches_name(lower.as_bytes(), is_dir, size) {
+            continue;
+        }
+        let meta = e.metadata().ok();
+        if !opts.include_hidden && crate::entry::is_hidden(&name, meta.as_ref()) {
+            continue;
+        }
+        let (size, modified) = match &meta {
+            Some(m) => (
+                if is_dir { 0 } else { m.len() },
+                m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0),
+            ),
+            None => (0, 0),
+        };
+        hits.push(Hit { path: path.to_string_lossy().into_owned(), name: name.into_owned(), is_dir, size, modified, score: score(lower.as_bytes(), anchor) });
+    }
+    (dirs, hits, count)
 }
 
 /// Rank: exact name > exact stem > prefix > word start > anywhere.
@@ -323,5 +451,33 @@ mod tests {
         assert!(idx.search(&Query::parse("report"), Some(&scope), true, 50).is_empty());
         assert_eq!(idx.search(&Query::parse("*"), Some(&scope), true, 50).len(), 1);
         assert_eq!(idx.search(&Query::parse("e"), None, true, 2).len(), 2);
+    }
+
+    #[test]
+    fn live_search_streams_matches_and_respects_cancel() {
+        let d = sample_tree();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let opts = LiveOptions { threads: 2, include_hidden: true, cancel: &cancel, skip: vec![] };
+        let mut got: Vec<Hit> = Vec::new();
+        let mut batches = 0;
+        let seen = live_search(d.path(), &Query::parse("REPORT"), &opts, |hits, _| {
+            if !hits.is_empty() {
+                batches += 1;
+            }
+            got.extend(hits);
+        });
+        let mut names: Vec<_> = got.iter().map(|h| h.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Q1-Report.pdf", "q2-report.pdf", "reports"]);
+        assert!(batches >= 1);
+        assert_eq!(seen, 8); // everything under the root
+        // Filters work the same as in the index.
+        let mut pdfs = Vec::new();
+        live_search(d.path(), &Query::parse("ext:pdf size:>4000"), &opts, |h, _| pdfs.extend(h));
+        assert_eq!(pdfs.len(), 1);
+        assert_eq!(pdfs[0].name, "q2-report.pdf");
+        // A cancelled search stops at once.
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(live_search(d.path(), &Query::parse("report"), &opts, |_, _| panic!("no results after cancel")), 0);
     }
 }

@@ -14,6 +14,10 @@ export interface Rect {
 export interface Tile extends Rect {
   node: SizeNode;
   depth: number;
+  /** A folder drawn as a frame around its contents (children come later in the list). */
+  frame?: boolean;
+  /** Height of the folder's name strip, 0 when there is no room for text. */
+  header?: number;
 }
 
 function worst(row: number[], side: number): number {
@@ -86,6 +90,56 @@ export function layoutTree(root: SizeNode, rect: Rect, minPixels = 3): Tile[] {
   };
   walk(root, rect, 0);
   return tiles;
+}
+
+const PAD = 2;
+const HEADER = 16;
+const MAX_DEPTH = 14;
+
+/**
+ * Nested layout like WinDirStat's: every folder is a framed area holding its
+ * own files and subfolders, so things that live together sit together. Frames
+ * come before their contents in the list, so the last tile under a point is
+ * the deepest. A folder too small to hold a frame is drawn as one block.
+ */
+export function layoutNested(root: SizeNode, rect: Rect): Tile[] {
+  const tiles: Tile[] = [];
+  const walk = (node: SizeNode, r: Rect, depth: number) => {
+    const open = node.children.length > 0 && node.size > 0 && depth < MAX_DEPTH;
+    if (!open) {
+      tiles.push({ ...r, node, depth });
+      return;
+    }
+    let inner = r;
+    let header = 0;
+    const at = tiles.length;
+    if (depth > 0) {
+      header = r.h >= HEADER + 18 && r.w >= 64 ? HEADER : 0;
+      inner = { x: r.x + PAD, y: r.y + PAD + header, w: r.w - PAD * 2, h: r.h - PAD * 2 - header };
+      if (inner.w < 8 || inner.h < 8) {
+        tiles.push({ ...r, node, depth });
+        return;
+      }
+      tiles.push({ ...r, node, depth, frame: true, header });
+    }
+    const rects = squarify(node.children.map((c) => c.size), inner);
+    let drawn = 0;
+    node.children.forEach((child, i) => {
+      const cr = rects[i];
+      if (cr.w >= 1 && cr.h >= 1) {
+        walk(child, cr, depth + 1);
+        drawn++;
+      }
+    });
+    if (!drawn && depth > 0) tiles.splice(at, 1, { ...r, node, depth });
+  };
+  walk(root, rect, 0);
+  return tiles;
+}
+
+/** Colour of a file type by its extension (no dot); one place so the map and the list agree. */
+export function typeColor(ext: string): string {
+  return colorFor(ext ? `x.${ext}` : "x", false);
 }
 
 /** Stable colour per file type so the same kind of file looks the same everywhere. */

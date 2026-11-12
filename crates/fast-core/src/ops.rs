@@ -731,6 +731,7 @@ mod tests {
             preserve_times: true,
             large_threshold: 0,
             max_parallel: 0,
+            method: Default::default(),
         };
         let job = Job::Transfer { spec };
         let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&job).unwrap());
@@ -752,6 +753,7 @@ mod tests {
                 preserve_times: true,
                 large_threshold: 0,
                 max_parallel: 0,
+                method: Default::default(),
             },
         };
         assert_eq!(job.touched_dirs(), vec![PathBuf::from("/x"), PathBuf::from("/y"), PathBuf::from("/z")]);

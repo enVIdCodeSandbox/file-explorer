@@ -205,7 +205,8 @@ pub struct Performance {
     pub max_cache_mb: usize,
     pub background_indexing: bool,
     /// Index every mounted local drive instead of only the home folder.
-    pub index_all_drives: bool,
+    /// Index every local drive (the default) instead of only the home folder.
+    pub index_drives: bool,
     pub lazy_loading: bool,
     pub metadata_caching: bool,
     pub thumbnails: bool,
@@ -221,7 +222,7 @@ impl Default for Performance {
             max_threads: 0,
             max_cache_mb: 256,
             background_indexing: true,
-            index_all_drives: false,
+            index_drives: true,
             lazy_loading: true,
             metadata_caching: true,
             thumbnails: true,
@@ -245,6 +246,12 @@ pub struct Transfer {
     pub remember_device_speeds: bool,
     /// How many finished transfers are kept for that. 0 keeps none.
     pub history_limit: usize,
+    /// "auto", "native", "robocopy" or "rsync". Auto picks from past results.
+    pub method: String,
+    /// Occasionally try another available method on a big job, to learn which is faster here.
+    pub try_other_methods: bool,
+    /// Milliseconds between progress updates. 0 = automatic (by device power).
+    pub progress_interval_ms: u64,
 }
 
 impl Default for Transfer {
@@ -256,6 +263,9 @@ impl Default for Transfer {
             max_parallel: 0,
             remember_device_speeds: true,
             history_limit: 300,
+            method: "auto".into(),
+            try_other_methods: true,
+            progress_interval_ms: 0,
         }
     }
 }

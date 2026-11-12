@@ -7,6 +7,7 @@ import {
   type AppInfo,
   type Budget,
   type Conflict,
+  type ConflictInfo,
   type DeleteProgress,
   type Drive,
   type IndexStatus,
@@ -24,7 +25,7 @@ import {
 } from "./api";
 import { describeItems, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
-import { steadyFraction } from "./util/format";
+import { formatDate, formatSize, steadyFraction } from "./util/format";
 import { HOME, THIS_PC, baseName, isAppLocation, joinPath, parentPath, parseLocation } from "./util/path";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -128,6 +129,8 @@ interface State {
   frequent: string[];
   /** Paths shown in the app's own Properties window. */
   properties: string[] | null;
+  /** Files the "Share a download link" dialog is open for. */
+  shareFor: string[] | null;
   undo: UndoAction[];
   /** Kinds and extensions in the folder being viewed, for the filter menu. */
   facets: { kinds: [string, number][]; extensions: [string, number][] };
@@ -164,14 +167,25 @@ interface State {
   updateGroup: (id: string, patch: Partial<TabGroup>) => void;
   updateSettings: (mutate: (s: Settings) => void) => void;
   togglePin: (path: string, isFile?: boolean) => void;
+  /** Pin at a position (moving it if already pinned). */
+  pinAt: (path: string, index: number, isFile?: boolean) => void;
+  /** Move a pin to a new position (counted before the move). */
+  movePin: (from: number, to: number) => void;
   addRecent: (path: string, isDir: boolean) => void;
   clearRecent: () => void;
   refreshDrives: () => void;
   setClipboard: (c: Clipboard | null) => void;
+  /** Paste what is on the clipboard (from this app or any other) into a folder. */
+  pasteInto: (dest: string) => Promise<void>;
   setSelection: (paths: string[]) => void;
   bumpDirs: (dirs: string[]) => void;
   onProgress: (p: Progress) => void;
   onDeleteProgress: (p: DeleteProgress) => void;
+  /** Cancel requested, by job id and when (so a stuck cancel can offer "Force stop"). */
+  cancelling: Record<number, number>;
+  requestCancel: (kind: "transfer" | "delete", id: number) => void;
+  /** Abandon a job right now, without waiting for it to respond. */
+  forceStop: (kind: "transfer" | "delete", id: number) => void;
   dismissTransfer: (id: number) => void;
   dismissDelete: (id: number) => void;
   setSort: (sort: { key: SortKey; asc: boolean }) => void;
@@ -192,6 +206,8 @@ function makeTab(location: string, groupId: string | null = null): Tab {
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let nextNoticeId = 1;
+/** Jobs let go with "Force stop": whatever they report later is ignored. */
+const forcedJobs = new Set<number>();
 
 /** A short, quiet tone. Silently does nothing where audio is unavailable. */
 function beep() {
@@ -227,6 +243,7 @@ export const useStore = create<State>((set, get) => ({
   drivesFresh: false,
   transfers: {},
   specs: {},
+  cancelling: {},
   clipboard: null,
   dirVersion: {},
   selection: [],
@@ -254,6 +271,7 @@ export const useStore = create<State>((set, get) => ({
   frequent: [],
   places: [],
   properties: null,
+  shareFor: null,
   undo: [],
   facets: { kinds: [], extensions: [] },
   pendingSelect: null,
@@ -276,7 +294,6 @@ export const useStore = create<State>((set, get) => ({
     const opened = (window as unknown as { __OPEN__?: string }).__OPEN__;
     detachedView = (window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers";
     secondary = typeof opened === "string" || detachedView;
-    originIndex = (window as unknown as { __INDEX__?: number | null }).__INDEX__ ?? undefined;
     let tabs = secondary ? [makeTab(opened!)] : settings.general.restoreSession ? session.tabs : [];
     if (!tabs.length) tabs = [makeTab(start)];
     const activeTab = tabs.some((t) => t.id === session.activeTab) ? session.activeTab! : tabs[0].id;
@@ -373,9 +390,16 @@ export const useStore = create<State>((set, get) => ({
   detachTab: async (id, x, y) => {
     const { tabs } = get();
     const tab = tabs.find((t) => t.id === id);
-    if (!tab || tabs.length < 2) return;
+    if (!tab) return;
     try {
-      await api.openWindow(tab.location, x, y, tabs.findIndex((t) => t.id === id));
+      // Dropped on another window's tab bar: it moves there, like in a browser.
+      // A window left with no tabs closes itself.
+      if (x !== undefined && y !== undefined && (await api.dropTab(tab.location, x, y, tabs.length < 2))) {
+        if (tabs.length > 1) get().closeTab(id);
+        return;
+      }
+      if (tabs.length < 2) return;
+      await api.openWindow(tab.location, x, y);
       get().closeTab(id);
     } catch (e) {
       get().showToast(String(e));
@@ -460,6 +484,24 @@ export const useStore = create<State>((set, get) => ({
     persist();
   },
 
+  pinAt: (path, index, isFile = false) => {
+    const pins = [...get().pins];
+    const old = pins.findIndex((p) => p.path === path);
+    const pin = old >= 0 ? pins.splice(old, 1)[0] : { path, label: baseName(path), builtin: false, isFile };
+    pins.splice(Math.max(0, Math.min(old >= 0 && old < index ? index - 1 : index, pins.length)), 0, pin);
+    set({ pins });
+    persist();
+  },
+
+  movePin: (from, to) => {
+    const pins = [...get().pins];
+    if (from < 0 || from >= pins.length) return;
+    const [pin] = pins.splice(from, 1);
+    pins.splice(Math.max(0, Math.min(to > from ? to - 1 : to, pins.length)), 0, pin);
+    set({ pins });
+    persist();
+  },
+
   addRecent: (path, isDir) => {
     const recent = [{ path, isDir, at: Date.now() }, ...get().recent.filter((r) => r.path !== path)].slice(0, adv<number>(get().settings, "files.recentLimit"));
     set({ recent });
@@ -480,7 +522,22 @@ export const useStore = create<State>((set, get) => ({
 
   setClipboard: (clipboard) => {
     set({ clipboard });
+    // Also on the system clipboard, so other programs can paste the same files.
+    if (clipboard?.paths.length) void api.clipboardSetFiles(clipboard.paths).catch(() => {});
     if (clipboard && clipboard.paths.length) get().notify(clipboard.op === "move" ? "cut" : "copy", `${clipboard.op === "move" ? "Cut" : "Copied"} ${describeItems(clipboard.paths)}`, "Ready to paste");
+  },
+  pasteInto: async (dest) => {
+    const ours = get().clipboard;
+    const system = await api.clipboardGetFiles().catch(() => [] as string[]);
+    const same = ours && system.length === ours.paths.length && system.every((p) => ours.paths.includes(p));
+    if (ours && (same || system.length === 0)) {
+      // Copied or cut here: cut means move.
+      await get().startTransfer(ours.paths, dest, ours.op);
+      if (ours.op === "move") get().setClipboard(null);
+    } else if (system.length) {
+      // Copied in another program (Explorer, Finder, a mail client): always a copy.
+      await get().startTransfer(system, dest, "copy");
+    }
   },
   setSelection: (selection) => set({ selection }),
 
@@ -491,6 +548,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   onProgress: (p) => {
+    if (forcedJobs.has(p.id)) return;
     const prev = get().shown[p.id] ?? 0;
     const fraction = steadyFraction(prev, p);
     const list = get().series[p.id] ?? [];
@@ -501,6 +559,7 @@ export const useStore = create<State>((set, get) => ({
       series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
     }
     set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
+    if (p.conflict && !detachedView) void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) {
       // Successful jobs leave on their own; failures stay until dismissed.
       const secs = adv<number>(get().settings, "transfers.dismissSecs");
@@ -517,6 +576,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   onDeleteProgress: (p) => {
+    if (forcedJobs.has(p.id)) return;
     const ratio = p.itemsTotal > 0 ? p.itemsDone / p.itemsTotal : 0;
     const shown = steadyFraction(get().shown[p.id] ?? 0, { phase: p.phase === "done" ? "done" : "running", fraction: p.phase === "scanning" ? 0 : ratio });
     set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown } });
@@ -527,6 +587,24 @@ export const useStore = create<State>((set, get) => ({
       if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`);
       else get().notify("info", `Delete stopped`, `${p.itemsDone} of ${p.itemsTotal} done`);
     }
+  },
+
+  requestCancel: (kind, id) => {
+    set({ cancelling: { ...get().cancelling, [id]: Date.now() } });
+    void (kind === "delete" ? api.deleteControl(id, "cancel") : api.transferControl(id, "cancel")).catch((e) => get().showToast(String(e)));
+  },
+
+  forceStop: (kind, id) => {
+    forcedJobs.add(id);
+    const spec = get().specs[id];
+    void (kind === "delete" ? api.deleteControl(id, "cancel") : api.transferForceStop(id)).catch(() => {});
+    if (kind === "delete") get().dismissDelete(id);
+    else get().dismissTransfer(id);
+    const cancelling = { ...get().cancelling };
+    delete cancelling[id];
+    set({ cancelling });
+    if (spec) get().bumpDirs([spec.destDir, ...spec.sources.map((p) => parentOf(p))].filter((d): d is string => !!d));
+    get().notify("info", "Stopped", "Anything already copied stays where it is. The drive may take a while to let go.");
   },
 
   dismissTransfer: (id) => {
@@ -566,29 +644,9 @@ export const useStore = create<State>((set, get) => ({
   startTransfer: async (sources, destDir, op) => {
     const s = get();
     if (!sources.length || !s.settings) return;
-    let conflict: Conflict = "keepBoth";
-    const policy = s.settings.transfer.conflict;
-    const clashes = await api.checkConflicts(sources, destDir);
-    if (clashes.length) {
-      if (policy === "ask") {
-        const answer = await ask({
-          title: `${clashes.length} item${clashes.length === 1 ? "" : "s"} already exist${clashes.length === 1 ? "s" : ""} here`,
-          message: clashes.slice(0, 6).join("\n") + (clashes.length > 6 ? `\n…and ${clashes.length - 6} more` : ""),
-          buttons: [
-            { id: "overwrite", label: "Replace" },
-            { id: "skip", label: "Skip" },
-            { id: "keepBoth", label: "Keep both", primary: true },
-            { id: "cancel", label: "Cancel" },
-          ],
-        });
-        if (!answer || answer.button === "cancel") return;
-        conflict = answer.button as Conflict;
-      } else {
-        conflict = policy;
-      }
-    } else if (policy !== "ask") {
-      conflict = policy;
-    }
+    // "Ask" is answered file by file while the transfer runs (see askAboutConflict), so
+    // that files inside merged folders get asked about too, as in Windows.
+    const conflict: Conflict = s.settings.transfer.conflict;
     const spec: TransferSpec = { sources, destDir, op, conflict };
     try {
       const job: Job = { kind: "transfer", spec };
@@ -655,8 +713,6 @@ function pruneGroups() {
 /** True in windows made by dragging a tab out of another. */
 let secondary = false;
 /** Where in the main window's tab bar a detached tab came from. */
-let originIndex: number | undefined;
-export const tabOrigin = () => originIndex;
 /** True in the separate transfers window, which only shows progress. */
 let detachedView = false;
 
@@ -696,6 +752,36 @@ export function tabTitle(location: string): string {
 
 export function thisPcLabel(os: string | undefined): string {
   return os === "windows" ? "This PC" : os === "macos" ? "This Mac" : "This Computer";
+}
+
+const askedConflicts = new Set<string>();
+
+/** "This file already exists": Replace, Skip, Keep both, each for this file or for all that follow. */
+async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
+  const key = `${id}:${c.number}`;
+  if (askedConflicts.has(key) || !canShow) return; // asked already, or another dialog is open: the next progress update retries
+  askedConflicts.add(key);
+  const line = (label: string, size: number, at: number | null) => `${label}: ${formatSize(size)}${at ? `, changed ${formatDate(at * 1000)}` : ""}`;
+  const newer = c.srcModified != null && c.dstModified != null ? (c.srcModified > c.dstModified ? " (newer)" : c.srcModified < c.dstModified ? " (older)" : " (same time)") : "";
+  const answer = await ask({
+    title: `"${c.name}" already exists here`,
+    message: `${line("Already here", c.dstSize, c.dstModified)}\n${line("Coming in", c.srcSize, c.srcModified)}${newer}\n\n${c.dst}`,
+    buttons: [
+      { id: "replace", label: "Replace", primary: true },
+      { id: "replaceAll", label: "Replace all" },
+      { id: "skip", label: "Skip" },
+      { id: "skipAll", label: "Skip all" },
+      { id: "keepBoth", label: "Keep both" },
+      { id: "cancel", label: "Cancel transfer" },
+    ],
+  });
+  const b = answer?.button ?? "cancel";
+  try {
+    if (b === "cancel") await api.transferControl(id, "cancel");
+    else await api.transferResolve(id, b.replace("All", "") as "skip" | "replace" | "keepBoth", b.endsWith("All"));
+  } catch {
+    /* the transfer ended while the question was open */
+  }
 }
 
 /** Show a modal with buttons; resolves with the chosen button or null. */

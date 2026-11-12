@@ -48,8 +48,24 @@ function useFraction(j: Job): number {
   return useStore((s) => s.shown[j.p.id] ?? 0);
 }
 
-function cancel(j: Job) {
-  void (j.kind === "delete" ? api.deleteControl(j.p.id, "cancel") : api.transferControl(j.p.id, "cancel")).catch((e) => useStore.getState().showToast(String(e)));
+function cancel(j: Job, force = false) {
+  const s = useStore.getState();
+  if (force) s.forceStop(j.kind, j.p.id);
+  else s.requestCancel(j.kind, j.p.id);
+}
+
+/** Shown once Cancel has been asked for: a stuck job can be let go of right away. */
+function ForceStop({ j }: { j: Job }) {
+  const asked = useStore((s) => s.cancelling[j.p.id]);
+  if (!asked) return null;
+  return (
+    <div className="force-stop">
+      <span className="muted">Cancelling… waiting for the drive to respond.</span>
+      <button className="secondary" title="Stop right now without waiting. What was already copied stays where it is." onClick={(e) => (e.stopPropagation(), cancel(j, true))}>
+        Force stop
+      </button>
+    </div>
+  );
 }
 
 function Bar({ fraction, indeterminate }: { fraction: number; indeterminate?: boolean }) {
@@ -124,11 +140,12 @@ function Card({ job }: { job: Job }) {
               <Icon name="expand" size={12} />
             </button>
           )}
-          <button className="icon-button" data-action={active ? "cancel" : "dismiss"} aria-label={active ? "Cancel" : "Dismiss"} title={active ? "Cancel" : "Dismiss"} onClick={() => (active ? cancel(job) : dismiss())}>
+          <button className="icon-button" data-action={active ? "cancel" : "dismiss"} aria-label={active ? "Cancel" : "Dismiss"} title={active ? "Cancel (Shift-click to force stop)" : "Dismiss"} onClick={(e) => (active ? cancel(job, e.shiftKey) : dismiss())}>
             <Icon name="close" size={12} />
           </button>
         </div>
       </div>
+      {active && <ForceStop j={job} />}
       {active && (
         <>
           <Bar fraction={fraction} indeterminate={scanning} />
@@ -167,13 +184,18 @@ function niceMax(v: number): number {
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
 }
 
-export function SpeedGraph({ samples, total }: { samples: Sample[]; total: number | null }) {
+const METHOD_LABEL: Record<string, string> = { robocopy: "Robocopy", rsync: "rsync", rclone: "rclone", smb: "SMB-tuned copy", nfs: "NFS-tuned rsync" };
+
+export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; total: number | null; etaSecs?: number | null }) {
   const W = 520;
   const H = 150;
   const pad = { l: 46, r: 56, t: 10, b: 22 };
   const w = W - pad.l - pad.r;
   const h = H - pad.t - pad.b;
-  const end = Math.max(5, samples.at(-1)?.t ?? 0, 1);
+  const now = samples.at(-1)?.t ?? 0;
+  // Leave empty room on the right (up to the expected finish) so the streak has somewhere to run.
+  const end = Math.max(5, now * 1.15, now + Math.min(etaSecs ?? 0, now * 0.6 + 5), 1);
+  const last = samples.at(-1);
   const maxFiles = niceMax(Math.max(1, ...samples.map((s) => s.filesPerSec)));
   const maxBytes = niceMax(Math.max(1, ...samples.map((s) => s.bytesPerSec)));
   const x = (t: number) => pad.l + (t / end) * w;
@@ -202,6 +224,19 @@ export function SpeedGraph({ samples, total }: { samples: Sample[]; total: numbe
         <>
           <path d={line((s) => s.bytesPerSec, maxBytes)} className="graph-line bytes" />
           <path d={line((s) => s.filesPerSec, maxFiles)} className="graph-line files" />
+        </>
+      )}
+      {last && samples.length > 1 && (
+        <>
+          {([["bytes", last.bytesPerSec, maxBytes], ["files", last.filesPerSec, maxFiles]] as const).map(([k, v, max]) => {
+            const y = pad.t + h - (v / max) * h;
+            return (
+              <g key={k}>
+                <line x1={x(last.t)} x2={pad.l + w} y1={y} y2={y} className={`graph-streak ${k}`} />
+                <circle cx={x(last.t)} cy={y} r={2.5} className={`graph-head ${k}`} />
+              </g>
+            );
+          })}
         </>
       )}
       {total != null && total > 0 && total < end * 1.5 && <line x1={x(Math.min(total, end))} x2={x(Math.min(total, end))} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
@@ -255,7 +290,7 @@ function TransferDetail({ p }: { p: Progress }) {
         <span className="muted">{active ? (p.phase === "paused" ? "Paused" : formatRate(p)) : ""}</span>
       </div>
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
-      <SpeedGraph samples={series} total={typical ?? null} />
+      <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} />
       <div className="graph-legend">
         <span className="files">● Files per second</span>
         <span className="bytes">● Megabytes per second</span>
@@ -277,7 +312,7 @@ function TransferDetail({ p }: { p: Progress }) {
       {more && (
         <dl className="details-list transfer-facts">
           <dt>Algorithm</dt>
-          <dd>{p.strategy ? STRATEGY_LABEL[p.strategy] : "Choosing…"}</dd>
+          <dd>{p.strategy ? STRATEGY_LABEL[p.strategy] : "Choosing…"}{p.method && p.method !== "native" ? ` · via ${METHOD_LABEL[p.method] ?? p.method}` : ""}</dd>
           {p.plan && (
             <>
               <dt>Streams</dt>
@@ -410,12 +445,13 @@ function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
                   className="icon-button"
                   data-action={active ? "cancel" : "dismiss"}
                   aria-label={active ? "Cancel" : "Dismiss"}
-                  title={active ? "Cancel" : "Dismiss"}
-                  onClick={(e) => (e.stopPropagation(), active ? cancel(j) : j.kind === "delete" ? dismissDelete(j.p.id) : dismissTransfer(j.p.id))}
+                  title={active ? "Cancel (Shift-click to force stop)" : "Dismiss"}
+                  onClick={(e) => (e.stopPropagation(), active ? cancel(j, e.shiftKey) : j.kind === "delete" ? dismissDelete(j.p.id) : dismissTransfer(j.p.id))}
                 >
                   <Icon name="close" size={12} />
                 </button>
               </div>
+              {active && <ForceStop j={j} />}
               {expanded && (j.kind === "transfer" ? <TransferDetail p={j.p} /> : <DeleteDetail p={j.p} />)}
               <Issues
                 p={j.p}

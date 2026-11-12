@@ -269,6 +269,96 @@ mod win {
                 online,
             });
         }
+        add_unseen_mappings(out, mask);
+    }
+
+    /// Mapped drives belong to a logon session. A process started as
+    /// administrator runs in a different one (UAC), so Windows does not list
+    /// the user's mapped letters for it at all. They are still recorded under
+    /// `HKEY_CURRENT_USER\Network`, so read them from there and mount each by
+    /// its UNC path, which an elevated process can open with the user's
+    /// saved credentials or the machine's.
+    fn add_unseen_mappings(out: &mut Vec<Drive>, mask: u32) {
+        for (letter, remote) in registry_mappings() {
+            let idx = (letter.to_ascii_uppercase() as u8 - b'A') as u32;
+            if mask & (1 << idx) != 0 {
+                continue; // Visible normally, already handled above.
+            }
+            let Some(share) = super::parse_remote(&remote) else { continue };
+            let mount = format!("{}\\", share.remote);
+            if out.iter().any(|d| d.mount.eq_ignore_ascii_case(&mount)) {
+                continue;
+            }
+            let wide: Vec<u16> = mount.encode_utf16().chain(std::iter::once(0)).collect();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+                let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, &mut total, &mut free) };
+                let _ = tx.send((ok != 0, total, avail));
+            });
+            let (online, total, available) =
+                rx.recv_timeout(Duration::from_millis(1500)).unwrap_or((false, 0, 0));
+            out.push(Drive {
+                name: share.display(&format!("{}:", letter.to_ascii_uppercase())),
+                remote: Some(share.remote),
+                mount,
+                fs: "network".into(),
+                total,
+                available,
+                media: Media::Network,
+                removable: false,
+                read_only: false,
+                online,
+            });
+        }
+    }
+
+    /// `(letter, \\server\share)` for every persistent mapping of the user.
+    fn registry_mappings() -> Vec<(char, String)> {
+        use windows_sys::Win32::System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ,
+        };
+        let mut found = Vec::new();
+        unsafe {
+            let root: Vec<u16> = "Network\0".encode_utf16().collect();
+            let mut key: HKEY = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, root.as_ptr(), 0, KEY_READ, &mut key) != 0 {
+                return found;
+            }
+            let mut index = 0;
+            loop {
+                let mut name = [0u16; 16];
+                let mut len = name.len() as u32;
+                let rc = RegEnumKeyExW(
+                    key, index, name.as_mut_ptr(), &mut len,
+                    std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+                );
+                if rc != 0 {
+                    break;
+                }
+                index += 1;
+                let letter = String::from_utf16_lossy(&name[..len as usize]);
+                let mut chars = letter.chars();
+                let (Some(c), None) = (chars.next(), chars.next()) else { continue };
+                if !c.is_ascii_alphabetic() {
+                    continue;
+                }
+                let value: Vec<u16> = "RemotePath\0".encode_utf16().collect();
+                let mut buf = [0u16; 1024];
+                let mut size = (buf.len() * 2) as u32;
+                let sub: Vec<u16> = letter.encode_utf16().chain(std::iter::once(0)).collect();
+                let rc = RegGetValueW(
+                    key, sub.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ,
+                    std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size,
+                );
+                if rc == 0 {
+                    let end = buf.iter().position(|&x| x == 0).unwrap_or(buf.len());
+                    found.push((c, String::from_utf16_lossy(&buf[..end])));
+                }
+            }
+            RegCloseKey(key);
+        }
+        found
     }
 }
 

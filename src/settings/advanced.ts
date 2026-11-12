@@ -58,6 +58,14 @@ export const ADVANCED: AdvDef[] = [
   num(3, "files.confirmDeleteOver", "Files and lists", "Always confirm deleting this many items or more", 0, 1000, "items", "Even when \"Ask before deleting\" is off. 0 never forces it."),
   num(100, "files.recentLimit", "Files and lists", "Recent items to remember", 0, 1000),
   num(10, "files.frequentCount", "Navigation pane", "Frequently used folders to keep in the list", 0, 50, undefined, "The list is built from what you open most."),
+  sel("frequent,pinned,drives", "sidebar.order", "Navigation pane", "Order of the sections", [
+    ["frequent,pinned,drives", "Frequently used, Pinned, Drives"],
+    ["pinned,frequent,drives", "Pinned, Frequently used, Drives"],
+    ["pinned,drives,frequent", "Pinned, Drives, Frequently used"],
+    ["frequent,drives,pinned", "Frequently used, Drives, Pinned"],
+    ["drives,pinned,frequent", "Drives, Pinned, Frequently used"],
+    ["drives,frequent,pinned", "Drives, Frequently used, Pinned"],
+  ], "You can also drag a section's heading to move it."),
   num(6, "sidebar.frequentRows", "Navigation pane", "Frequently used: rows shown before it scrolls", 0, 50, undefined, "0 shows them all. Longer lists get their own scroll bar so the rest of the pane stays in view."),
   num(10, "sidebar.pinnedRows", "Navigation pane", "Pinned: rows shown before it scrolls", 0, 100, undefined, "0 shows them all."),
   num(10, "sidebar.drivesRows", "Navigation pane", "Drives: rows shown before it scrolls", 0, 100, undefined, "0 shows them all."),
@@ -65,7 +73,7 @@ export const ADVANCED: AdvDef[] = [
 
   // ---- Tabs ----
   num(200, "tabs.width", "Tabs", "Tab width", 90, 360, "px", "The width tabs have while there is room."),
-  num(90, "tabs.minWidth", "Tabs", "Narrowest a tab gets", 40, 240, "px", "Past this, tabs stop shrinking and the bar scrolls with arrows."),
+  num(120, "tabs.minWidth", "Tabs", "Narrowest a tab gets", 40, 240, "px", "Past this, tabs stop shrinking and the bar scrolls with arrows."),
   num(34, "tabs.height", "Tabs", "Tab bar height", 24, 64, "px"),
   num(0, "tabs.max", "Tabs", "Most tabs open at once", 0, 100, undefined, "0 means no limit."),
   sel("end", "tabs.newPosition", "Tabs", "New tabs open", [["end", "At the end"], ["afterCurrent", "Next to the current tab"]]),

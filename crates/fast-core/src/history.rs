@@ -17,6 +17,7 @@
 use crate::drives::Media;
 use crate::transfer::engine::{Op, Phase, Progress};
 use crate::transfer::eta::EtaParams;
+use crate::transfer::method::Method;
 use crate::transfer::strategy::Strategy;
 use crate::{CoreError, Result};
 use serde::{Deserialize, Serialize};
@@ -24,10 +25,18 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 const MB: f64 = 1024.0 * 1024.0;
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 /// Records at least this similar (distance below this) can inform a prediction.
 const MAX_DISTANCE: f64 = 3.2;
+/// Jobs smaller than this always use the built-in engine.
+const SMALL_JOB: u64 = 64 << 20;
+/// Only jobs this big are used to try a method that has no results yet.
+const EXPLORE_JOB: u64 = 256 << 20;
+/// Past jobs this alike (distance below this) count towards choosing a method.
+const CHOICE_DISTANCE: f64 = 2.2;
+/// Results needed before a method is trusted.
+const MIN_SAMPLES: u32 = 2;
 /// How many nearest records are blended.
 const NEIGHBOURS: usize = 8;
 /// A record's weight halves every this many days.
@@ -120,6 +129,8 @@ pub struct Record {
     pub overhead_share: f32,
     pub workers: u8,
     pub errors: u16,
+    /// `Method::code()`.
+    pub method: u8,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -256,6 +267,7 @@ impl History {
             overhead_share: p.overhead_share as f32,
             workers: (plan.small_workers + plan.large_workers).min(255) as u8,
             errors: p.error_count.min(u16::MAX as u64) as u16,
+            method: p.method.map(Method::code).unwrap_or(0),
         });
         self.trim(limit);
         true
@@ -280,6 +292,54 @@ impl History {
         let count = ((r.files.max(1) as f64).ln() - (q.files.max(1) as f64).ln()).abs() * 0.5;
         let op = if r.is_move == q.is_move { 0.0 } else { 0.3 };
         route + size * 0.8 + count + op
+    }
+
+    /// Pick how to move this job from how earlier similar jobs went.
+    ///
+    /// * Small jobs and jobs with no history use the built-in engine: starting
+    ///   a tool costs more than it could save.
+    /// * Each method is scored by the speed it reached on similar jobs (bytes
+    ///   per second for big files, files per second for small ones), newer and
+    ///   more alike counting more. A method needs [`MIN_SAMPLES`] such jobs.
+    /// * With every candidate measured, the fastest wins, but an alternative
+    ///   must beat the built-in engine by 10% so noise does not cause flip-flopping.
+    /// * With `explore`, a big job is allowed to try a candidate that has too
+    ///   few measurements, once the built-in engine has enough of its own.
+    pub fn choose_method(&self, q: &Query, candidates: &[Method], explore: bool, now: i64) -> Method {
+        if candidates.len() < 2 || q.bytes < SMALL_JOB || q.is_move {
+            return Method::Native;
+        }
+        let by_bytes = q.bytes / q.files.max(1) >= 1 << 20;
+        // (weight sum, weighted speed sum, sample count) per method.
+        let mut stats: std::collections::HashMap<Method, (f64, f64, u32)> = Default::default();
+        for r in self.records.iter().filter(|r| r.strategy != 0 && r.errors == 0 && r.secs >= 0.5) {
+            let d = self.distance(r, q);
+            if d >= CHOICE_DISTANCE {
+                continue;
+            }
+            let age_days = ((now - r.at).max(0) as f64) / 86_400.0;
+            let w = (-d).exp() * 0.5f64.powf(age_days / HALF_LIFE_DAYS);
+            let speed = if by_bytes { r.bytes as f64 / r.secs as f64 } else { r.files as f64 / r.secs as f64 };
+            let e = stats.entry(Method::from_code(r.method)).or_default();
+            *e = (e.0 + w, e.1 + w * speed, e.2 + 1);
+        }
+        let score = |m: Method| stats.get(&m).filter(|s| s.2 >= MIN_SAMPLES && s.0 > 0.0).map(|s| s.1 / s.0);
+        let Some(native) = score(Method::Native) else { return Method::Native };
+        let unmeasured = candidates.iter().copied().filter(|m| score(*m).is_none());
+        if explore && q.bytes >= EXPLORE_JOB {
+            if let Some(m) = unmeasured.min_by_key(|m| stats.get(m).map(|s| s.2).unwrap_or(0)) {
+                return m;
+            }
+        }
+        candidates
+            .iter()
+            .copied()
+            .filter(|m| *m != Method::Native)
+            .filter_map(|m| score(m).map(|s| (m, s)))
+            .filter(|(_, s)| *s > native * 1.10)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(m, _)| m)
+            .unwrap_or(Method::Native)
     }
 
     /// Predict a job from the past ones most like it, if any are alike enough.
@@ -399,6 +459,8 @@ mod tests {
                 try_clone: false,
             }),
             prediction: None,
+            conflict: None,
+            method: Some(Method::Native),
         }
     }
 
@@ -532,5 +594,46 @@ mod tests {
         assert!(History::load(&file).is_empty());
         std::fs::write(&file, b"garbage that is not bincode").unwrap();
         assert!(History::load(&file).is_empty());
+    }
+
+    fn with_method(mut p: Progress, m: Method) -> Progress {
+        p.method = Some(m);
+        p
+    }
+
+    #[test]
+    fn chooses_the_method_that_was_faster_on_similar_jobs() {
+        let r = route("C:\\", "Z:\\", Media::Ssd, Media::Network);
+        let q = Query { route: r.clone(), files: 100, bytes: 4 << 30, is_move: false };
+        let both = [Method::Native, Method::Robocopy];
+        let mut h = History::default();
+        // No history: built-in.
+        assert_eq!(h.choose_method(&q, &both, false, NOW), Method::Native);
+        // Two built-in runs at 100 MB/s.
+        for _ in 0..2 {
+            h.record(&with_method(done(r.clone(), 100, 4 << 30, 40.0, 0.0, 0.0), Method::Native), NOW, 100);
+        }
+        // Without exploring, nothing else is tried.
+        assert_eq!(h.choose_method(&q, &both, false, NOW), Method::Native);
+        // With exploring, a big job tries the unmeasured one.
+        assert_eq!(h.choose_method(&q, &both, true, NOW), Method::Robocopy);
+        // A small job never gambles.
+        let small = Query { bytes: 10 << 20, ..q.clone() };
+        assert_eq!(h.choose_method(&small, &both, true, NOW), Method::Native);
+        // Robocopy measured twice and clearly faster: it wins.
+        for _ in 0..2 {
+            h.record(&with_method(done(r.clone(), 100, 4 << 30, 25.0, 0.0, 0.0), Method::Robocopy), NOW, 100);
+        }
+        assert_eq!(h.choose_method(&q, &both, true, NOW), Method::Robocopy);
+        // Robocopy only 5% faster than built-in is within noise: stay put.
+        let mut h2 = History::default();
+        for _ in 0..2 {
+            h2.record(&with_method(done(r.clone(), 100, 4 << 30, 40.0, 0.0, 0.0), Method::Native), NOW, 100);
+            h2.record(&with_method(done(r.clone(), 100, 4 << 30, 38.5, 0.0, 0.0), Method::Robocopy), NOW, 100);
+        }
+        assert_eq!(h2.choose_method(&q, &both, true, NOW), Method::Native);
+        // A different route says nothing about this one.
+        let other = Query { route: route("C:\\", "E:\\", Media::Ssd, Media::Hdd), ..q };
+        assert_eq!(h.choose_method(&other, &both, true, NOW), Method::Native);
     }
 }
