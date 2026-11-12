@@ -219,8 +219,16 @@ impl Index {
             }
         }
 
-        // Best score first; ties broken by shorter name, then index order.
-        scored.sort_unstable_by_key(|&(s, id)| (std::cmp::Reverse(s), self.node(id).name_len_hint(), id));
+        // Best score first; ties broken by shorter name, then alphabetically,
+        // so the order never depends on how the filesystem happened to list a
+        // folder (it differs between machines). Index order is the last resort.
+        scored.sort_unstable_by(|&(sa, a), &(sb, b)| {
+            sb.cmp(&sa)
+                .then_with(|| self.node(a).name_len_hint().cmp(&self.node(b).name_len_hint()))
+                .then_with(|| self.lower_name(a).cmp(self.lower_name(b)))
+                .then_with(|| self.name(a).cmp(self.name(b)))
+                .then_with(|| a.cmp(&b))
+        });
         scored.truncate(limit);
         scored
             .into_iter()
