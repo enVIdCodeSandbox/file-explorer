@@ -49,6 +49,7 @@ pub fn extension_of(path: &Path) -> String {
     path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default()
 }
 
+#[allow(dead_code)] // used on some platforms only
 fn what(path: &Path) -> String {
     let ext = extension_of(path);
     if ext.is_empty() { "this kind of file".into() } else { format!("{ext} files") }
@@ -119,6 +120,7 @@ pub fn split_command(line: &str) -> Vec<String> {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[allow(dead_code)] // used on some platforms only
 fn encode_icon(file: &Path) -> Option<String> {
     use base64::Engine;
     let ext = file.extension()?.to_string_lossy().to_lowercase();

@@ -15,7 +15,7 @@
 import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
-import { baseName, isInside, parentPath } from "./util/path";
+import { baseName, insideArchive, isInside, parentPath } from "./util/path";
 
 export interface Mods {
   ctrl: boolean;
@@ -50,6 +50,10 @@ const same = (a: string, b: string) => {
 
 /** The drive or share a path lives on. */
 export function volumeOf(path: string, drives: Drive[]): string {
+  // Inside an archive counts as a place of its own: moving within it rearranges it, anything
+  // else copies in (as with a zip folder in Windows).
+  const arc = insideArchive(path);
+  if (arc) return `archive:${arc}`;
   let best = "";
   for (const d of drives) if (d.mount.length > best.length && isInside(path.toLowerCase(), d.mount.toLowerCase())) best = d.mount;
   if (best) return best.toLowerCase();

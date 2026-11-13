@@ -6,6 +6,7 @@
 
 pub mod archive;
 pub mod browse;
+pub mod edit;
 pub mod details;
 pub mod drives;
 pub mod entry;

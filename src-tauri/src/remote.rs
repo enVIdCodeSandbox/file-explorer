@@ -666,7 +666,8 @@ pub fn archive_details(st: &Shared, url: &str) -> CmdResult<fast_core::details::
 /// a temporary place for opening (`open` true; `result` names it). Nothing that is
 /// already in the folder is replaced.
 #[tauri::command]
-pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>, dest: String, open: bool) -> CmdResult<u64> {
+pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>, dest: String, open: bool, remove: Option<bool>) -> CmdResult<u64> {
+    let remove = remove.unwrap_or(false) && !open;
     let st = state.inner().clone();
     if sources.is_empty() {
         return Err("Nothing to copy.".into());
@@ -698,6 +699,15 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
             if r.refused > 0 {
                 out.failed.push((archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), format!("{} item(s) were skipped (links, or names that lead outside the folder).", r.refused)));
             }
+            if remove {
+                // A move: what was copied out leaves the archive, but only when all of it arrived.
+                let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if r.existing > 0 || r.refused > 0 {
+                    out.failed.push((name, "Copied, but not removed from the archive because some items were not copied.".into()));
+                } else if let Err(e) = fast_core::edit::delete(&archive, &inners, &rep.cancel) {
+                    out.failed.push((name, format!("Copied, but could not be removed from the archive. {e}")));
+                }
+            }
         }
         if open {
             out.result = into.join(&first_target).to_string_lossy().into_owned();
@@ -707,4 +717,167 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
         }
         Ok(out)
     })
+}
+
+/// Put things into an archive, or move them around inside it: from disk, from the
+/// same archive (move or copy) and from other archives. `op` is "copy" or "move".
+/// A move takes the originals away once they are safely in.
+#[tauri::command]
+pub async fn archive_paste_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>, dest: String, op: String) -> CmdResult<u64> {
+    let st = state.inner().clone();
+    let dest = archive_loc(&st, &dest)?;
+    fast_core::edit::check_editable(&dest.archive).map_err(err)?;
+    let moving = op == "move";
+    let mut local: Vec<PathBuf> = Vec::new();
+    let mut foreign: Vec<fast_core::browse::Loc> = Vec::new();
+    let mut same: Vec<fast_core::browse::Loc> = Vec::new();
+    for src in &sources {
+        if fast_core::browse::is_loc(src) {
+            let l = archive_loc(&st, src)?;
+            if moving && l.archive == dest.archive {
+                same.push(l);
+            } else {
+                foreign.push(l);
+            }
+        } else {
+            crate::commands::guard(&st, src)?;
+            local.push(PathBuf::from(src));
+        }
+    }
+    let first = sources.first().map(|s| s.rsplit(['/', '\\']).next().unwrap_or("").to_string()).unwrap_or_default();
+    let n = sources.len() as u64;
+    let st2 = st.clone();
+    spawn_job(app, st, "pack", n, first, move |rep| {
+        let mut out = Outcome::default();
+        let mut report = |done: u64, total: u64, current: &str| rep.running((done, total), (0, 0), current);
+        // Moves inside the same archive are only renames of entries.
+        if !same.is_empty() {
+            let inners: Vec<String> = same.iter().map(|l| l.inner.clone()).collect();
+            let moved = fast_core::edit::move_within(&dest.archive, &inners, &dest.inner, &rep.cancel, &mut report).map_err(err)?;
+            out.items += moved.len() as u64;
+        }
+        // Everything else is first laid out on disk, then added.
+        let stage = st2.paths.remote_tmp.join(format!("stage-{}", rep.id));
+        let staged: Result<Vec<PathBuf>, String> = (|| {
+            let mut paths = local.clone();
+            for (i, l) in foreign.iter().enumerate() {
+                let into = stage.join(i.to_string());
+                fast_core::browse::extract_items(&l.archive, &[l.inner.clone()], &into, &rep.cancel, &mut report).map_err(err)?;
+                paths.push(into.join(l.inner.rsplit('/').next().unwrap_or("")));
+            }
+            Ok(paths)
+        })();
+        let result = staged.and_then(|paths| {
+            if paths.is_empty() {
+                return Ok(0);
+            }
+            fast_core::edit::add(&dest.archive, &dest.inner, &paths, &rep.cancel, &mut report).map_err(err)
+        });
+        let _ = std::fs::remove_dir_all(&stage);
+        out.items += result?;
+        if moving {
+            // The originals go once they are in: files on disk, and items of other archives.
+            for p in &local {
+                let r = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+                if let Err(e) = r {
+                    out.failed.push((p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), format!("Added, but could not be removed from its folder: {e}")));
+                } else {
+                    out.local_dirs.extend(p.parent().map(|d| d.to_path_buf()));
+                }
+            }
+            let mut by_archive: Vec<(PathBuf, Vec<String>)> = Vec::new();
+            for l in &foreign {
+                match by_archive.iter_mut().find(|(a, _)| *a == l.archive) {
+                    Some((_, v)) => v.push(l.inner.clone()),
+                    None => by_archive.push((l.archive.clone(), vec![l.inner.clone()])),
+                }
+            }
+            for (archive, inners) in by_archive {
+                if let Err(e) = fast_core::edit::delete(&archive, &inners, &rep.cancel) {
+                    out.failed.push((archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), format!("Copied in, but could not be removed from where it was. {e}")));
+                }
+            }
+        }
+        out.result = dest.url();
+        Ok(out)
+    })
+}
+
+fn one_archive(st: &Shared, locs: &[String]) -> CmdResult<(PathBuf, Vec<String>)> {
+    let mut archive: Option<PathBuf> = None;
+    let mut inners = Vec::new();
+    for l in locs {
+        let loc = archive_loc(st, l)?;
+        match &archive {
+            Some(a) if *a != loc.archive => return Err("Delete from one archive at a time.".into()),
+            _ => archive = Some(loc.archive.clone()),
+        }
+        inners.push(loc.inner);
+    }
+    Ok((archive.ok_or_else(|| "Nothing to delete.".to_string())?, inners))
+}
+
+/// Delete items from inside an archive. This cannot be undone.
+#[tauri::command]
+pub async fn archive_delete(state: State<'_, Shared>, locs: Vec<String>) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let (archive, inners) = one_archive(&st, &locs)?;
+        fast_core::edit::delete(&archive, &inners, &std::sync::atomic::AtomicBool::new(false)).map_err(err)
+    })
+    .await
+}
+
+/// Rename an item inside an archive. Returns its new location.
+#[tauri::command]
+pub async fn archive_rename(state: State<'_, Shared>, loc: String, new_name: String) -> CmdResult<String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let l = archive_loc(&st, &loc)?;
+        let to = fast_core::edit::rename(&l.archive, &l.inner, &new_name, &std::sync::atomic::AtomicBool::new(false)).map_err(err)?;
+        Ok(fast_core::browse::loc_url(&l.archive, &to))
+    })
+    .await
+}
+
+/// Make a folder or an empty file inside an archive. Returns its location.
+#[tauri::command]
+pub async fn archive_create(state: State<'_, Shared>, dir: String, name: String, folder: bool) -> CmdResult<String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let l = archive_loc(&st, &dir)?;
+        let to = fast_core::edit::create(&l.archive, &l.inner, &name, folder, &std::sync::atomic::AtomicBool::new(false)).map_err(err)?;
+        Ok(fast_core::browse::loc_url(&l.archive, &to))
+    })
+    .await
+}
+
+/// Unpack items from archives into a staging folder, so that real files can be put on
+/// the system clipboard for other programs. Returns the staged paths, one per source.
+/// The previous staging is removed.
+#[tauri::command]
+pub async fn archive_stage(state: State<'_, Shared>, sources: Vec<String>) -> CmdResult<Vec<String>> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let root = st.paths.remote_tmp.clone();
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with("clip-") {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let stage = root.join(format!("clip-{stamp}"));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut out = Vec::new();
+        for (i, s) in sources.iter().enumerate() {
+            let l = archive_loc(&st, s)?;
+            let into = stage.join(i.to_string());
+            fast_core::browse::extract_items(&l.archive, &[l.inner.clone()], &into, &cancel, &mut |_, _, _| {}).map_err(err)?;
+            out.push(into.join(l.inner.rsplit('/').next().unwrap_or("")).to_string_lossy().into_owned());
+        }
+        Ok(out)
+    })
+    .await
 }

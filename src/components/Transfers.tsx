@@ -34,6 +34,7 @@ function titleOf(j: Job): string {
       const [ing, ed, to] = p.action === "upload" ? ["Uploading", "Uploaded", "Upload"] : ["Downloading", "Downloaded", "Download"];
       return p.phase === "done" ? `${ed} ${what}` : p.phase === "cancelled" ? `${to} cancelled` : p.phase === "failed" ? `Could not ${to.toLowerCase()} ${what}` : p.phase === "scanning" ? `Preparing to ${to.toLowerCase()} ${what}…` : `${ing} ${what}`;
     }
+    if (p.action === "pack") return p.phase === "done" ? `Put ${what} in the archive` : p.phase === "cancelled" ? "Changing the archive cancelled" : p.phase === "failed" ? `Could not put ${what} in the archive` : p.phase === "scanning" ? `Preparing ${what} for the archive…` : `Putting ${what} in the archive`;
     if (p.action === "unpack") return p.phase === "done" ? `Copied ${what} out of the archive` : p.phase === "cancelled" ? "Copying out cancelled" : p.phase === "failed" ? `Could not copy ${what} out of the archive` : p.phase === "scanning" ? `Preparing to copy ${what} out of the archive…` : `Copying ${what} out of the archive`;
     if (p.action === "open") return p.phase === "failed" ? `Could not open ${what}` : p.phase === "cancelled" ? "Opening cancelled" : p.phase === "done" ? `Opened ${what}` : `Fetching ${what} to open it`;
     if (p.action === "remote-delete") return p.phase === "done" ? `Deleted ${what} from the server` : p.phase === "cancelled" ? "Delete cancelled" : p.phase === "failed" ? `Could not delete ${what}` : `Deleting ${what} from the server`;

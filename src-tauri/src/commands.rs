@@ -2038,9 +2038,15 @@ fn smb_url(input: &str) -> CmdResult<String> {
 }
 
 /// Run a short helper program and report what it said if it failed.
-#[cfg(not(windows))]
 fn run_tool(program: &str, args: &[&str]) -> CmdResult<String> {
-    let out = std::process::Command::new(program).args(args).output().map_err(|e| format!("Could not run {program}: {e}"))?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let out = cmd.output().map_err(|e| format!("Could not run {program}: {e}"))?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
     if out.status.success() {
         Ok(text(&out.stdout))

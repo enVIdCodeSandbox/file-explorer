@@ -260,6 +260,11 @@ describe("dropping onto a folder", () => {
   it("Ctrl copies and Shift moves, wherever it goes", () => {
     expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\b", { ctrl: true, shift: false }, drives).op).toBe("copy");
     expect(resolveFolderDrop(["C:\\a\\x.txt"], "D:\\b", { ctrl: false, shift: true }, drives).op).toBe("move");
+    // Archives: moving inside one rearranges it, anything coming from outside copies in.
+    const zip = "archive:///h/a.zip!/";
+    expect(resolveFolderDrop([zip + "x"], zip + "dir", none, drives)).toMatchObject({ ok: true, op: "move" });
+    expect(resolveFolderDrop(["/h/file.txt"], zip + "dir", none, drives)).toMatchObject({ ok: true, op: "copy" });
+    expect(resolveFolderDrop([zip + "x"], "/h/out", none, drives)).toMatchObject({ ok: true, op: "copy" });
   });
   it("does nothing when dropped where it already is, unless copying", () => {
     expect(resolveFolderDrop(["C:\\a\\x.txt"], "C:\\a", none, drives).ok).toBe(false);

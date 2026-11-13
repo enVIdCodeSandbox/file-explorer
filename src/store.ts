@@ -631,14 +631,28 @@ export const useStore = create<State>((set, get) => ({
 
   setClipboard: (clipboard) => {
     set({ clipboard });
-    // Also on the system clipboard, so other programs can paste the same files.
-    if (clipboard?.paths.length) void api.clipboardSetFiles(clipboard.paths).catch(() => {});
+    stagedClip = [];
+    // Also on the system clipboard, so other programs can paste the same files. Items from
+    // inside an archive are unpacked first, so what other programs get are real files.
+    if (clipboard?.paths.length) {
+      const paths = clipboard.paths;
+      if (paths.every(isArchiveLoc)) {
+        void api
+          .archiveStage(paths)
+          .then((staged) => {
+            if (get().clipboard !== clipboard) return; // something newer was copied meanwhile
+            stagedClip = staged;
+            return api.clipboardSetFiles(staged);
+          })
+          .catch(() => {});
+      } else void api.clipboardSetFiles(paths).catch(() => {});
+    }
     if (clipboard && clipboard.paths.length) get().notify(clipboard.op === "move" ? "cut" : "copy", `${clipboard.op === "move" ? "Cut" : "Copied"} ${describeItems(clipboard.paths)}`, "Ready to paste");
   },
   pasteInto: async (dest) => {
     const ours = get().clipboard;
     const system = await api.clipboardGetFiles().catch(() => [] as string[]);
-    const same = ours && system.length === ours.paths.length && system.every((p) => ours.paths.includes(p));
+    const same = ours && system.length === ours.paths.length && system.every((p) => ours.paths.includes(p) || stagedClip.includes(p));
     if (ours && (same || system.length === 0)) {
       // Copied or cut here: cut means move.
       await get().startTransfer(ours.paths, dest, ours.op);
@@ -786,18 +800,27 @@ export const useStore = create<State>((set, get) => ({
     const conflict: Conflict = s.settings.transfer.conflict;
     const spec: TransferSpec = { sources, destDir, op, conflict };
     if (isArchiveLoc(destDir)) {
-      s.showToast(READ_ONLY);
+      // Into an archive: from disk, from inside it (a move rearranges it) or from another archive.
+      if (isRemote(destDir) || sources.some(isRemote)) {
+        s.showToast("Copy items from a server to a folder on this computer first.");
+        return;
+      }
+      try {
+        await api.archivePasteStart(sources, destDir, op === "move" ? "move" : "copy");
+      } catch (e) {
+        s.showToast(friendlyRemoteError(e));
+      }
       return;
     }
     if (sources.some(isArchiveLoc)) {
       // Out of an archive: unpacked into the folder, nothing already there is replaced.
+      // A move also takes the items out of the archive once they have arrived.
       if (isRemote(destDir) || !sources.every(isArchiveLoc)) {
         s.showToast("Copy items out of an archive into a folder on this computer first.");
         return;
       }
       try {
-        remoteJobs.set(await api.archiveCopyStart(sources, destDir), { op: "copy" });
-        if (op === "move") s.notify("info", "Copied, not moved", "Items inside an archive stay in it.");
+        await api.archiveCopyStart(sources, destDir, false, op === "move");
       } catch (e) {
         s.showToast(friendlyRemoteError(e));
       }
@@ -1092,8 +1115,25 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
   const s = useStore.getState();
   if (!paths.length || !s.settings) return false;
   if (paths.some((p) => insideArchive(p))) {
-    s.showToast(READ_ONLY);
-    return false;
+    const what = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;
+    const r = await ask({
+      title: `Delete ${what} from the archive?`,
+      message: "Items deleted from an archive do not go to the Trash. This cannot be undone.",
+      buttons: [
+        { id: "ok", label: "Delete", primary: true, danger: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (!r || r.button !== "ok") return false;
+    try {
+      await api.archiveDelete(paths);
+      s.notify("delete", `Deleted ${what} from the archive`);
+      refreshArchiveTabs();
+      return true;
+    } catch (e) {
+      s.showToast(String(e));
+      return false;
+    }
   }
   if (isRemote(paths[0])) return deleteOnServer(paths);
   const permanent = forcePermanent || !s.settings.general.deleteToTrash;
@@ -1129,8 +1169,15 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
 export async function renamePath(path: string, newName: string): Promise<string | null> {
   const { showToast, pushUndo } = useStore.getState();
   if (insideArchive(path)) {
-    showToast(READ_ONLY);
-    return null;
+    try {
+      const made = await api.archiveRename(path, newName);
+      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`);
+      refreshArchiveTabs();
+      return made;
+    } catch (e) {
+      showToast(String(e));
+      return null;
+    }
   }
   if (isRemote(path)) {
     try {
@@ -1166,8 +1213,15 @@ export async function renamePath(path: string, newName: string): Promise<string 
 export async function createPath(dir: string, name: string, folder: boolean): Promise<string | null> {
   const { showToast, pushUndo } = useStore.getState();
   if (insideArchive(dir)) {
-    showToast(READ_ONLY);
-    return null;
+    try {
+      const made = await api.archiveCreate(dir, name, folder);
+      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`);
+      refreshArchiveTabs();
+      return made;
+    } catch (e) {
+      showToast(String(e));
+      return null;
+    }
   }
   if (isRemote(dir)) {
     if (!folder) {
@@ -1284,7 +1338,7 @@ export async function applyRenames(dir: string, plans: RenamePlan[], remember = 
 /** Whether the name says it is an archive this app can open and unpack. */
 export const isArchiveName = isArchiveFile;
 
-const READ_ONLY = "Archives are read-only. Extract it first to change what is in it, or copy items out of it.";
+
 
 /** Archive jobs that are running, by job id, with whether the person asked to extract "here". */
 const archiveJobs = new Map<number, { here: boolean }>();
@@ -1325,9 +1379,18 @@ function archiveFinished(p: DeleteProgress) {
 }
 
 /** Server jobs that are running, by job id. */
+/** Where the items copied from inside an archive were unpacked for the system clipboard. */
+let stagedClip: string[] = [];
 const remoteJobs = new Map<number, { op: "copy" | "move" }>();
 
 /** Tell every open server folder to read its listing again. */
+/** Show the changed contents in every tab that is looking inside an archive. */
+export function refreshArchiveTabs(): void {
+  const s = useStore.getState();
+  const open = s.tabs.map((t) => t.location).filter(isArchiveLoc);
+  if (open.length) s.bumpDirs([...new Set(open)]);
+}
+
 export function refreshRemoteTabs(): void {
   const s = useStore.getState();
   const open = s.tabs.map((t) => t.location).filter(isRemote);
@@ -1369,6 +1432,7 @@ function remoteFinished(p: DeleteProgress) {
   const job = remoteJobs.get(p.id);
   remoteJobs.delete(p.id);
   refreshRemoteTabs();
+  refreshArchiveTabs();
   const name = p.selected === 1 && p.firstName ? `"${p.firstName}"` : `${p.selected} items`;
   const files = `${p.itemsDone} file${p.itemsDone === 1 ? "" : "s"}`;
   if (p.phase === "cancelled") return s.notify("info", "Stopped", "What was already copied was kept");
@@ -1380,6 +1444,7 @@ function remoteFinished(p: DeleteProgress) {
       return;
     }
     if (p.action === "unpack") return s.notify("error", `Could not copy ${name} out of the archive`, message);
+    if (p.action === "pack") return s.notify("error", `Could not change the archive with ${name}`, message);
     const verb = p.action === "remote-delete" ? "delete" : p.action === "open" ? "open" : p.action === "upload" ? "upload" : "download";
     return s.notify("error", `Could not ${verb} ${name}`, friendlyRemoteError(message));
   }
@@ -1389,6 +1454,7 @@ function remoteFinished(p: DeleteProgress) {
   }
   if (p.action === "remote-delete") return s.notify("delete", `Deleted ${name} from the server`, p.errorCount ? `${p.errorCount} could not be deleted` : `${p.itemsDone} item${p.itemsDone === 1 ? "" : "s"}`);
   if (p.action === "unpack") return s.notify("copy", `Copied out of the archive: ${name}`, p.errors[0]?.message ?? files);
+  if (p.action === "pack") return s.notify("copy", `Added to the archive: ${name}`, p.errors[0]?.message ?? files);
   const moved = job?.op === "move";
   const verb = p.action === "upload" ? (moved ? "Moved to the server" : "Uploaded") : moved ? "Moved from the server" : "Downloaded";
   s.notify(moved ? "move" : "copy", `${verb}: ${name}`, p.errorCount ? `${p.errorCount} could not be copied` : files);

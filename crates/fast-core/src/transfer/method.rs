@@ -193,6 +193,7 @@ pub enum NetKind {
 }
 
 /// File system types as a mount table names them.
+#[allow(dead_code)] // used on some platforms only
 fn kind_of_fs(fs: &str) -> Option<NetKind> {
     match fs.to_ascii_lowercase().as_str() {
         "nfs" | "nfs4" => Some(NetKind::Nfs),

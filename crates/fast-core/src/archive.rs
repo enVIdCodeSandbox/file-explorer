@@ -44,7 +44,7 @@ pub fn stem_of(path: &Path) -> String {
     name
 }
 
-fn cancelled() -> CoreError {
+pub(crate) fn cancelled() -> CoreError {
     CoreError::Invalid("Cancelled.".into())
 }
 
@@ -91,7 +91,7 @@ fn zip_time(t: std::time::SystemTime) -> Option<zip::DateTime> {
 /// archives the units are bytes of the archive read so far.
 pub type Report<'a> = &'a mut dyn FnMut(u64, u64, &str);
 
-fn count_files(path: &Path) -> u64 {
+pub(crate) fn count_files(path: &Path) -> u64 {
     match fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => fs::read_dir(path).map(|rd| rd.filter_map(|e| e.ok()).map(|e| count_files(&e.path())).sum()).unwrap_or(0),
         Ok(m) if m.is_file() => 1,
@@ -99,7 +99,7 @@ fn count_files(path: &Path) -> u64 {
     }
 }
 
-fn add_tree(
+pub(crate) fn add_tree(
     zip: &mut zip::ZipWriter<BufWriter<File>>,
     path: &Path,
     name_in_zip: &str,
@@ -154,7 +154,7 @@ fn add_tree(
     Ok(())
 }
 
-fn zip_err(path: &Path) -> impl Fn(zip::result::ZipError) -> CoreError + '_ {
+pub(crate) fn zip_err(path: &Path) -> impl Fn(zip::result::ZipError) -> CoreError + '_ {
     move |e| match e {
         zip::result::ZipError::Io(io) => CoreError::io(path, io),
         other => CoreError::Invalid(format!("zip: {other}")),

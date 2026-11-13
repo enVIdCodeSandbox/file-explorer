@@ -190,7 +190,7 @@ pub fn index(archive: &Path) -> Result<Arc<Vec<Item>>> {
 }
 
 /// `a\b/` -> `a/b`; names with nothing left, or that climb out, are dropped.
-fn clean(name: &str) -> Option<String> {
+pub(crate) fn clean(name: &str) -> Option<String> {
     let n = name.replace('\\', "/");
     let mut parts = Vec::new();
     for p in n.split('/') {
@@ -207,7 +207,7 @@ fn clean(name: &str) -> Option<String> {
     }
 }
 
-fn invalid(archive: &Path, what: impl std::fmt::Display) -> CoreError {
+pub(crate) fn invalid(archive: &Path, what: impl std::fmt::Display) -> CoreError {
     CoreError::Invalid(format!("{}: {what}", archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
 }
 
@@ -219,7 +219,7 @@ fn zip_error(archive: &Path, e: zip::result::ZipError) -> CoreError {
     }
 }
 
-fn open(archive: &Path) -> Result<File> {
+pub(crate) fn open(archive: &Path) -> Result<File> {
     File::open(archive).map_err(|e| CoreError::io(archive, e))
 }
 
@@ -256,7 +256,7 @@ fn unxz(archive: &Path) -> Result<TempFile> {
 }
 
 /// The decompressed bytes of a gz, bz2 or xz file.
-fn decoded(archive: &Path, kind: Kind) -> Result<Box<dyn Read>> {
+pub(crate) fn decoded(archive: &Path, kind: Kind) -> Result<Box<dyn Read>> {
     Ok(match kind {
         Kind::TarGz | Kind::Gz => Box::new(flate2::read::MultiGzDecoder::new(BufReader::new(open(archive)?))),
         Kind::TarBz2 | Kind::Bz2 => Box::new(bzip2_rs::DecoderReader::new(BufReader::new(open(archive)?))),
@@ -598,7 +598,7 @@ pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &At
 // ---- 7-Zip and bsdtar -------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tool {
+pub(crate) enum Tool {
     SevenZip,
     Bsdtar,
 }
@@ -608,7 +608,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
 }
 
-fn find_tool() -> Option<(Tool, PathBuf)> {
+pub(crate) fn find_tool() -> Option<(Tool, PathBuf)> {
     for name in ["7zz", "7z", "7za", "7zr"] {
         if let Some(p) = on_path(name) {
             return Some((Tool::SevenZip, p));
@@ -635,12 +635,12 @@ fn find_tool() -> Option<(Tool, PathBuf)> {
     on_path("bsdtar").map(|p| (Tool::Bsdtar, p))
 }
 
-fn no_tool(archive: &Path) -> CoreError {
+pub(crate) fn no_tool(archive: &Path) -> CoreError {
     let what = archive.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_else(|| "this kind of".into());
     CoreError::Invalid(format!("Opening {what} files needs 7-Zip. Install it (on Linux the package is p7zip-full or 7zip, on macOS \"brew install sevenzip\") and open this again."))
 }
 
-fn command(path: &Path) -> std::process::Command {
+pub(crate) fn command(path: &Path) -> std::process::Command {
     let mut c = std::process::Command::new(path);
     #[cfg(windows)]
     {

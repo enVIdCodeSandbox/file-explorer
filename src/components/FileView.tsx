@@ -444,9 +444,7 @@ export function FileView({ path }: { path: string }) {
     const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "properties", "newFile", "custom", "lock"]);
     const inArchive = !!insideArchive(path);
     const remote = isRemote(path) || inArchive;
-    // An archive can only be read: nothing in it can be changed.
-    const readOnly = new Set(["cut", "rename", "delete", "paste", "newFolder"]);
-    return items.filter((i): i is MenuItem => !!i && !(inArchive && readOnly.has(i.id)) && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")) && !(remote && localOnly.has(i.id.replace(/-.*/, ""))));
+    return items.filter((i): i is MenuItem => !!i && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")) && !(remote && localOnly.has(i.id.replace(/-.*/, "")) && !(inArchive && i.id === "newFile")));
   };
 
   /**

@@ -270,7 +270,7 @@ export interface DeleteProgress {
   /** Name of the first selected item. */
   firstName: string;
   /** "delete", or "compress" / "extract" for an archive job shown on the same card. */
-  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "remote-delete";
+  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete";
   /** For a finished archive or server job: what was made (for "open": the downloaded file). */
   result: string;
   /** Server jobs: bytes moved so far and expected in total. */
@@ -552,7 +552,14 @@ export const api = {
   remoteMkdir: (parent: string, name: string) => invoke<string>("remote_mkdir", { parent, name }),
   remoteRename: (from: string, newName: string) => invoke<string>("remote_rename", { from, newName }),
   /** Copy items out of an archive into a folder, or (open) fetch one file to a temporary place and open it. */
-  archiveCopyStart: (sources: string[], dest: string, open = false) => invoke<number>("archive_copy_start", { sources, dest, open }),
+  archiveCopyStart: (sources: string[], dest: string, open = false, remove = false) => invoke<number>("archive_copy_start", { sources, dest, open, remove }),
+  /** Put things into an archive or move them inside it. `op` "move" takes the originals away afterwards. */
+  archivePasteStart: (sources: string[], dest: string, op: "copy" | "move") => invoke<number>("archive_paste_start", { sources, dest, op }),
+  archiveDelete: (locs: string[]) => invoke<void>("archive_delete", { locs }),
+  archiveRename: (loc: string, newName: string) => invoke<string>("archive_rename", { loc, newName }),
+  archiveCreate: (dir: string, name: string, folder: boolean) => invoke<string>("archive_create", { dir, name, folder }),
+  /** Unpack items to a staging folder so real files can go on the system clipboard. */
+  archiveStage: (sources: string[]) => invoke<string[]>("archive_stage", { sources }),
   remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => invoke<number>("remote_copy_start", { sources, dest, mv, open }),
   remoteRemoveStart: (paths: string[]) => invoke<number>("remote_remove_start", { paths }),
   serversList: () => invoke<SavedServer[]>("servers_list"),

@@ -53,6 +53,7 @@ interface, only the top two layers are replaced.
 | `watch.rs` | Live folder watching: the `notify` crate on the open folders only (not recursive), events merged until a folder is quiet for 200 ms (at most every 2 s), at most 48 folders. The shell invalidates the listing cache and emits `fs-changed` |
 | `archive.rs` | Zip create, and zip/tar/tar.gz extract, in pure Rust. `safe_relative` refuses names that leave the target folder; existing files are never replaced; links are skipped; cancel flag removes a half-written zip |
 | `browse.rs` | Archives opened like folders: `archive://<file>!/<inside>` locations, a cached index of what is inside (zip, tar, tar.gz/bz2/xz, 7z, single gz/bz2/xz in Rust; rar, cab, iso and more through 7-Zip or bsdtar when installed), folder listings built from it, and unpacking of chosen items. Read-only; same name safety rules as `archive.rs` |
+| `edit.rs` | Changing archives: add, move, rename, delete, new folder. Zip, tar and tar.gz are rewritten to a temporary file beside the archive and swapped in when complete (cancel or failure leaves the original); 7z goes through 7-Zip; other kinds say they cannot be changed. Names that exist are never overwritten |
 | `settings.rs`, `session.rs` | Persisted settings; tabs, pins, recents |
 
 ### The index
