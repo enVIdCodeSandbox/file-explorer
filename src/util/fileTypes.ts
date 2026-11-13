@@ -1,5 +1,5 @@
 // What each well-known extension looks like. A type has a glyph (the drawing
-// on the page), a colour, and a short label printed on the badge at larger
+// on the page), a color, and a short label printed on the badge at larger
 // sizes. Unknown extensions fall back to their category from format.ts.
 
 export type Glyph =

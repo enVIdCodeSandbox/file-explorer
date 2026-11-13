@@ -517,7 +517,7 @@ pub fn apply_smart(disk: &mut PhysicalDisk, s: Smart) {
 }
 
 /// The program and arguments that read every SMART field of a drive, for the
-/// administrator retry. `None` when the device name is not one we recognise,
+/// administrator retry. `None` when the device name is not one we recognize,
 /// so nothing odd ever reaches a shell.
 pub fn smartctl_args(device: &str) -> Option<Vec<String>> {
     let ok = |d: &str| !d.is_empty() && d.len() < 64 && d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '\\' | ':'));

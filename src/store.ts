@@ -147,7 +147,7 @@ interface State {
   transfersOpen: boolean;
   /** Which panels are open as their own windows right now. */
   detached: { settings: boolean; transfers: boolean };
-  /** Where the in-window Settings panel sits (an offset from the centre) so it comes back where it was left. */
+  /** Where the in-window Settings panel sits (an offset from the center) so it comes back where it was left. */
   settingsPos: { x: number; y: number };
   /** True in a window made by dragging a tab out of the main one. */
   isSecondary: boolean;

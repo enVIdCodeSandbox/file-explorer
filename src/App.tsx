@@ -1,3 +1,4 @@
+import { useT } from "./i18n";
 import { useEffect, useState } from "react";
 import { api, on } from "./api";
 import { adv } from "./settings/advanced";
@@ -25,6 +26,7 @@ import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 
 export default function App() {
+  useT(); // keeps the page language (and every label) in step with the language setting
   const ready = useStore((s) => s.ready);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
   const activeTab = useStore((s) => s.activeTab);

@@ -1,6 +1,7 @@
 // Settings: one searchable screen, divided into sections, generated from
 // src/settings/schema.ts. Changes apply and save immediately.
 
+import { useT } from "../i18n";
 import { About } from "./About";
 import { Docs } from "./Docs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -15,6 +16,7 @@ import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from 
 import { CustomActionsPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
+  const t = useT();
   const settings = useStore((s) => s.settings)!;
   const { updateSettings } = useStore.getState();
   const value = getSetting(settings, def.key);
@@ -47,10 +49,10 @@ function ControlFor({ def }: { def: SettingDef }) {
       );
     case "select":
       return (
-        <select aria-label={def.label} value={String(value)} onChange={(e) => set(e.target.value)}>
+        <select aria-label={t(def.label)} value={String(value)} onChange={(e) => set(e.target.value)}>
           {c.options.map((o) => (
             <option key={o.value} value={o.value}>
-              {o.label}
+              {t(o.label)}
             </option>
           ))}
         </select>
@@ -149,6 +151,7 @@ function clampOffset(x: number, y: number, w: number, h: number) {
 }
 
 export function SettingsView({ detached = false }: { detached?: boolean }) {
+  const t = useT();
   const os = useStore((s) => s.info?.os);
   const [query, setQuery] = useState("");
   const [section, setSection] = useState<string>(SECTIONS[0]);
@@ -253,14 +256,14 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
           {q && bySection.length === 0 && <p className="muted">No settings match "{query}".</p>}
           {bySection.map(([name, defs]) => (
             <section key={name}>
-              <h3>{name}</h3>
+              <h3>{t(name)}</h3>
               {defs.map((d) => {
                 const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "perfPresets", "uiPresets", "profiles", "resources", "locks"].includes(d.control.type);
                 return (
                   <div key={d.key} className="setting" data-wide={wide || undefined} data-setting={d.key}>
                     <div className="setting-text">
-                      <span className="setting-label">{d.label}</span>
-                      {d.description && <span className="muted">{d.description}</span>}
+                      <span className="setting-label">{t(d.label)}</span>
+                      {d.description && <span className="muted">{t(d.description)}</span>}
                     </div>
                     <ControlFor def={d} />
                   </div>

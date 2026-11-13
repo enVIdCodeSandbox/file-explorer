@@ -3,7 +3,7 @@ import { archiveDisplay, archiveFromTyped, archiveUrl, baseName, crumbs, insideA
 
 describe("archive locations", () => {
   const top = archiveUrl("/home/me/photos.zip");
-  it("recognises archive names", () => {
+  it("recognizes archive names", () => {
     for (const n of ["a.zip", "a.7z", "a.rar", "a.tar.gz", "A.TGZ", "a.tar.bz2", "a.txz", "x.iso"]) expect(isArchiveFile(n)).toBe(true);
     for (const n of ["a.txt", ".zip", "zip", "a.zipx.txt", "a.docx"]) expect(isArchiveFile(n)).toBe(false);
   });

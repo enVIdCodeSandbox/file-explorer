@@ -153,7 +153,7 @@ Locations are strings: a filesystem path, or `fast://home`, `fast://thispc`,
   wrapper in `api.ts`.
 * **A right-click entry:** add it in `FileView.tsx` (`buildMenu`) and to
   `MENU_CATALOG` in `ContextMenu.tsx` so it can be hidden in settings.
-* **OS-specific behaviour:** put it in `platform.rs` behind `#[cfg(...)]`, with
+* **OS-specific behavior:** put it in `platform.rs` behind `#[cfg(...)]`, with
   a version for every desktop OS and a fallback for mobile.
 
 ## Detached windows and reattaching
@@ -210,7 +210,7 @@ Tabs open at `tabs.width` and shrink together down to `tabs.minWidth` before the
 
 ## Disk usage map
 
-`layoutNested` draws folders as frames holding their own contents (WinDirStat-style grouping); files take their type's colour, the same colour as in the type list. Frames precede their contents in the tile list, so the last tile under a point is the deepest.
+`layoutNested` draws folders as frames holding their own contents (WinDirStat-style grouping); files take their type's color, the same color as in the type list. Frames precede their contents in the tile list, so the last tile under a point is the deepest.
 
 ## Mapped drives when run as administrator
 

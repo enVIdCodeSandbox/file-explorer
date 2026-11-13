@@ -1,5 +1,5 @@
 /*
- * Design tokens. Every colour, radius, size and font in the app comes from a
+ * Design tokens. Every color, radius, size and font in the app comes from a
  * variable defined here, so a theme only needs to override variables.
  * Custom CSS from Settings > Themes is loaded after this file.
  * See docs/THEMING.md.

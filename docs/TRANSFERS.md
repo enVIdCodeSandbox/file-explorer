@@ -35,7 +35,7 @@ Jobs with `ask` always run on the built-in engine (tools cannot ask). The elevat
 | NFS-tuned | `rsync` | the route touches an NFS mount (nfs/nfs4) | `--whole-file`: rsync's delta algorithm would otherwise read the far copy back over the network before sending |
 | rclone | `rclone` | installed, any route | `rclone copy` (folders) / `copyto` (files), `--transfers n --checkers n`, JSON statistics on stderr once a second |
 
-**SMB and NFS are protocols the operating system speaks**, not programs. Nothing in this app implements them. What the app does is recognise a route that crosses an SMB or NFS mount (`method::NetMap` reads `/proc/self/mounts` on Linux, `mount` on macOS, `GetDriveTypeW` and the `\\server` prefix on Windows) and offer the copy settings that suit it as extra candidates.
+**SMB and NFS are protocols the operating system speaks**, not programs. Nothing in this app implements them. What the app does is recognize a route that crosses an SMB or NFS mount (`method::NetMap` reads `/proc/self/mounts` on Linux, `mount` on macOS, `GetDriveTypeW` and the `\\server` prefix on Windows) and offer the copy settings that suit it as extra candidates.
 
 A tool is only eligible when it can reproduce the built-in engine exactly: copy only, conflict policy not "keep both", no rename-on-arrival, names unchanged (`method::can_run`). Otherwise the built-in engine runs the job, whatever was asked for.
 

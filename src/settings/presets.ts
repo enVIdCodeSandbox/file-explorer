@@ -3,7 +3,7 @@
 //  - Performance presets: twelve steps from "Barebones" to "God-like". Each one
 //    is a set of ordinary settings (threads, cache size, indexing, thumbnails…),
 //    so after choosing one every value can still be changed by hand.
-//  - Interface presets: Windows, macOS and Linux looks (layout, colours, icons,
+//  - Interface presets: Windows, macOS and Linux looks (layout, colors, icons,
 //    corners, window buttons and keyboard shortcuts).
 //  - Profiles: a saved copy of every setting, unlimited in number. Choosing one
 //    applies it; changes made while a profile of your own is active are saved
@@ -220,7 +220,7 @@ export interface UiPreset {
   name: string;
   description: string;
   recommendedFor: string;
-  /** Colours: the dark and light themes to use. */
+  /** Colors: the dark and light themes to use. */
   themes: { dark: string; light: string };
   patch: Patch;
 }
@@ -269,7 +269,7 @@ export const UI_PRESETS: UiPreset[] = [
   {
     id: "windows",
     name: "Windows",
-    description: "Laid out like File Explorer in Windows 11: tabs, then the address bar, then the command bar; navigation pane on the left. Windows 11 colours, rounded corners, Fluent-style icons, window buttons on the right and Windows shortcuts (F2 rename, Alt+Up, Alt+Enter).",
+    description: "Laid out like File Explorer in Windows 11: tabs, then the address bar, then the command bar; navigation pane on the left. Windows 11 colors, rounded corners, Fluent-style icons, window buttons on the right and Windows shortcuts (F2 rename, Alt+Up, Alt+Enter).",
     recommendedFor: "Anyone used to Windows, on any system.",
     themes: { dark: "win11-dark", light: "win11-light" },
     patch: {
@@ -290,7 +290,7 @@ export const UI_PRESETS: UiPreset[] = [
   {
     id: "macos",
     name: "macOS",
-    description: "Laid out like Finder: a toolbar with back and forward and search at the top, then tabs, a sidebar on the left. Finder-like colours, thin icons, blue folders, window buttons on the left (round, like traffic lights) and Mac shortcuts (Return renames, Cmd+Down opens, Cmd+[ and ] for back and forward).",
+    description: "Laid out like Finder: a toolbar with back and forward and search at the top, then tabs, a sidebar on the left. Finder-like colors, thin icons, blue folders, window buttons on the left (round, like traffic lights) and Mac shortcuts (Return renames, Cmd+Down opens, Cmd+[ and ] for back and forward).",
     recommendedFor: "Mac users, or anyone who prefers Finder's layout.",
     themes: { dark: "mac-dark", light: "mac-light" },
     patch: {
@@ -317,7 +317,7 @@ export const UI_PRESETS: UiPreset[] = [
   {
     id: "linux",
     name: "Linux",
-    description: "Laid out like a GNOME or KDE file manager: one header with navigation and the path, tabs underneath, a side panel on the left and no command bar (everything is in the right-click menu). Adwaita-style colours, rounded corners, outline icons and the usual Linux shortcuts (Ctrl+L, Ctrl+H, F9).",
+    description: "Laid out like a GNOME or KDE file manager: one header with navigation and the path, tabs underneath, a side panel on the left and no command bar (everything is in the right-click menu). Adwaita-style colors, rounded corners, outline icons and the usual Linux shortcuts (Ctrl+L, Ctrl+H, F9).",
     recommendedFor: "Linux users, or anyone who prefers a simpler window.",
     themes: { dark: "adwaita-dark", light: "adwaita-light" },
     patch: {

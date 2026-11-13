@@ -11,7 +11,7 @@
 //! through `reg`. macOS lists applications and opens with `open -a`; it has no
 //! way to ask whether a default exists, so `check` is always `Ready` there (the
 //! system shows its own chooser). The Windows and macOS parts are written
-//! against those systems' documented behaviour and have not been run.
+//! against those systems' documented behavior and have not been run.
 
 use crate::error::{CoreError, Result};
 use serde::Serialize;

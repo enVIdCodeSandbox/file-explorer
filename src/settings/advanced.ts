@@ -32,6 +32,7 @@ export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and li
 
 export const ADVANCED: AdvDef[] = [
   // ---- Interface ----
+  sel("auto", "ui.language", "Interface", "Language", [["auto", "Automatic (system language)"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["pt", "Português"], ["it", "Italiano"], ["ru", "Русский"], ["zh", "简体中文"], ["ja", "日本語"], ["ko", "한국어"]], "Used by the setup wizard and the labels that are translated so far; anything else stays in English."),
   yn(true, "ui.animations", "Interface", "Animations", "Turn off for instant, motion-free changes."),
   num(100, "ui.scale", "Interface", "Interface zoom", 60, 200, "%", "Makes everything larger or smaller.", 5),
   num(0, "ui.rowHeight", "Interface", "Row height", 0, 60, "px", "0 follows the density setting."),
@@ -41,7 +42,7 @@ export const ADVANCED: AdvDef[] = [
   sel("thin", "ui.scrollbars", "Interface", "Scroll bars", [["thin", "Thin"], ["normal", "Standard"], ["hidden", "Hidden until needed"]]),
   num(24, "ui.selectionOpacity", "Interface", "Selection highlight strength", 5, 80, "%"),
   yn(true, "ui.statusBar", "Interface", "Show the status bar under the file list"),
-  sel("right", "ui.windowControlsSide", "Interface", "Window buttons (minimise, maximise, close)", [["right", "On the right (Windows, GNOME)"], ["left", "On the left (macOS style)"]], "On macOS the system's own buttons are always on the left."),
+  sel("right", "ui.windowControlsSide", "Interface", "Window buttons (minimize, maximize, close)", [["right", "On the right (Windows, GNOME)"], ["left", "On the left (macOS style)"]], "On macOS the system's own buttons are always on the left."),
   yn(true, "ui.dimHidden", "Interface", "Fade hidden files and folders"),
 
   // ---- Privacy and caches ----

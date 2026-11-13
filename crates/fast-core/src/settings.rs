@@ -136,7 +136,7 @@ pub struct Appearance {
     /// Layout of the window's panels: where each is docked, floating,
     /// popped out, collapsed or hidden. Opaque to the backend.
     pub layout: serde_json::Value,
-    /// Look beyond the colour theme: fonts, menus, icons, background, corners.
+    /// Look beyond the color theme: fonts, menus, icons, background, corners.
     pub style: Style,
 }
 

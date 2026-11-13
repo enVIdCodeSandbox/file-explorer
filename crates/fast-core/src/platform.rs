@@ -274,7 +274,7 @@ pub fn run_elevated(program: &Path, args: &[String]) -> Result<Elevation> {
     let params = wide(args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ").as_ref());
 
     // SAFETY: every pointer refers to a NUL-terminated buffer that outlives
-    // the call, and `info` is zero-initialised as the API requires.
+    // the call, and `info` is zero-initialized as the API requires.
     unsafe {
         let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;

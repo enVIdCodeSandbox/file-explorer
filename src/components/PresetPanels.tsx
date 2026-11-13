@@ -25,7 +25,7 @@ const systemDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").mat
 // Performance presets
 // ---------------------------------------------------------------------------
 
-export function PerfPresetsPanel({ compact = false }: { compact?: boolean }) {
+export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?: boolean; roomy?: boolean }) {
   const settings = useStore((s) => s.settings)!;
   const info = useStore((s) => s.info);
   const { updateSettings, showToast } = useStore.getState();
@@ -48,7 +48,7 @@ export function PerfPresetsPanel({ compact = false }: { compact?: boolean }) {
           This computer: {hw.cpus} threads, {(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB of memory{hw.batteryPercent != null ? ", with a battery" : ""}. Recommended: <strong>{recommended.name}</strong>.
         </p>
       )}
-      <div className="preset-grid" role="radiogroup" aria-label="Performance preset">
+      <div className="preset-grid preset-grid-perf" role="radiogroup" aria-label="Performance preset">
         {PERF_PRESETS.map((p, i) => {
           const isCurrent = current?.id === p.id;
           const isRecommended = recommended?.id === p.id;
@@ -60,11 +60,11 @@ export function PerfPresetsPanel({ compact = false }: { compact?: boolean }) {
                 {isRecommended && <span className="pill">Recommended for this computer</span>}
                 {isCurrent && <span className="pill" data-kind="current">In use</span>}
               </button>
-              {!compact && <span className="muted">{p.description}</span>}
+              {(!compact || roomy) && <span className="muted">{p.description}</span>}
               <span className="preset-for">
                 <b>Suits:</b> {p.recommendedFor}
               </span>
-              {!compact && (
+              {!compact && !roomy && (
                 <button className="link-button" aria-expanded={open === p.id} onClick={(e) => { e.stopPropagation(); setOpen(open === p.id ? null : p.id); }}>
                   {open === p.id ? "Hide what it sets" : "What it sets"}
                 </button>
@@ -82,7 +82,7 @@ export function PerfPresetsPanel({ compact = false }: { compact?: boolean }) {
           );
         })}
       </div>
-      {!current && <p className="muted">Your settings do not match one preset exactly (you changed something by hand). Choosing a preset replaces those values.</p>}
+      {!current && !compact && <p className="muted">Your settings do not match one preset exactly (you changed something by hand). Choosing a preset replaces those values.</p>}
     </div>
   );
 }
@@ -91,7 +91,7 @@ export function PerfPresetsPanel({ compact = false }: { compact?: boolean }) {
 // Interface presets
 // ---------------------------------------------------------------------------
 
-export function UiPresetsPanel({ compact = false }: { compact?: boolean }) {
+export function UiPresetsPanel({ compact = false, roomy = false }: { compact?: boolean; roomy?: boolean }) {
   const settings = useStore((s) => s.settings)!;
   const os = useStore((s) => s.info?.os);
   const { updateSettings, showToast } = useStore.getState();
@@ -104,7 +104,7 @@ export function UiPresetsPanel({ compact = false }: { compact?: boolean }) {
           return (
             <div
               key={p.id}
-              className="preset-card"
+              className="preset-card preset-card-ui"
               data-clickable
               data-on={same || undefined}
               data-recommended={p.id === mine || undefined}
@@ -119,7 +119,7 @@ export function UiPresetsPanel({ compact = false }: { compact?: boolean }) {
                 {p.id === mine && <span className="pill">Matches this computer</span>}
                 {same && <span className="pill" data-kind="current">In use</span>}
               </button>
-              {!compact && <span className="muted">{p.description}</span>}
+              {(!compact || roomy) && <span className="muted">{p.description}</span>}
               <span className="preset-for">
                 <b>Suits:</b> {p.recommendedFor}
               </span>
@@ -128,7 +128,7 @@ export function UiPresetsPanel({ compact = false }: { compact?: boolean }) {
         })}
       </div>
       <p className="muted">
-        A style sets the window layout, colours, icons, corner shapes, where the window buttons sit, and the keyboard shortcuts. Anything it changes can still be changed afterwards in Layout, Themes and Advanced. To keep your own version, save it as a profile.
+        A style sets the window layout, colors, icons, corner shapes, where the window buttons sit, and the keyboard shortcuts. Anything it changes can still be changed afterwards in Layout, Themes and Advanced. To keep your own version, save it as a profile.
       </p>
     </div>
   );

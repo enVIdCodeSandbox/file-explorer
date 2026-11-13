@@ -50,7 +50,7 @@ nothing has been run on those systems yet, so expect platform bugs there first.
 | Area | State | Notes |
 |---|---|---|
 | Folder browsing | Working | Virtualized details and thumbnail views, sorting, multi-select, keyboard, type-ahead, inline rename |
-| Tabs | Working | Duplicate, groups with names and colours, collapse, restored at launch; drag a tab to reorder, drag a group chip to move the whole group |
+| Tabs | Working | Duplicate, groups with names and colors, collapse, restored at launch; drag a tab to reorder, drag a group chip to move the whole group |
 | Right-click menu | Working | Flat Windows 10-style list; every entry can be hidden in settings. No "Open with" or shell extensions yet |
 | File index and search | Working | Parallel scan, saved to disk, loaded at launch; searches the index first, then scans the folder. Filters: `ext:` `type:` `size:` and wildcards |
 | Listing cache and preloading | Working | Cached folders show instantly and refresh in the background; folders are preloaded on hover and from learned habits |

@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn recognises_server_addresses_only() {
+    fn recognizes_server_addresses_only() {
         assert!(is_remote("sftp://h/x"));
         assert!(is_remote("FTP://h"));
         assert!(!is_remote("/home/x"));

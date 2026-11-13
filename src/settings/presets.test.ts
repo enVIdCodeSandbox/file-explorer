@@ -68,7 +68,7 @@ describe("performance presets", () => {
     expect(recommendPerf(128 * 1024, 4, false).id).not.toBe("godlike"); // cores limit it too
     expect(["performance", "decent", "satisfactory"]).toContain(recommendPerf(256 * 1024, 64, true).id);
   });
-  it("is recognised once applied", () => {
+  it("is recognized once applied", () => {
     const s = blank();
     expect(currentPerfPreset(s)).toBeUndefined();
     applyPatch(s, PERF_PRESETS[4].patch);
@@ -99,7 +99,7 @@ describe("interface presets", () => {
     expect(s.appearance.style.icons).toBe("fluent");
     expect(differences(s, UI_PRESETS[0].patch)).toEqual([]);
   });
-  it("recognises an applied preset even when saved keys come back in another order", () => {
+  it("recognizes an applied preset even when saved keys come back in another order", () => {
     const s = blank();
     applyUiPreset(s, UI_PRESETS[2], true);
     // The backend returns object keys alphabetically.

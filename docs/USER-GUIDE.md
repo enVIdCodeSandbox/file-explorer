@@ -2,7 +2,7 @@
 
 ## Getting around
 
-**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colours; drag a group's coloured label to move the whole group, and click it to collapse. Tabs are reopened at launch (Settings → General).
+**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colors; drag a group's colored label to move the whole group, and click it to collapse. Tabs are reopened at launch (Settings → General).
 
 **Address bar.** Click the path to type one. The parts of the path are clickable and are also drop targets: drop files on a part to move or copy them there.
 
@@ -122,7 +122,7 @@ Type in the search box. Results come from an index that is built in the backgrou
 
 ## Disk usage
 
-Right-click a folder or drive → Analyze disk usage. Folders are drawn as frames containing their contents; colours are file types. Click to zoom, hover for sizes. The list beside it shows the largest files, which can be deleted from there.
+Right-click a folder or drive → Analyze disk usage. Folders are drawn as frames containing their contents; colors are file types. Click to zoom, hover for sizes. The list beside it shows the largest files, which can be deleted from there.
 
 ## Servers (FTP, SFTP, WebDAV)
 
@@ -146,11 +146,15 @@ The app does not need it. When a transfer is refused for permissions it offers *
 
 ## First run
 
-The first time the app starts it shows one setup page: the interface style (Windows, macOS or Linux), light or dark, a performance preset, what the app may remember, and whether server addresses are hidden. The recommended answer is marked on each, based on this computer. Choose **Skip** to keep the defaults. Everything on that page is also in Settings.
+The first time the app starts it shows one setup page: the interface style (Windows, macOS or Linux), light or dark, a performance preset, what the app may remember, and whether server addresses are hidden. The recommended answer is marked on each, based on this computer. Choose **Skip** to keep the defaults. Everything on that page is also in Settings. The interface style starts on the one for the system you are using, marked Recommended. Performance is a slider from light to heavy with the recommended level marked above it. The Privacy view says plainly that all information is stored locally and nothing is sent to a cloud.
+
+## Language
+
+The app follows the system language when it is one of English, Spanish, French, German, Portuguese, Italian, Russian, Simplified Chinese, Japanese or Korean, and uses English otherwise. Change it on the first welcome view or in Settings > Interface > Language. The setup wizard, the language setting and the Settings group names are translated; other labels still appear in English and will follow as they are translated. The translations were written without a native-speaker review, so wording fixes are welcome. To add a language, add a file in `src/i18n/locales`, list it in `src/i18n/keys.ts` order, and add one line to `LANGUAGES`.
 
 ## Presets and profiles
 
-* **Interface style** (Settings > Presets and profiles) sets the window layout, colours, icons, corner shapes, the side of the window buttons and the keyboard shortcuts to match Windows 11 File Explorer, macOS Finder or a GNOME/KDE file manager. Colours and icons are open-source (Fluent System Icons, MIT); no Windows or Apple files are used.
+* **Interface style** (Settings > Presets and profiles) sets the window layout, colors, icons, corner shapes, the side of the window buttons and the keyboard shortcuts to match Windows 11 File Explorer, macOS Finder or a GNOME/KDE file manager. Colors and icons are open-source (Fluent System Icons, MIT); no Windows or Apple files are used.
 * **Performance presets**, from Barebones to God-like, set threads, cache size, indexing, thumbnails, folder sizes and what is saved. Each one lists the kind of device it suits, and the one recommended for this computer is marked.
 * **Profiles** are saved copies of all your settings, as many as you like. While one is in use, your changes are saved into it automatically.
 

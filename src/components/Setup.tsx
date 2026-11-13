@@ -4,7 +4,9 @@
 // is marked on every view. Choices show their effect straight away (so the look
 // can be judged) and "Skip" puts the settings back exactly as they were.
 
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Settings } from "../api";
 import { adv } from "../settings/advanced";
 import {
@@ -17,31 +19,58 @@ import {
   platformFor,
   recommendPerf,
 } from "../settings/presets";
+import { LANGUAGES, useT } from "../i18n";
 import { useStore } from "../store";
 import { THEMES } from "../util/themes";
-import { PerfPresetsPanel, UiPresetsPanel } from "./PresetPanels";
+import { CaptionStrip } from "./Chrome";
 
 const systemDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
 
-function Choice({ title, hint, recommended, on, onToggle }: { title: string; hint: string; recommended: boolean; on: boolean; onToggle: (v: boolean) => void }) {
+const svg = (d: ReactNode) => (
+  <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {d}
+  </svg>
+);
+const ICONS = {
+  folder: svg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
+  image: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m21 16-5-5-8 8" /></>),
+  chip: svg(<><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></>),
+  route: svg(<><circle cx="6" cy="18" r="2" /><circle cx="18" cy="6" r="2" /><path d="M8 18h6a3 3 0 0 0 0-6h-4a3 3 0 0 1 0-6h6" /></>),
+  search: svg(<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>),
+  eyeoff: svg(<><path d="M3 3l18 18" /><path d="M10.6 6.2A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a15 15 0 0 1-3.2 3.7M6.6 7.6C4.3 9.2 3 12 3 12s4 6 9 6c1.3 0 2.5-.3 3.6-.8" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>),
+  shield: svg(<><path d="M12 3 4 6v6c0 4.5 3.2 8 8 9 4.8-1 8-4.5 8-9V6z" /><path d="m9 12 2 2 4-4" /></>),
+};
+
+/** A big tile that is also a switch: the whole tile toggles. */
+function Tile({ icon, title, hint, on, onToggle }: { icon: ReactNode; title: string; hint: string; on: boolean; onToggle: (v: boolean) => void }) {
+  const t = useT();
   return (
-    <div className="setup-choice">
-      <div className="setting-text">
-        <span className="setting-label">
-          {title} <span className="pill" data-kind={on === recommended ? "recommended" : "other"}>{recommended ? "Recommended: on" : "Recommended: off"}</span>
+    <button role="switch" aria-checked={on} aria-label={t(title)} className="setup-tile" data-on={on || undefined} onClick={() => onToggle(!on)}>
+      <span className="tile-icon">{icon}</span>
+      <strong>{t(title)}</strong>
+      <span className="muted">{t(hint)}</span>
+      <span className="tile-foot">
+        <span className="pill">{t("Recommended")}</span>
+        <span className="grow" />
+        <em>{on ? t("On") : t("Off")}</em>
+        <span className="switch" data-on={on || undefined}>
+          <span />
         </span>
-        <span className="muted">{hint}</span>
-      </div>
-      <button role="switch" aria-checked={on} aria-label={title} className="switch" data-on={on ? true : undefined} onClick={() => onToggle(!on)}>
-        <span />
-      </button>
-    </div>
+      </span>
+    </button>
   );
 }
 
-const STEPS = ["Welcome", "Interface", "Colours", "Performance", "Saving", "Privacy", "Review"] as const;
+const OS_CARDS: { id: "windows" | "macos" | "linux"; name: string; tagline: string }[] = [
+  { id: "windows", name: "Windows", tagline: "Like File Explorer in Windows 11" },
+  { id: "macos", name: "macOS", tagline: "Like Finder on a Mac" },
+  { id: "linux", name: "Linux", tagline: "Clean and simple, like GNOME or KDE" },
+];
+
+const STEPS = ["Welcome", "Interface", "Colors", "Performance", "Saving", "Privacy", "Review"] as const;
 
 export function Setup() {
+  const t = useT();
   const settings = useStore((s) => s.settings)!;
   const info = useStore((s) => s.info);
   const { updateSettings } = useStore.getState();
@@ -52,10 +81,18 @@ export function Setup() {
   const original = useRef<Settings | null>(null);
   if (!original.current) original.current = structuredClone(settings);
   const last = step === STEPS.length - 1;
-  // Match-my-system is the recommended colour choice, so it starts selected.
+  const [perfPick, setPerfPick] = useState<number | null>(null);
+  // The interface style for the operating system the app runs on starts selected, and
+  // "match my system" is the recommended color choice. Done once, as soon as the OS is known.
+  const autoUi = useRef(false);
   useEffect(() => {
-    if (settings.appearance.theme === "dark") updateSettings((s) => void (s.appearance.theme = "system"));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!info || autoUi.current) return;
+    autoUi.current = true;
+    updateSettings((s) => {
+      applyUiPreset(s, UI_PRESETS.find((p) => p.id === mine)!, systemDark());
+      s.appearance.theme = "system";
+    });
+  }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (to: number) => setStep(Math.max(0, Math.min(STEPS.length - 1, to)));
 
@@ -89,7 +126,19 @@ export function Setup() {
   const pickedUi = UI_PRESETS.find((p) => differences(settings, p.patch).length === 0);
   const ui = pickedUi ?? UI_PRESETS.find((p) => p.id === mine)!;
   const pickedPerf = currentPerfPreset(settings);
-  const perf = pickedPerf ?? recommended ?? PERF_PRESETS[3];
+  const recIdx = Math.max(0, PERF_PRESETS.findIndex((p) => p.id === (recommended ?? PERF_PRESETS[3]).id));
+    const showIdx = perfPick ?? (pickedPerf ? PERF_PRESETS.findIndex((p) => p.id === pickedPerf.id) : recIdx);
+  const perf = PERF_PRESETS[showIdx];
+  const pickPerf = (i: number) => {
+    setPerfPick(i);
+    updateSettings((s) => applyPatch(s, PERF_PRESETS[i].patch));
+  };
+  const pickUi = (id: string) =>
+    updateSettings((s) => {
+      const keep = s.appearance.theme;
+      applyUiPreset(s, UI_PRESETS.find((p) => p.id === id)!, systemDark());
+      if (keep === "system") s.appearance.theme = "system";
+    });
 
   const confirm = () =>
     updateSettings((s) => {
@@ -98,163 +147,280 @@ export function Setup() {
         applyUiPreset(s, ui, systemDark());
         if (keep === "system") s.appearance.theme = "system";
       }
-      if (!pickedPerf) applyPatch(s, perf.patch);
+      if (!pickedPerf || perfPick != null) applyPatch(s, perf.patch);
       s.setupDone = true;
     });
   const skip = () =>
     updateSettings((s) => {
       // Put everything back as it was, then just remember that setup was shown.
       const was = structuredClone(original.current!);
+      const language = s.advanced["ui.language"]; // the language is not a "look" setting, so it stays
       Object.assign(s, was);
+      if (language !== undefined) s.advanced = { ...s.advanced, "ui.language": language };
       s.setupDone = true;
     });
 
-  const yes = (v: boolean) => (v ? "On" : "Off");
+  const yes = (v: boolean) => (v ? t("On") : t("Off"));
+  const rec = ` ${t("(recommended)")}`;
   const summary: [string, string, string][] = [
-    ["Interface style", `${ui.name}${pickedUi ? "" : " (recommended)"}`, pickedUi ? "" : "Layout, icons, colours and shortcuts like " + ui.name],
-    ["Colours", mode === "system" ? "Match my system" : mode === "dark" ? "Dark" : "Light", THEMES.find((t) => t.id === theme)?.name ?? ""],
-    ["Performance", `${perf.name}${pickedPerf ? "" : " (recommended)"}`, perf.recommendedFor],
-    ["Remember folder sizes", yes(adv(settings, "files.sizeCache")), ""],
-    ["Keep thumbnails", yes(adv(settings, "cache.thumbnails")), ""],
-    ["Save computer details", yes(adv(settings, "cache.hardware")), ""],
-    ["Learn folders you open next", yes(adv(settings, "cache.predictions")), ""],
-    ["Previous searches", adv<number>(settings, "search.historyLimit") > 0 ? `Last ${adv<number>(settings, "search.historyLimit")}` : "Off", ""],
-    ["Hide server addresses", yes(settings.appearance.hideNetworkAddress), ""],
+    [t("Interface style"), `${ui.name}${pickedUi ? "" : rec}`, pickedUi ? "" : t("Layout, icons, colors and shortcuts like {name}", { name: ui.name })],
+    [t("Colors"), mode === "system" ? t("Match my system") : mode === "dark" ? t("Dark") : t("Light"), THEMES.find((th) => th.id === theme)?.name ?? ""],
+    [t("Performance"), `${perf.name}${pickedPerf || perfPick != null ? "" : rec}`, perf.recommendedFor],
+    [t("Folder sizes"), yes(adv(settings, "files.sizeCache")), ""],
+    [t("Thumbnails"), yes(adv(settings, "cache.thumbnails")), ""],
+    [t("This computer's details"), yes(adv(settings, "cache.hardware")), ""],
+    [t("Folders you open next"), yes(adv(settings, "cache.predictions")), ""],
+    [t("Previous searches"), adv<number>(settings, "search.historyLimit") > 0 ? t("Last {n}", { n: adv<number>(settings, "search.historyLimit") }) : t("Off"), ""],
+    [t("Hide server addresses"), yes(settings.appearance.hideNetworkAddress), ""],
+  ];
+
+  const ram = hw ? `${(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB` : "";
+  const MODES: { id: "system" | "dark" | "light"; name: string; hint: string }[] = [
+    { id: "system", name: "Match my system", hint: "Follows your computer, day and night." },
+    { id: "dark", name: "Dark", hint: "Easy on the eyes in dim rooms." },
+    { id: "light", name: "Light", hint: "Bright and crisp in daylight." },
   ];
 
   return (
-    <div className="setup-backdrop" role="dialog" aria-modal="true" aria-label="Welcome to FAST File Explorer">
+    <div className="setup-backdrop" role="dialog" aria-modal="true" aria-label={t("Welcome to FAST File Explorer")}>
+      {/* The top strip drags the window and holds minimize, maximize and close. */}
+      <CaptionStrip />
       <div className="setup" data-step={STEPS[step]}>
         <div className="setup-top">
-          <ol className="setup-steps" aria-label="Setup progress">
+          <ol className="setup-steps" aria-label={t("Setup progress")}>
             {STEPS.map((name, i) => (
               <li key={name} data-state={i === step ? "current" : i < step ? "done" : "todo"}>
-                <button onClick={() => go(i)} aria-current={i === step ? "step" : undefined} title={name}>
+                <button onClick={() => go(i)} aria-current={i === step ? "step" : undefined} title={t(name)}>
                   <span className="setup-dot">{i < step ? "✓" : i + 1}</span>
-                  <span className="setup-step-name">{name}</span>
+                  <span className="setup-step-name">{t(name)}</span>
                 </button>
               </li>
             ))}
           </ol>
           <button className="link-button" onClick={skip}>
-            Skip setup
+            {t("Skip setup")}
           </button>
+        </div>
+        <div className="setup-progress" aria-hidden="true">
+          <span style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} />
         </div>
 
         <div className="setup-view" key={STEPS[step]}>
-          {step === 0 && (
-            <>
-              <h1>Welcome to FAST File Explorer</h1>
-              <p className="muted">
-                A few quick choices to make it yours, one topic at a time. Use <b>Next</b> and <b>Back</b> or the left and right arrow keys. At the end you will see everything you chose before it is saved.
-              </p>
-              {hw && (
-                <div className="setup-hw">
-                  <strong>This computer</strong>
-                  <span>
-                    {hw.cpus} processor threads · {(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB of memory{hw.batteryPercent != null ? " · has a battery" : ""}
-                  </span>
-                  <span className="muted">Recommendations on the next views are based on this.</span>
-                </div>
-              )}
-            </>
-          )}
-          {step === 1 && (
-            <>
-              <h2>How should it look and work?</h2>
-              <p className="muted">Pick the file manager you are used to. This sets the window layout, colours, icons and keyboard shortcuts together.</p>
-              <UiPresetsPanel compact />
-            </>
-          )}
-          {step === 2 && (
-            <>
-              <h2>Light or dark?</h2>
-              <div className="segmented" role="radiogroup" aria-label="Light or dark">
-                {(["system", "dark", "light"] as const).map((m) => (
-                  <button key={m} role="radio" aria-checked={mode === m} data-on={mode === m || undefined} onClick={() => pickMode(m)}>
-                    {m === "system" ? "Match my system" : m === "dark" ? "Dark" : "Light"}
-                    {m === "system" && <span className="pill">Recommended</span>}
-                  </button>
-                ))}
+          <div className="setup-stage" data-hero={step === 0 || undefined} data-fill={(step >= 1 && step <= 5) || undefined}>
+            {step === 0 && (
+              <div className="setup-hero">
+                <h1>{t("Welcome to FAST File Explorer")}</h1>
+                <p className="lead">{t("A few quick choices to make it yours, one topic at a time. Use Next and Back or the arrow keys. At the end you will see everything you chose before it is saved.")}</p>
+                <label className="setup-lang">
+                  <span>{t("Language")}</span>
+                  <select value={adv<string>(settings, "ui.language")} onChange={(e) => set("ui.language", e.target.value)} aria-label={t("Language")}>
+                    <option value="auto">{t("Automatic (system language)")}</option>
+                    {LANGUAGES.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {hw && (
+                  <div className="setup-hw" aria-label="This computer">
+                    <div><b>{hw.cpus}</b><span>{t("processor threads")}</span></div>
+                    <div><b>{ram}</b><span>{t("memory")}</span></div>
+                    <div><b>{hw.batteryPercent != null ? t("Yes") : t("No")}</b><span>{t("battery")}</span></div>
+                    <div style={{ flex: 1, minWidth: 220, justifyContent: "center" }}><span>{t("The recommendations on the next views are based on this computer.")}</span></div>
+                  </div>
+                )}
               </div>
-              <p className="muted">The colours follow the interface style you chose. You can pick any of the other themes later in Settings.</p>
-            </>
-          )}
-          {step === 3 && (
-            <>
-              <h2>How much should it use of this computer?</h2>
-              <p className="muted">More means faster search and quicker folders, at the cost of memory and background work.</p>
-              <PerfPresetsPanel compact />
-            </>
-          )}
-          {step === 4 && (
-            <>
-              <h2>What may it remember?</h2>
-              <p className="muted">Remembering makes things faster. Turn any off and nothing of that kind is saved.</p>
-              <Choice title="Folder sizes" hint="Show a folder's size at once next time, then check it again quietly." recommended on={adv(settings, "files.sizeCache")} onToggle={(v) => set("files.sizeCache", v)} />
-              <Choice title="Thumbnails" hint="Keep small previews of pictures on disk so folders of images open at once." recommended on={adv(settings, "cache.thumbnails")} onToggle={(v) => set("cache.thumbnails", v)} />
-              <Choice title="Details about this computer" hint="Save the hardware and drive-health details shown in About so it opens at once." recommended on={adv(settings, "cache.hardware")} onToggle={(v) => set("cache.hardware", v)} />
-              <Choice title="Folders you open next" hint="Learn your habits to get the next folder ready early." recommended on={adv(settings, "cache.predictions")} onToggle={(v) => set("cache.predictions", v)} />
-              <Choice
-                title="Previous searches"
-                hint="Show recent searches under the search box."
-                recommended
-                on={adv<number>(settings, "search.historyLimit") > 0}
-                onToggle={(v) => set("search.historyLimit", v ? 20 : 0)}
-              />
-            </>
-          )}
-          {step === 5 && (
-            <>
-              <h2>Privacy</h2>
-              <Choice
-                title="Hide server addresses"
-                hint="Network drives show a friendly name instead of an IP address or host, in names, tabs and tooltips."
-                recommended
-                on={settings.appearance.hideNetworkAddress}
-                onToggle={(v) => updateSettings((s) => void (s.appearance.hideNetworkAddress = v))}
-              />
-              <p className="muted">You can also lock folders and drives with a passcode later: right-click one and choose “Lock with passcode…” (the last item in the menu).</p>
-            </>
-          )}
-          {step === 6 && (
-            <>
-              <h2>Here is what you chose</h2>
-              <table className="setup-summary">
-                <tbody>
-                  {summary.map(([k, v, note]) => (
-                    <tr key={k}>
-                      <th scope="row">{k}</th>
-                      <td>
-                        <strong>{v}</strong>
-                        {note && <span className="muted"> {note}</span>}
-                      </td>
-                    </tr>
+            )}
+            {step === 1 && (
+              <>
+                <h2>{t("Which file manager are you used to?")}</h2>
+                <p className="lead">{t("This sets the layout, icons and shortcuts together.")}</p>
+                <div className="os-grid" role="radiogroup" aria-label={t("Interface style")}>
+                  {OS_CARDS.map((c) => (
+                    <div className="os-col" key={c.id}>
+                      <span className="os-rec" aria-hidden={c.id !== mine} data-show={c.id === mine || undefined}>{t("Recommended")}</span>
+                      <button className="os-card" role="radio" aria-checked={ui.id === c.id} data-on={ui.id === c.id || undefined} onClick={() => pickUi(c.id)}>
+                        <div className="os-preview" data-os={c.id} aria-hidden="true">
+                          <div className="wf-top"><b /><b /><b /><u /></div>
+                          <div className="wf-bar" />
+                          <div className="wf-body">
+                            <div className="wf-side"><i /><i /><i /><i /></div>
+                            <div className="wf-main"><i /><i /><i /><i /><i /></div>
+                          </div>
+                        </div>
+                        <strong>{c.name}</strong>
+                        <span className="muted">{t(c.tagline)}</span>
+                      </button>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </>
-          )}
+                </div>
+              </>
+            )}
+            {step === 2 && (
+              <>
+                <h2>{t("Light or dark?")}</h2>
+                <p className="lead">{t("You can pick from many more themes later in Settings.")}</p>
+                <div className="setup-modes" role="radiogroup" aria-label={t("Light or dark?")}>
+                  {MODES.map((m) => (
+                    <div className="os-col" key={m.id}>
+                      <span className="os-rec" aria-hidden={m.id !== "system"} data-show={m.id === "system" || undefined}>{t("Recommended")}</span>
+                      <button className="setup-mode" role="radio" aria-checked={mode === m.id} data-on={mode === m.id || undefined} onClick={() => pickMode(m.id)}>
+                        <div className="mode-preview" data-mode={m.id} aria-hidden="true">
+                          {(m.id === "system" ? ["light", "dark"] : [m.id]).map((tone) => (
+                            <div className="pane" data-tone={tone} key={tone}>
+                              <b />
+                              <div className="pbody">
+                                <span className="pside"><i /><i /><i /></span>
+                                <span className="prows"><i /><i /><i /><i /><i /><i /></span>
+                              </div>
+                            </div>
+                          ))}
+                          <span className="dot" />
+                        </div>
+                        <strong>{t(m.name)}</strong>
+                        <span className="muted">{t(m.hint)}</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {step === 3 && (
+              <>
+                <h2>{t("How much of this computer should it use?")}</h2>
+                <p className="lead">
+                  {t("More means faster search and folders, but more memory and background work.")}
+                  {hw && <> {t("This computer has {cpus} threads and {ram} of memory.", { cpus: hw.cpus, ram })}</>}
+                </p>
+                <div className="perf-slider">
+                  <div className="perf-wrap" style={{ "--n": PERF_PRESETS.length - 1, "--i": showIdx, "--r": recIdx } as CSSProperties}>
+                    <div className="perf-rec">
+                      <span>{t("Recommended")}</span>
+                      <svg viewBox="0 0 24 14" width="26" height="15" aria-hidden="true"><path d="M2 1h20L12 13z" fill="currentColor" /></svg>
+                    </div>
+                    <input
+                      type="range"
+                      className="perf-range"
+                      min={0}
+                      max={PERF_PRESETS.length - 1}
+                      step={1}
+                      value={showIdx}
+                      aria-label={t("Performance level")}
+                      aria-valuetext={perf.name}
+                      onChange={(e) => pickPerf(Number(e.target.value))}
+                    />
+                    <div className="perf-ticks" aria-hidden="true">
+                      {PERF_PRESETS.map((p, i) => (
+                        <i key={p.id} data-on={i <= showIdx || undefined} />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="perf-readout">
+                    <div className="perf-end">
+                      <b>{t("Light")}</b>
+                      <span>{t("Old or small devices. Saves memory and battery.")}</span>
+                    </div>
+                    <div className="perf-now" aria-live="polite">
+                      <h3>{perf.name}</h3>
+                      {showIdx === recIdx && <span className="pill">{t("Recommended for this computer")}</span>}
+                    </div>
+                    <div className="perf-end right">
+                      <b>{t("Heavy")}</b>
+                      <span>{t("Powerful PCs. Fastest search and folders.")}</span>
+                    </div>
+                  </div>
+                  <div className="perf-detail">
+                    <p>{perf.description}</p>
+                    <p className="muted">
+                      <b>{t("Suits:")}</b> {perf.recommendedFor}
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
+            {step === 4 && (
+              <>
+                <h2>{t("What may it remember?")}</h2>
+                <p className="lead">{t("Remembering makes things faster. It is all saved on this computer only. Turn off anything you do not want kept.")}</p>
+                <div className="setup-tiles">
+                  <Tile icon={ICONS.folder} title="Folder sizes" hint="Show a folder's size at once next time." on={adv(settings, "files.sizeCache")} onToggle={(v) => set("files.sizeCache", v)} />
+                  <Tile icon={ICONS.image} title="Thumbnails" hint="Keep small previews so picture folders open at once." on={adv(settings, "cache.thumbnails")} onToggle={(v) => set("cache.thumbnails", v)} />
+                  <Tile icon={ICONS.chip} title="This computer's details" hint="Keep hardware and drive health so About opens at once." on={adv(settings, "cache.hardware")} onToggle={(v) => set("cache.hardware", v)} />
+                  <Tile icon={ICONS.route} title="Folders you open next" hint="Learn your habits to get the next folder ready." on={adv(settings, "cache.predictions")} onToggle={(v) => set("cache.predictions", v)} />
+                  <Tile
+                    icon={ICONS.search}
+                    title="Previous searches"
+                    hint="Show recent searches under the search box."
+                    on={adv<number>(settings, "search.historyLimit") > 0}
+                    onToggle={(v) => set("search.historyLimit", v ? 20 : 0)}
+                  />
+                  <div className="setup-tile-note" role="note">
+                    <span className="tile-icon">{ICONS.shield}</span>
+                    <strong>{t("Saved only on this computer")}</strong>
+                    <span className="muted">{t("Nothing here is ever uploaded.")}</span>
+                  </div>
+                </div>
+              </>
+            )}
+            {step === 5 && (
+              <>
+                <h2>{t("Privacy")}</h2>
+                <div className="privacy-grid">
+                  <div className="privacy-local" role="note">
+                    <span className="tile-icon big">{ICONS.shield}</span>
+                    <h3>{t("Everything stays on this computer")}</h3>
+                    <p>{t("All information is stored locally. Nothing gets sent to a cloud.")}</p>
+                    <p className="muted">{t("Your settings, history and saved details never leave this device.")}</p>
+                  </div>
+                  <Tile
+                    icon={ICONS.eyeoff}
+                    title="Hide server addresses"
+                    hint="Network drives show a friendly name instead of an IP address or host."
+                    on={settings.appearance.hideNetworkAddress}
+                    onToggle={(v) => updateSettings((s) => void (s.appearance.hideNetworkAddress = v))}
+                  />
+                </div>
+                <p className="muted">{t("Tip: lock a folder or drive later by right-clicking it and choosing “Lock with passcode…”.")}</p>
+              </>
+            )}
+            {step === 6 && (
+              <>
+                <h2>{t("Here is what you chose")}</h2>
+                <dl className="setup-summary">
+                  {summary.map(([k, v, note]) => (
+                    <div key={k}>
+                      <dt>{k}</dt>
+                      <dd>
+                        {v}
+                        {note && <span className="muted">{note}</span>}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            )}
+          </div>
         </div>
 
         <footer>
           {last && (
             <p className="setup-note" role="note">
-              All of this can be changed at any time in Settings, at the top right (or press Ctrl+,).
+              {t("All of this can be changed at any time in Settings, at the top right (or press Ctrl+,).")}
             </p>
           )}
           <div className="setup-buttons">
             <button className="secondary" onClick={() => go(step - 1)} disabled={step === 0}>
-              ← Back
+              {t("← Back")}
             </button>
             <span className="grow" />
             {last ? (
               <button className="primary" onClick={confirm} autoFocus>
-                Confirm and start
+                {t("Confirm and start")}
               </button>
             ) : (
               <button className="primary" onClick={() => go(step + 1)}>
-                Next →
+                {t("Next →")}
               </button>
             )}
           </div>

@@ -139,7 +139,7 @@ export function moveTo(layout: Layout, id: PanelId, dock: Dock, at?: { x: number
   return next;
 }
 
-/** Swap a panel with its neighbour in the same dock. */
+/** Swap a panel with its neighbor in the same dock. */
 export function nudge(layout: Layout, id: PanelId, delta: -1 | 1): Layout {
   const list = panelsAt(layout, layout[id].dock);
   const i = list.indexOf(id);

@@ -61,7 +61,7 @@ export function useAppearance() {
     media.addEventListener("change", apply);
     root.dataset.density = appearance.density;
     // The accent from Settings replaces the theme's own only once changed
-    // from the default, so each theme keeps its colours until then.
+    // from the default, so each theme keeps its colors until then.
     const accent = /^#[0-9a-f]{3,8}$/i.test(appearance.accent) ? appearance.accent : "#4cc2ff";
     sheet("accent-css").textContent = accent.toLowerCase() === "#4cc2ff" ? "" : `:root { --accent: ${accent}; --accent-text: ${isLight(accent) ? "#0a0a0a" : "#ffffff"}; }`;
     sheet("user-css").textContent = appearance.customCss;

@@ -25,7 +25,7 @@ const AUDIO: &[&str] = &["mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wav
 const VIDEO: &[&str] = &["mp4", "m4v", "mov"];
 
 /// The facts a file holds about itself, in the order worth showing. Empty for
-/// anything that is not a recognised media file or that cannot be read.
+/// anything that is not a recognized media file or that cannot be read.
 pub fn read(path: &Path) -> Vec<Fact> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let facts = if IMAGE.contains(&ext.as_str()) {

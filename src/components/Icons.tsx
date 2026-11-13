@@ -1,5 +1,5 @@
 // Inline SVG icons: no icon font or image requests, and they inherit
-// `currentColor`, so themes can recolour them with CSS alone.
+// `currentColor`, so themes can recolor them with CSS alone.
 
 import type { CSSProperties, ReactNode } from "react";
 import { useStore } from "../store";

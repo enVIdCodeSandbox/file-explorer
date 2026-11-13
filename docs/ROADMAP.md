@@ -76,3 +76,4 @@
 * Thumbnails cover JPEG, PNG, GIF, WebP and BMP.
 * Media type detection (SSD or hard disk) comes from the OS and is often
   "unknown" or wrong inside virtual machines.
+* **Languages:** the setup wizard and the language setting are translated into nine languages (no native-speaker review). The main window, menus, dialogs and the long performance-level descriptions are still English only, and right-to-left languages (Arabic, Hebrew) are not supported yet because the layout has not been mirrored.

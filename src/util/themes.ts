@@ -31,7 +31,7 @@ export const THEMES: ThemeInfo[] = [
   { id: "contrast-light", name: "High contrast (light)", dark: false, swatch: ["#ffffff", "#ffffff", "#000000", "#0000cc"] },
 ];
 
-/** The theme to apply for a saved id; "system" follows the OS colour scheme. */
+/** The theme to apply for a saved id; "system" follows the OS color scheme. */
 export function resolveTheme(id: string, systemDark: boolean): string {
   if (id === "system") return systemDark ? "dark" : "light";
   return THEMES.some((t) => t.id === id) ? id : "dark";

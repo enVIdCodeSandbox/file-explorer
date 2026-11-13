@@ -171,11 +171,11 @@ export function AnalyzerView({ path }: { path: string }) {
         }
         continue;
       }
-      // A file takes its type's colour; a folder too small to open takes the colour of what mostly fills it.
+      // A file takes its type's color; a folder too small to open takes the color of what mostly fills it.
       const lead = t.node.isDir ? t.node.types[0] : undefined;
       ctx.fillStyle = t.node.isDir && lead ? typeColor(names[lead[0]] === NO_EXT ? "" : (names[lead[0]] ?? "")) : colorFor(t.node.name, t.node.isDir);
       ctx.fillRect(t.x + 0.5, t.y + 0.5, Math.max(0, t.w - 1), Math.max(0, t.h - 1));
-      // A soft highlight gives the cushion look that separates neighbours.
+      // A soft highlight gives the cushion look that separates neighbors.
       const g = ctx.createLinearGradient(t.x, t.y, t.x + t.w, t.y + t.h);
       g.addColorStop(0, "rgba(255,255,255,.2)");
       g.addColorStop(1, "rgba(0,0,0,.25)");

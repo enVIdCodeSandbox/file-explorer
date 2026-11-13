@@ -1,4 +1,4 @@
-/* Layout and components. Colours and sizes come from tokens.css. */
+/* Layout and components. Colors and sizes come from tokens.css. */
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }

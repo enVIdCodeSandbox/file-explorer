@@ -21,7 +21,7 @@ export function ThemeGallery() {
   const { updateSettings } = useStore.getState();
   const pick = (id: string) => updateSettings((s) => void (s.appearance.theme = id));
   return (
-    <div className="theme-gallery" role="radiogroup" aria-label="Colour theme">
+    <div className="theme-gallery" role="radiogroup" aria-label="Color theme">
       <button className="theme-card" role="radio" aria-checked={theme === "system"} data-on={theme === "system" || undefined} onClick={() => pick("system")}>
         <span className="theme-swatch" style={{ background: "linear-gradient(135deg,#1c1c1c 50%,#eef1f5 50%)" }} />
         <strong>Match system</strong>

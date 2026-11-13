@@ -121,7 +121,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       },
       {
         id: "color",
-        label: "Next colour",
+        label: "Next color",
         run: () => updateGroup(id, { color: GROUP_COLORS[(GROUP_COLORS.indexOf(g.color) + 1) % GROUP_COLORS.length] }),
       },
       {

@@ -137,12 +137,12 @@ export function layoutNested(root: SizeNode, rect: Rect): Tile[] {
   return tiles;
 }
 
-/** Colour of a file type by its extension (no dot); one place so the map and the list agree. */
+/** Color of a file type by its extension (no dot); one place so the map and the list agree. */
 export function typeColor(ext: string): string {
   return colorFor(ext ? `x.${ext}` : "x", false);
 }
 
-/** Stable colour per file type so the same kind of file looks the same everywhere. */
+/** Stable color per file type so the same kind of file looks the same everywhere. */
 export function colorFor(name: string, isDir: boolean): string {
   if (name === "(other)") return "hsl(0 0% 38%)";
   const dot = name.lastIndexOf(".");

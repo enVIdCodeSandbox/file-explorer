@@ -76,12 +76,12 @@ docs/                     the documents you are reading; also shown in Settings 
 * Rust: `cargo fmt`, no warnings in `fast-core`; errors are `CoreError` with a message a person can read. Use `?` and never `unwrap()` on I/O.
 * TypeScript: strict mode; no `any`. State that must survive reloads goes through the session or settings, not module variables.
 * Comments say why. The function name already says what.
-* Tests: pure logic gets unit tests next to it (`#[cfg(test)]`, `*.test.ts`). Transfer behaviour gets an end-to-end test in `engine.rs` using temp directories.
+* Tests: pure logic gets unit tests next to it (`#[cfg(test)]`, `*.test.ts`). Transfer behavior gets an end-to-end test in `engine.rs` using temp directories.
 * Paths are `String` at the IPC boundary and `PathBuf` inside Rust. Never join paths with `/` by hand in the interface; use `src/util/path.ts`.
 
 ## Testing what unit tests cannot
 
-Some behaviour needs a window and a pointer (drag and drop, tabs, the transfer card). To run the built app headless on Linux:
+Some behavior needs a window and a pointer (drag and drop, tabs, the transfer card). To run the built app headless on Linux:
 
 ```sh
 xvfb-run -s "-screen 0 1400x900x24" env HOME=$(mktemp -d) target/release/fast-file-explorer &

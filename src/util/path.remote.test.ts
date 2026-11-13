@@ -3,7 +3,7 @@ import { baseName, crumbs, isRemote, joinPath, maskAddresses, parentPath, remote
 import { fieldsFromUrl } from "../components/ConnectServer";
 
 describe("server addresses", () => {
-  it("are recognised", () => {
+  it("are recognized", () => {
     for (const u of ["sftp://u@h/", "ftp://h", "dav://h/x", "davs://h:8443/x", "SFTP://h/"]) expect(isRemote(u)).toBe(true);
     for (const u of ["/home/me", "C:\\Users", "fast://home", "ftpfolder/x", "http://h/"]) expect(isRemote(u)).toBe(false);
   });

@@ -35,7 +35,7 @@ from the variables below, which are defined in `src/styles/tokens.css`.
 .file-row[data-kind="folder"] .file-name { font-weight: 600; }
 ```
 
-Scope a rule to one colour mode with `:root[data-theme="dark"]` or
+Scope a rule to one color mode with `:root[data-theme="dark"]` or
 `:root[data-theme="light"]`, and to a density with
 `:root[data-density="compact"]` or `"comfortable"`.
 
@@ -49,7 +49,7 @@ Scope a rule to one colour mode with `:root[data-theme="dark"]` or
 | `--row-height` | Height of list rows |
 | `--sidebar-width`, `--details-width` | Pane widths |
 | `--accent` | Selection, focus, progress, switches. Also set by Settings → Appearance; CSS here wins |
-| `--accent-text` | Text on accent-coloured buttons |
+| `--accent-text` | Text on accent-colored buttons |
 | `--danger`, `--warning` | Destructive actions and errors; warnings |
 | `--bg` | Window background, tab strip, input fields |
 | `--surface` | Toolbar, content area, active tab |
@@ -59,7 +59,7 @@ Scope a rule to one colour mode with `:root[data-theme="dark"]` or
 | `--text`, `--text-muted` | Primary and secondary text |
 | `--selection`, `--selection-border` | Selected rows and tiles |
 | `--shadow` | Shadow under menus and dialogs |
-| `--icon-folder`, `--icon-file`, `--icon-page` | Folder colour, generic file outline, file page fill |
+| `--icon-folder`, `--icon-file`, `--icon-page` | Folder color, generic file outline, file page fill |
 | `--treemap-text` | Labels on the disk usage map |
 
 ## Structure and class names
@@ -131,6 +131,6 @@ blocks remote resources), but it can hide the interface. To recover, open
 
 ## Windows 11, macOS and GNOME looks
 
-`win11-dark`, `win11-light`, `mac-dark`, `mac-light`, `adwaita-dark` and `adwaita-light` are ordinary themes (see `tokens.css`), and the icon style `fluent` draws toolbar and menu glyphs from Microsoft's open-source Fluent UI System Icons (MIT). `scripts/gen-fluent-icons.mjs` regenerates `src/components/fluentIcons.ts` from the npm package `@fluentui/svg-icons`. No Windows, macOS or GNOME image or font file is used: the colours are written out as variables and the fonts are whatever the system provides.
+`win11-dark`, `win11-light`, `mac-dark`, `mac-light`, `adwaita-dark` and `adwaita-light` are ordinary themes (see `tokens.css`), and the icon style `fluent` draws toolbar and menu glyphs from Microsoft's open-source Fluent UI System Icons (MIT). `scripts/gen-fluent-icons.mjs` regenerates `src/components/fluentIcons.ts` from the npm package `@fluentui/svg-icons`. No Windows, macOS or GNOME image or font file is used: the colors are written out as variables and the fonts are whatever the system provides.
 
 The **Interface style** presets (`src/settings/presets.ts`) combine one of these themes with a layout, corner roundness, icon style, menu style, window-button side (`ui.windowControlsSide`) and keyboard shortcuts.

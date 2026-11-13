@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn recognises_archive_names() {
+    fn recognizes_archive_names() {
         assert_eq!(format_of(Path::new("x.ZIP")), Some(Format::Zip));
         assert_eq!(format_of(Path::new("x.tar.gz")), Some(Format::TarGz));
         assert_eq!(format_of(Path::new("x.tgz")), Some(Format::TarGz));
