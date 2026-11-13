@@ -101,12 +101,6 @@ jobs:
       # Signing. Every one of these is optional: without the secrets the
       # installers are built unsigned, exactly as before. See docs/RELEASING.md.
       # macOS: signs the app and, with the Apple ID values, notarizes it.
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       # Windows: a code signing certificate as a base64 .pfx.
       WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -128,6 +122,47 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
+      # macOS: try the signing certificate in a throwaway keychain first. If it cannot be
+      # imported (wrong base64, wrong password, no private key) the build goes ahead
+      # unsigned with a warning, instead of failing at the very end.
+      - name: Set up macOS signing
+        if: runner.os == 'macOS'
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID_VALUE: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_VALUE: ${{ secrets.APPLE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # The signing variables are only created when there is a certificate, and only when it
+          # imports. A variable that exists but is empty makes the build try to sign with nothing
+          # and fail at the very end; leaving them out builds the app unsigned.
+          if [ -z "$CERT" ]; then
+            echo "No APPLE_CERTIFICATE secret: building the macOS app unsigned."
+            exit 0
+          fi
+          ok=0
+          if echo "$CERT" | base64 --decode > "$RUNNER_TEMP/check.p12" 2>/dev/null; then
+            security create-keychain -p check "$RUNNER_TEMP/check.keychain"
+            if security import "$RUNNER_TEMP/check.p12" -k "$RUNNER_TEMP/check.keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1; then ok=1; fi
+            security delete-keychain "$RUNNER_TEMP/check.keychain" || true
+          fi
+          rm -f "$RUNNER_TEMP/check.p12"
+          if [ "$ok" != 1 ]; then
+            echo "::warning::The APPLE_CERTIFICATE secret could not be imported (it must be a base64 .p12 with its private key, and APPLE_CERTIFICATE_PASSWORD must match). Building the macOS app unsigned. See docs/RELEASING.md."
+            exit 0
+          fi
+          {
+            echo "APPLE_CERTIFICATE=$CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD"
+            [ -n "$IDENTITY" ] && echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
+            if [ -n "$APPLE_ID_VALUE" ] && [ -n "$APPLE_PASSWORD_VALUE" ] && [ -n "$TEAM_ID" ]; then
+              echo "APPLE_ID=$APPLE_ID_VALUE"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD_VALUE"
+              echo "APPLE_TEAM_ID=$TEAM_ID"
+            fi
+          } >> "$GITHUB_ENV"
       # Windows: put the certificate where the signing tool finds it, and tell
       # the build which one to use. Skipped when no certificate is configured.
       - name: Import the Windows signing certificate
