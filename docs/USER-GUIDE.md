@@ -2,7 +2,7 @@
 
 ## Getting around
 
-**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colours, and are reopened at launch (Settings → General).
+**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colours; drag a group's coloured label to move the whole group, and click it to collapse. Tabs are reopened at launch (Settings → General).
 
 **Address bar.** Click the path to type one. The parts of the path are clickable and are also drop targets: drop files on a part to move or copy them there.
 
@@ -62,6 +62,45 @@ Folders with the same name are merged, and the files inside them are asked about
 
 Delete (or the toolbar button) sends items to the Recycle Bin / Trash after the usual confirmation. **Shift+Delete**, or **Shift-click on the toolbar Delete button**, deletes permanently after a confirmation. As administrator, items cannot go to the bin and are deleted permanently; the prompt says so.
 
+## Undo and redo
+
+**Ctrl+Z** undoes the last rename, new file or folder, copy, move or delete to the Recycle Bin / Trash, and **Ctrl+Y** (or Ctrl+Shift+Z) does it again. Both are also in the "…" menu of the command bar. Undoing a delete puts the items back where they were (Windows and Linux; on macOS use Put Back in the Trash). Permanent deletes cannot be undone. How many steps are remembered is in Settings → Advanced ("Actions Undo can reverse").
+
+## Renaming many items
+
+Select two or more items and press **F2** (or Rename in the command bar or right-click menu). The dialog shows every old and new name before anything changes:
+
+* **New name** can use `{name}` (the current name), `{n}` (a counter) and `{date}` (the date it was changed), for example `Holiday {n}`.
+* **Find / Replace with** changes part of each name; **Match case** is off by default.
+* **Start at** and **Digits** control the counter (3 digits gives 001, 002…).
+* **Letters** changes case.
+
+Extensions stay as they are. Names that would be empty, contain characters the system does not allow, clash with each other or with another item are marked in red and the button stays off. Shifting a series (1→2, 2→3) works without overwriting anything. One Ctrl+Z undoes the whole batch.
+
+## Zip and other archives
+
+Right-click → **Compress to ZIP** makes `name.zip` next to the item (`Archive.zip` for several items). Right-click a `.zip`, `.tar` or `.tar.gz` / `.tgz` file → **Extract to "name"** unpacks into a new folder next to it, or **Extract here**. Files that already exist are kept, never replaced. Compressing and extracting can be cancelled from the progress card. Symbolic links are left out of zips, and archive entries that try to reach outside the target folder are refused.
+
+### Opening archives like folders
+
+Double-click a zip, 7z, rar, tar, tar.gz / tgz, tar.bz2, tar.xz, single .gz / .bz2 / .xz, cab, iso or similar file and it opens as a folder. The address bar shows the way in (`Documents › photos.zip › 2024`), you can type `/path/photos.zip/2024` to go straight there, and Back, Up and tabs work as usual.
+
+* **Open** a file inside to unpack it to a temporary place and open it with its usual program.
+* **Copy** items (Ctrl+C, then paste or drag into a folder) to unpack them there. Folders keep their contents. Files that already exist are kept, never replaced, and the notice says how many were left alone.
+* Right-click empty space inside an archive → **Extract all to a folder next to the archive** or **Extract all here**.
+* Archives are read-only: cut, rename, delete, new folder and paste are refused with a message. Moving out of an archive copies instead.
+* Zip, tar (plain, gzip, bzip2, xz), 7z and single gz/bz2/xz files are read by the app itself. **rar, cab, iso, wim, zstd and the rest need 7-Zip** (Windows: 7-Zip installed, or the `tar.exe` that comes with Windows 11; macOS: `brew install sevenzip`, or the built-in `bsdtar`; Linux: `7zip` / `p7zip-full`). Without one the app says so instead of failing quietly.
+* Password-protected archives are not supported yet; the app says so. Names that try to leave the destination folder and links are never unpacked.
+* Turn it off in Settings > Advanced > Files and lists > "Open archives like folders" to have a double click hand archives to another program.
+
+### Sort order and filters across folders
+
+The sort order you choose (for example Date modified, newest first) stays for every folder, and is still there when you start the app again. Change it from the column headings, Sort, or Settings > Advanced > Files and lists. Turn off "Use the same sort order in every folder" to start each folder sorted by name. A filter is cleared when you open another folder unless you turn on "Keep the filter when opening another folder".
+
+## Folders refresh by themselves
+
+A folder that is open updates when another program adds, renames or deletes files in it, a moment after the change. Only open folders are watched, not their subfolders. Turn it off in Settings → General ("Refresh folders when they change"); F5 always works.
+
 ## Sharing
 
 Right-click → Share:
@@ -83,6 +122,18 @@ Type in the search box. Results come from an index that is built in the backgrou
 
 Right-click a folder or drive → Analyze disk usage. Folders are drawn as frames containing their contents; colours are file types. Click to zoom, hover for sizes. The list beside it shows the largest files, which can be deleted from there.
 
+## Servers (FTP, SFTP, WebDAV)
+
+Click **Connect to server…** at the bottom of the sidebar. Choose SFTP (SSH), FTP or WebDAV, type the server, your user name and password, and optionally a folder to start in. The server opens as a folder you can browse in a tab.
+
+* **Copy, move, delete, rename, new folder** work like on your own disks. Drag files between a server tab and a local tab, or copy and paste. Moves between a server and this computer copy first and delete the original only when everything arrived. Moving inside one server is a rename on the server.
+* **Opening a file** downloads it to a temporary place and opens it with your usual program. Changes you make there are not sent back; copy the file to the server again.
+* **Deleting from a server cannot be undone** (servers have no Recycle Bin), so you are always asked first. Undo and Redo do not cover servers.
+* **Passwords are never saved.** "Keep this address in the sidebar" saves only the server, user name and folder; you type the password once per session. Each address also keeps its own login in memory, so several tabs share one.
+* **SFTP asks you to trust a server the first time.** The dialog shows the server's fingerprint; compare it with the one your server's owner gave you. If the key later changes, the app warns you and does not connect until you confirm. You can also log in with a private key file (the password box then holds its passphrase).
+* **FTP and plain-HTTP WebDAV are not encrypted**: the dialog warns you. Prefer SFTP, or WebDAV with HTTPS.
+* Not available on server folders: thumbnails, folder sizes, checksums, "Compress", "Share", terminal, disk usage, Properties, new empty files. WebDAV needs a server that allows PROPFIND, MKCOL and MOVE (Nextcloud, ownCloud, Synology, Apache and nginx with DAV do).
+
 ## Network drives
 
 Mapped drives and shares show under Drives with their drive letter. If you run the app as administrator, drives mapped in your normal session are still listed (they are found through your user's saved mappings).
@@ -91,9 +142,31 @@ Mapped drives and shares show under Drives with their drive letter. If you run t
 
 The app does not need it. When a transfer is refused for permissions it offers **Retry as administrator**, which runs only that job elevated.
 
+## First run
+
+The first time the app starts it shows one setup page: the interface style (Windows, macOS or Linux), light or dark, a performance preset, what the app may remember, and whether server addresses are hidden. The recommended answer is marked on each, based on this computer. Choose **Skip** to keep the defaults. Everything on that page is also in Settings.
+
+## Presets and profiles
+
+* **Interface style** (Settings > Presets and profiles) sets the window layout, colours, icons, corner shapes, the side of the window buttons and the keyboard shortcuts to match Windows 11 File Explorer, macOS Finder or a GNOME/KDE file manager. Colours and icons are open-source (Fluent System Icons, MIT); no Windows or Apple files are used.
+* **Performance presets**, from Barebones to God-like, set threads, cache size, indexing, thumbnails, folder sizes and what is saved. Each one lists the kind of device it suits, and the one recommended for this computer is marked.
+* **Profiles** are saved copies of all your settings, as many as you like. While one is in use, your changes are saved into it automatically.
+
+## What the app uses
+
+Settings > Performance > *What the app is using* shows live processor, memory and disk use, and what is kept for later (caches on disk, caches in memory). *Give back memory now*, *Clear caches that rebuild themselves* and *Smallest footprint* shrink what the app keeps. They do not compress your files. Settings > Storage lists each cache with its own Clear button and an on/off switch (thumbnails, folder sizes, disk-usage results, folder learning, hardware details, search history).
+
+## Locking folders and drives
+
+Right-click a folder or a drive and choose **Lock with passcode…** (the last item). A locked folder cannot be opened, listed, searched, previewed, copied from or deleted inside this app until the passcode is entered; it relocks after the time set in Advanced. Locks are managed under Settings > Privacy and locks, and removing one needs the main password. **This is a privacy screen, not encryption:** other programs and other file managers can still read the files. Use disk or file encryption for that.
+
+## Opening files with no app
+
+If a file type has no program, the app shows a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
+
 ## Settings
 
-Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once. Sections: General, Appearance, Themes, Layout, Navigation pane, Performance, Storage, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
+Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
 
 * **Performance** controls how much of the computer the app may use. Automatic adapts to CPU, memory and battery.
 * **Right-click menu:** every entry can be hidden, and you can add your own commands under Advanced.

@@ -18,7 +18,7 @@ use fast_core::transfer::{self, Phase, Predictor, Progress, TransferSpec};
 use fast_core::treemap::Analysis;
 use fast_core::usage::{self, ScanProgress, UsageOptions};
 use fast_core::thumbs;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -66,10 +66,38 @@ fn listing(path: &Path, entries: Arc<Vec<FileEntry>>, cached: bool) -> Listing {
     }
 }
 
+/// How long an unlock lasts, from Advanced settings (0 = until the app closes).
+fn relock_after(st: &crate::state::AppState) -> Option<std::time::Duration> {
+    let mins = st.settings.read().advanced.get("locks.relockMin").and_then(|v| v.as_u64()).unwrap_or(15);
+    (mins > 0).then(|| std::time::Duration::from_secs(mins * 60))
+}
+
+/// Is this path behind a lock that has not been opened? Remote paths never are.
+fn is_locked(st: &crate::state::AppState, path: &str) -> bool {
+    let locks = st.locks.read();
+    !locks.is_empty() && !fast_core::remote::is_remote(path) && locks.blocking(path, relock_after(st)).is_some()
+}
+
+/// Refuse with a message the interface turns into a passcode prompt.
+pub(crate) fn guard(st: &crate::state::AppState, path: &str) -> CmdResult<()> {
+    if is_locked(st, path) {
+        Err(format!("locked:{path}"))
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String) -> CmdResult<Listing> {
     let st = state.inner().clone();
     blocking(move || {
+        if fast_core::browse::is_loc(&path) {
+            return crate::remote::archive_list(&st, &path);
+        }
+        guard(&st, &path)?;
+        if fast_core::remote::is_remote(&path) {
+            return crate::remote::list(&st, &path);
+        }
         let p = PathBuf::from(&path);
         let show_hidden = st.settings.read().general.show_hidden;
         let hit = st.listings.lock().get(&p, show_hidden);
@@ -132,6 +160,9 @@ fn prefetch_now(st: &Shared, paths: Vec<String>) {
 pub async fn record_visit(state: State<'_, Shared>, from: Option<String>, to: String) -> CmdResult<Vec<String>> {
     let st = state.inner().clone();
     blocking(move || {
+        if !advanced_bool(&st, "cache.predictions", true) {
+            return Ok(Vec::new());
+        }
         let now = now_secs();
         let predictions = {
             let mut p = st.predictor.lock();
@@ -168,7 +199,17 @@ pub async fn frequent_folders(state: State<'_, Shared>, limit: usize) -> CmdResu
 #[tauri::command]
 pub async fn get_details(state: State<'_, Shared>, path: String) -> CmdResult<Details> {
     let st = state.inner().clone();
-    blocking(move || details::details(Path::new(&path), &st.drives.read()).map_err(err)).await
+    blocking(move || {
+        if fast_core::browse::is_loc(&path) {
+            return crate::remote::archive_details(&st, &path);
+        }
+        guard(&st, &path)?;
+        if fast_core::remote::is_remote(&path) {
+            return crate::remote::details(&st, &path);
+        }
+        details::details(Path::new(&path), &st.drives.read()).map_err(err)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -190,17 +231,29 @@ struct FolderSizeEvent {
     files: u64,
     /// False when the measurement hit the scan limit, so the size is a minimum.
     complete: bool,
+    /// True when this is a remembered size; a fresh measurement may follow.
+    cached: bool,
 }
 
-/// How long a measured folder size is trusted.
-const FOLDER_SIZE_TTL_SECS: u64 = 120;
+/// How remembered folder sizes are used (from the Advanced settings).
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct SizePolicy {
+    /// Remember sizes between visits and restarts.
+    pub remember: bool,
+    /// A remembered size younger than this is current and not measured again.
+    pub fresh_secs: u64,
+    /// Most folders to remember.
+    pub max_entries: usize,
+}
 
 /// Measure the given subfolders of `dir` one after another in the background,
-/// sending a `folder-size` event for each. Starting another job (opening a
-/// different folder) cancels this one. Recent results are reused unless
-/// `refresh` is set.
+/// sending a `folder-size` event for each. A remembered size is sent at once;
+/// if it is older than the policy allows (or `refresh` is set) the folder is
+/// measured again and the new size follows. Starting another job (opening a
+/// different folder) cancels this one.
 #[tauri::command]
-pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: String, names: Vec<String>, refresh: bool) -> CmdResult<()> {
+pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: String, names: Vec<String>, refresh: bool, policy: SizePolicy) -> CmdResult<()> {
     let st = state.inner().clone();
     let cancel = Arc::new(AtomicBool::new(false));
     {
@@ -210,38 +263,39 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
     }
     std::thread::spawn(move || {
         let threads = st.budget.read().index_threads.clamp(1, 4);
+        let save = |st: &crate::state::AppState| {
+            let mut c = st.folder_sizes.lock();
+            c.trim(policy.max_entries.max(100));
+            let _ = c.save(&st.paths.sizes);
+        };
         for name in names {
             if cancel.load(Ordering::Relaxed) {
+                save(&st);
                 return;
             }
             let path = Path::new(&dir).join(&name);
-            let cached = if refresh {
-                None
-            } else {
-                st.folder_sizes
-                    .lock()
-                    .get(&path)
-                    .filter(|(_, _, t)| t.elapsed().as_secs() < FOLDER_SIZE_TTL_SECS)
-                    .map(|(b, f, _)| (*b, *f))
-            };
-            let (bytes, files, complete) = match cached {
-                Some((b, f)) => (b, f, true),
-                None => {
-                    let stats = details::folder_stats(&path, threads, Some(&cancel));
-                    if cancel.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    if stats.complete {
-                        let mut map = st.folder_sizes.lock();
-                        if map.len() > 5000 {
-                            map.clear();
-                        }
-                        map.insert(path.clone(), (stats.total_bytes, stats.files, Instant::now()));
-                    }
-                    (stats.total_bytes, stats.files, stats.complete)
+            if is_locked(&st, &path.to_string_lossy()) {
+                continue;
+            }
+            let remembered = if policy.remember { st.folder_sizes.lock().get(&path) } else { None };
+            if let Some(e) = remembered {
+                let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name: name.clone(), bytes: e.bytes, files: e.files, complete: true, cached: true });
+                if !refresh && (now_secs().max(0) as u64).saturating_sub(e.at) < policy.fresh_secs {
+                    continue;
                 }
-            };
-            let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name, bytes, files, complete });
+            }
+            let stats = details::folder_stats(&path, threads, Some(&cancel));
+            if cancel.load(Ordering::Relaxed) {
+                save(&st);
+                return;
+            }
+            if stats.complete && policy.remember {
+                st.folder_sizes.lock().put(&path, stats.total_bytes, stats.files, now_secs().max(0) as u64);
+            }
+            let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name, bytes: stats.total_bytes, files: stats.files, complete: stats.complete, cached: false });
+        }
+        if policy.remember {
+            save(&st);
         }
     });
     Ok(())
@@ -263,9 +317,10 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
     if !st.budget.read().thumbnails {
         return Err("thumbnails are disabled".into());
     }
+    guard(&st, &path)?;
     // Bounded concurrency: decoding is CPU-heavy and must not starve listing.
     let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
-    let bytes = blocking(move || thumbs::thumbnail(Path::new(&path), size, &st.paths.thumbs).map_err(err)).await?;
+    let bytes = blocking(move || thumbs::thumbnail_cached(Path::new(&path), size, advanced_bool(&st, "cache.thumbnails", true).then_some(st.paths.thumbs.as_path())).map_err(err)).await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -400,6 +455,98 @@ pub fn rebuild_index(app: &AppHandle, st: &Shared) {
     publish_index_status(app, st, "ready");
 }
 
+/// Remember that these folders changed, so the index can re-read just them.
+fn note_index_change(st: &Shared, dirs: &[PathBuf]) {
+    let mut pending = st.index_pending.lock();
+    for d in dirs {
+        // Only folders some drive's index covers are worth re-reading.
+        if st.index.read().has_root_for(d) {
+            pending.0.insert(d.clone());
+        }
+    }
+    if !pending.0.is_empty() {
+        pending.1 = Some(std::time::Instant::now());
+        st.index_wake.notify_one();
+    }
+}
+
+/// Quiet period after the last change before the index is updated, so a
+/// burst (a build, an unzip, a big copy) costs one update instead of many.
+const INDEX_QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Saving a drive's index to disk is slow for big drives; changes are saved at most this often.
+const INDEX_SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+/// If more folders than this changed at once, a full refresh is cheaper than re-reading each.
+const INDEX_MAX_FOLDERS: usize = 400;
+
+/// Keep search current between full rescans: wait for changes to settle,
+/// then re-read only the folders that changed (`Index::refreshed_dir`) and
+/// swap the result in. While a full rescan runs, changes wait for it: it will
+/// see them anyway.
+fn run_index_updates(app: AppHandle, st: Shared) {
+    let mut unsaved: std::collections::HashSet<PathBuf> = Default::default();
+    let mut last_save = std::time::Instant::now();
+    loop {
+        let dirs: Vec<PathBuf> = {
+            let mut pending = st.index_pending.lock();
+            while pending.0.is_empty() {
+                if !unsaved.is_empty() && last_save.elapsed() >= INDEX_SAVE_EVERY {
+                    break;
+                }
+                // Wake for changes, or when saved changes are due to be written.
+                let timeout = if unsaved.is_empty() { std::time::Duration::from_secs(3600) } else { INDEX_SAVE_EVERY.saturating_sub(last_save.elapsed()).max(std::time::Duration::from_secs(1)) };
+                st.index_wake.wait_for(&mut pending, timeout);
+            }
+            // Let a burst settle.
+            while let Some(at) = pending.1 {
+                let left = INDEX_QUIET.saturating_sub(at.elapsed());
+                if left.is_zero() {
+                    break;
+                }
+                st.index_wake.wait_for(&mut pending, left);
+            }
+            if st.index_busy.load(Ordering::SeqCst) {
+                // A full scan is running; try again after it.
+                drop(pending);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                continue;
+            }
+            pending.1 = None;
+            std::mem::take(&mut pending.0).into_iter().collect()
+        };
+
+        if !dirs.is_empty() && dirs.len() <= INDEX_MAX_FOLDERS {
+            let skip = fast_core::index::default_skip_list();
+            let mut changed = false;
+            // Parents first, so a refreshed parent does not undo work on a child's entry.
+            let mut dirs = dirs;
+            dirs.sort();
+            for dir in dirs {
+                let set = st.index.read().clone();
+                let Some(part) = set.parts().iter().find(|p| p.covers(&dir) && p.find_path(&dir).is_some()).cloned() else { continue };
+                let Some(updated) = part.refreshed_dir(&dir, &skip) else { continue };
+                let root = part.roots.first().map(|&r| PathBuf::from(part.name(r))).unwrap_or_default();
+                let mut w = st.index.write();
+                *w = Arc::new(w.with_part(Arc::new(updated)));
+                unsaved.insert(root);
+                changed = true;
+            }
+            if changed {
+                publish_index_status(&app, &st, "ready");
+            }
+        }
+
+        if !unsaved.is_empty() && last_save.elapsed() >= INDEX_SAVE_EVERY {
+            let set = st.index.read().clone();
+            for root in unsaved.drain() {
+                if let Some(part) = set.parts().iter().find(|p| p.roots.first().map(|&r| p.name(r) == root.to_string_lossy()) == Some(true)) {
+                    let _ = part.save(&part_file(&st, &root));
+                }
+            }
+            last_save = std::time::Instant::now();
+        }
+    }
+}
+
 /// How often the background index is refreshed while the app is open.
 const REFRESH_SECS: u64 = 30 * 60;
 
@@ -407,6 +554,10 @@ const REFRESH_SECS: u64 = 30 * 60;
 /// window opens), then refresh in the background if the budget allows, and
 /// again every half hour.
 pub fn start_indexing(app: AppHandle, st: Shared) {
+    {
+        let (app, st) = (app.clone(), st.clone());
+        let _ = std::thread::Builder::new().name("index-updates".into()).spawn(move || run_index_updates(app, st));
+    }
     std::thread::Builder::new()
         .name("indexer".into())
         .spawn(move || {
@@ -512,6 +663,7 @@ pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, sco
                 (set.search(&q, None, include_hidden, limit), pending)
             }
         };
+        let hits: Vec<Hit> = if st.locks.read().is_empty() { hits } else { hits.into_iter().filter(|h| !is_locked(&st, &h.path)).collect() };
         let mut response = SearchResponse {
             hits,
             source: "index",
@@ -528,6 +680,7 @@ pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, sco
         response.searching = true;
 
         let threads = st.budget.read().io_threads.clamp(4, 16);
+        let st_live = st.clone();
         std::thread::Builder::new()
             .name("live-search".into())
             .spawn(move || {
@@ -540,6 +693,7 @@ pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, sco
                 let mut base = 0usize;
                 for root in &live_roots {
                     let seen = fast_core::search::live_search(root, &q, &opts, |hits, so_far| {
+                        let hits: Vec<Hit> = if st_live.locks.read().is_empty() { hits } else { hits.into_iter().filter(|h| !is_locked(&st_live, &h.path)).collect() };
                         if !hits.is_empty() && !cancel.load(Ordering::Relaxed) {
                             let _ = app.emit("search-hits", SearchBatch { id, hits, scanned: base + so_far, done: false });
                         }
@@ -584,6 +738,9 @@ struct AnalysisProgress {
 pub async fn analysis_snapshot(state: State<'_, Shared>, path: String) -> CmdResult<Option<AnalysisResult>> {
     let st = state.inner().clone();
     blocking(move || {
+        if !advanced_bool(&st, "cache.usageSnapshots", true) {
+            return Ok(None);
+        }
         Ok(usage::load_snapshot(&st.paths.usage, Path::new(&path))
             .map(|(analysis, taken_at)| AnalysisResult { path, analysis, taken_at }))
     })
@@ -612,7 +769,8 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
             // A finished snapshot is kept while the scan runs; only without
             // one are the partial results saved as checkpoints, so closing
             // the app mid-scan still leaves something to show next time.
-            let has_complete = usage::load_snapshot(&st.paths.usage, &root).is_some_and(|(a, _)| a.complete);
+            let keep = advanced_bool(&st, "cache.usageSnapshots", true);
+            let has_complete = !keep || usage::load_snapshot(&st.paths.usage, &root).is_some_and(|(a, _)| a.complete);
             let on_partial = |analysis: Analysis| {
                 let taken_at = now_secs();
                 if !has_complete {
@@ -645,8 +803,10 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
             match result {
                 Some(analysis) => {
                     let taken_at = now_secs();
-                    let _ = usage::save_snapshot(&st.paths.usage, &root, &analysis, taken_at);
-                    usage::prune_snapshots(&st.paths.usage, 40, 8 * 1024 * 1024);
+                    if keep {
+                        let _ = usage::save_snapshot(&st.paths.usage, &root, &analysis, taken_at);
+                        usage::prune_snapshots(&st.paths.usage, 40, 8 * 1024 * 1024);
+                    }
                     let _ = app.emit("analysis-done", AnalysisResult { path: path.clone(), analysis, taken_at });
                 }
                 // Cancelled because the person left or started it again: say nothing.
@@ -675,15 +835,149 @@ pub fn analyze_cancel(state: State<'_, Shared>, path: String) {
 // File operations
 // ---------------------------------------------------------------------------
 
-fn fs_changed(app: &AppHandle, st: &Shared, dirs: Vec<PathBuf>) {
+pub(crate) fn fs_changed(app: &AppHandle, st: &Shared, dirs: Vec<PathBuf>) {
     {
         let mut cache = st.listings.lock();
         for d in &dirs {
             cache.invalidate(d);
         }
     }
+    note_index_change(st, &dirs);
     let dirs: Vec<String> = dirs.iter().map(|d| d.to_string_lossy().into_owned()).collect();
     let _ = app.emit("fs-changed", dirs);
+}
+
+/// Move items to the Trash right away and wait for it (Undo uses this; a
+/// bigger delete goes through `delete_start`, which reports progress).
+#[tauri::command]
+pub async fn trash_paths(app: AppHandle, state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        platform::trash(&paths).map_err(err)?;
+        fs_changed(&app, &st, ops::parents(&paths));
+        Ok(())
+    })
+    .await
+}
+
+/// Put items back from the Trash; says how many were found there.
+#[tauri::command]
+pub async fn restore_from_trash(app: AppHandle, state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<usize> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        let found = platform::restore_from_trash(&paths).map_err(err)?;
+        fs_changed(&app, &st, ops::parents(&paths));
+        Ok(found)
+    })
+    .await
+}
+
+/// Make a zip next to the first item (`action` "compress"), or unpack an
+/// archive into a new folder named after it or, with `here`, into its own
+/// folder ("extract"). Runs in the background and reports on the same card as
+/// deletes (`delete-progress`, with `action` set); `delete_control` cancels it.
+#[tauri::command]
+pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: String, paths: Vec<String>, here: bool) -> CmdResult<u64> {
+    use fast_core::ops::{DeletePhase, DeleteProgress};
+    if action != "compress" && action != "extract" {
+        return Err(format!("unknown archive action {action}"));
+    }
+    let st = state.inner().clone();
+    let id = st.next_id.fetch_add(1, Ordering::Relaxed);
+    let cancel = Arc::new(AtomicBool::new(false));
+    st.deletes.lock().insert(id, cancel.clone());
+    std::thread::Builder::new()
+        .name(format!("archive-{id}"))
+        .spawn(move || {
+            let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+            let started = std::time::Instant::now();
+            let first_name = paths.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let snapshot = |phase: DeletePhase, done: u64, total: u64, current: &str, result: &str, error: Option<String>| DeleteProgress {
+                id,
+                phase,
+                permanent: false,
+                selected: paths.len() as u64,
+                items_total: total,
+                items_done: done,
+                current: current.to_string(),
+                errors: error.iter().map(|m| fast_core::transfer::engine::TransferError { path: first_name.clone(), message: m.clone(), needs_elevation: false }).collect(),
+                error_count: error.iter().count() as u64,
+                elapsed_secs: started.elapsed().as_secs_f64(),
+                first_name: first_name.clone(),
+                action: action.clone(),
+                result: result.to_string(),
+                bytes_done: 0,
+                bytes_total: 0,
+            };
+            let _ = app.emit("delete-progress", snapshot(DeletePhase::Scanning, 0, 0, "", "", None));
+            let mut last = std::time::Instant::now();
+            let mut report = |done: u64, total: u64, current: &str| {
+                if last.elapsed() >= std::time::Duration::from_millis(100) {
+                    last = std::time::Instant::now();
+                    let _ = app.emit("delete-progress", snapshot(DeletePhase::Running, done, total, current, "", None));
+                }
+            };
+            let outcome: Result<(PathBuf, u64), fast_core::error::CoreError> = if action == "compress" {
+                match fast_core::archive::default_zip_path(&paths) {
+                    Some(dest) => fast_core::archive::compress_with(&paths, &dest, &cancel, &mut report).map(|m| (m.path, m.files)),
+                    None => Err(fast_core::error::CoreError::Invalid("Nothing to compress.".into())),
+                }
+            } else {
+                let archive = paths[0].clone();
+                let into = if here { archive.parent().map(Path::to_path_buf) } else { fast_core::archive::default_folder(&archive) };
+                match into {
+                    Some(into) => fast_core::archive::extract_with(&archive, &into, &cancel, &mut report).map(|u| (u.folder, u.files)),
+                    None => Err(fast_core::error::CoreError::Invalid("Cannot choose a folder for this archive.".into())),
+                }
+            };
+            let was_cancelled = cancel.load(Ordering::Relaxed);
+            let made = outcome.as_ref().ok().map(|(p, _)| p.clone());
+            let final_progress = match outcome {
+                Ok((path, files)) => snapshot(DeletePhase::Done, files, files, "", &path.to_string_lossy(), None),
+                Err(_) if was_cancelled => snapshot(DeletePhase::Cancelled, 0, 0, "", "", None),
+                Err(e) => snapshot(DeletePhase::Failed, 0, 0, "", "", Some(e.to_string())),
+            };
+            let _ = app.emit("delete-progress", final_progress);
+            st.deletes.lock().remove(&id);
+            let mut touched: Vec<PathBuf> = paths.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+            if let Some(made) = made {
+                // The new zip's folder, or the folder that was unpacked into and the one holding it.
+                touched.extend(made.parent().map(Path::to_path_buf));
+                if action == "extract" {
+                    touched.push(made);
+                }
+            }
+            fs_changed(&app, &st, touched);
+        })
+        .map_err(err)?;
+    Ok(id)
+}
+
+/// The folders a window has open. They are watched, so a change made by
+/// another program refreshes the listing without pressing F5.
+#[tauri::command]
+pub async fn watch_dirs(state: State<'_, Shared>, window: tauri::WebviewWindow, dirs: Vec<String>) -> CmdResult<()> {
+    let st = state.inner().clone();
+    let label = window.label().to_string();
+    blocking(move || {
+        let all: Vec<PathBuf> = {
+            let mut sets = st.watch_sets.lock();
+            if dirs.is_empty() {
+                sets.remove(&label);
+            } else {
+                sets.insert(label, dirs.into_iter().map(PathBuf::from).collect());
+            }
+            let mut all: Vec<PathBuf> = sets.values().flatten().cloned().collect();
+            all.sort();
+            all.dedup();
+            all
+        };
+        st.watcher.set_dirs(all);
+        Ok(())
+    })
+    .await
 }
 
 /// Names in `dest_dir` that the given sources would collide with.
@@ -724,6 +1018,9 @@ fn remember_transfer(st: &Shared, p: &Progress) {
 #[tauri::command]
 pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: TransferSpec) -> CmdResult<u64> {
     let st = state.inner().clone();
+    for p in spec.sources.iter().chain(std::iter::once(&spec.dest_dir)) {
+        guard(&st, &p.to_string_lossy())?;
+    }
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     let (mut budget, drive_list) = (st.budget.read().clone(), st.drives.read().clone());
     let (remember, limit, explore) = {
@@ -921,6 +1218,9 @@ pub async fn delete_start(
     permanent: bool,
 ) -> CmdResult<u64> {
     let st = state.inner().clone();
+    for p in &paths {
+        guard(&st, p)?;
+    }
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     let cancel = Arc::new(AtomicBool::new(false));
     st.deletes.lock().insert(id, cancel.clone());
@@ -992,6 +1292,7 @@ pub async fn clear_history(state: State<'_, Shared>) -> CmdResult<()> {
 pub async fn rename_item(app: AppHandle, state: State<'_, Shared>, path: String, new_name: String) -> CmdResult<String> {
     let st = state.inner().clone();
     blocking(move || {
+        guard(&st, &path)?;
         let p = PathBuf::from(path);
         let target = entry::rename(&p, &new_name).map_err(err)?;
         fs_changed(&app, &st, ops::parents(&[p]));
@@ -1010,6 +1311,7 @@ pub async fn create_item(
 ) -> CmdResult<String> {
     let st = state.inner().clone();
     blocking(move || {
+        guard(&st, &dir)?;
         if name.is_empty() || name.contains(['/', '\\']) {
             return Err(format!("invalid name: {name:?}"));
         }
@@ -1022,8 +1324,42 @@ pub async fn create_item(
 }
 
 #[tauri::command]
-pub async fn open_item(path: String) -> CmdResult<()> {
-    blocking(move || platform::open_path(Path::new(&path)).map_err(err)).await
+pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        guard(&st, &path)?;
+        // Nothing to open it with: say so in a form the interface turns into an app chooser.
+        if !path.contains("://") && Path::new(&path).exists() {
+            if let fast_core::openwith::Check::Missing(why) = fast_core::openwith::check(Path::new(&path)) {
+                return Err(format!("no-handler:{why}"));
+            }
+        }
+        platform::open_path(Path::new(&path)).map_err(err)
+    })
+    .await
+}
+
+/// Programs that could open a file: the default, the ones made for it, and the rest.
+#[tauri::command]
+pub async fn open_choices(path: String) -> CmdResult<fast_core::openwith::Choices> {
+    blocking(move || Ok(fast_core::openwith::choices(Path::new(&path)))).await
+}
+
+/// Open a file with a chosen program; `always` makes it the default where the system allows.
+#[tauri::command]
+pub async fn open_with_app(state: State<'_, Shared>, path: String, app: String, always: bool) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        guard(&st, &path)?;
+        fast_core::openwith::open_with(Path::new(&path), &app, always).map_err(err)
+    })
+    .await
+}
+
+/// The system's own chooser window (Windows). Other systems answer with an error and the interface uses its own.
+#[tauri::command]
+pub async fn open_system_chooser(path: String) -> CmdResult<()> {
+    blocking(move || fast_core::openwith::system_chooser(Path::new(&path)).map_err(err)).await
 }
 
 #[tauri::command]
@@ -1158,31 +1494,313 @@ pub struct AppDetails {
 pub struct FullReport {
     app: AppDetails,
     system: fast_core::sysreport::SystemReport,
+    /// Unix seconds when `system` was read, when this came from the saved copy.
+    cached_at: Option<i64>,
+}
+
+/// What is kept on disk between runs (the app's own numbers are never stored).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedHardware {
+    system: fast_core::sysreport::SystemReport,
+    at: i64,
+}
+
+fn load_saved(st: &crate::state::AppState) -> Option<SavedHardware> {
+    std::fs::read(&st.paths.hardware).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+fn save_hardware(st: &crate::state::AppState, system: &fast_core::sysreport::SystemReport) -> i64 {
+    let at = now_secs();
+    if advanced_bool(st, "cache.hardware", true) {
+        let _ = fast_core::settings::write_json(&st.paths.hardware, &SavedHardware { system: system.clone(), at });
+    }
+    at
+}
+
+fn advanced_bool(st: &crate::state::AppState, key: &str, default: bool) -> bool {
+    st.settings.read().advanced.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+/// Keep the thumbnail cache within its limit (Settings > Storage); 0 means no limit.
+pub fn trim_thumbnails(st: &crate::state::AppState) {
+    let mb = advanced_u64(st, "cache.thumbnailsMaxMb", 512);
+    if mb > 0 {
+        thumbs::trim_cache(&st.paths.thumbs, mb * 1024 * 1024);
+    }
+}
+
+fn advanced_u64(st: &crate::state::AppState, key: &str, default: u64) -> u64 {
+    st.settings.read().advanced.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+}
+
+fn app_details(st: &crate::state::AppState) -> AppDetails {
+    AppDetails {
+        version: env!("CARGO_PKG_VERSION"),
+        license: env!("CARGO_PKG_LICENSE"),
+        profile: if cfg!(debug_assertions) { "debug" } else { "release" },
+        arch: std::env::consts::ARCH,
+        os: std::env::consts::OS,
+        tauri: tauri::VERSION,
+        webview: tauri::webview_version().ok(),
+        started_secs_ago: st.started.elapsed().as_secs(),
+        settings_dir: st.paths.settings.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        cache_dir: st.paths.thumbs.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+    }
 }
 
 /// Everything the About page shows. Reading drive health and hardware can
-/// take a second or two, so this runs off the UI thread and the page shows
-/// what it already has while it waits.
+/// take a second or two, so a saved copy is used while it is recent enough
+/// (Settings > Storage), and `refresh` forces a new reading.
 #[tauri::command]
-pub async fn system_report(state: State<'_, Shared>) -> CmdResult<FullReport> {
+pub async fn system_report(state: State<'_, Shared>, refresh: Option<bool>) -> CmdResult<FullReport> {
     let st = state.inner().clone();
     blocking(move || {
+        let keep = advanced_bool(&st, "cache.hardware", true);
+        let max_age = advanced_u64(&st, "cache.hardwareMaxAgeHours", 24) * 3600;
+        if keep && !refresh.unwrap_or(false) {
+            if let Some(saved) = load_saved(&st) {
+                let age = (now_secs() - saved.at).max(0) as u64;
+                if max_age == 0 || age <= max_age {
+                    return Ok(FullReport { app: app_details(&st), system: saved.system, cached_at: Some(saved.at) });
+                }
+            }
+        }
         let system = fast_core::sysreport::collect();
-        Ok(FullReport {
-            app: AppDetails {
-                version: env!("CARGO_PKG_VERSION"),
-                license: env!("CARGO_PKG_LICENSE"),
-                profile: if cfg!(debug_assertions) { "debug" } else { "release" },
-                arch: std::env::consts::ARCH,
-                os: std::env::consts::OS,
-                tauri: tauri::VERSION,
-                webview: tauri::webview_version().ok(),
-                started_secs_ago: st.started.elapsed().as_secs(),
-                settings_dir: st.paths.settings.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-                cache_dir: st.paths.thumbs.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-            },
-            system,
+        let at = save_hardware(&st, &system);
+        Ok(FullReport { app: app_details(&st), system, cached_at: keep.then_some(at) })
+    })
+    .await
+}
+
+/// Read one drive's SMART data with administrator rights, then update the saved report.
+#[tauri::command]
+pub async fn disk_smart_admin(state: State<'_, Shared>, device: String) -> CmdResult<FullReport> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let args = fast_core::sysreport::smartctl_args(&device).ok_or("That drive cannot be read this way.")?;
+        let program = which_program("smartctl").ok_or("Reading drive health needs smartmontools (smartctl). Install it and try again.")?;
+        std::fs::create_dir_all(&st.paths.scratch).map_err(err)?;
+        let out = st.paths.scratch.join(format!("smart-{}.json", st.next_id.fetch_add(1, Ordering::Relaxed)));
+        // The elevated helper cannot hand output back, so it writes a file only the app reads.
+        #[cfg(windows)]
+        let (exe, argv) = ("cmd.exe".to_string(), vec!["/c".to_string(), format!("\"{}\" {} > \"{}\"", program.display(), args.join(" "), out.display())]);
+        #[cfg(not(windows))]
+        let (exe, argv) = {
+            let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+            ("sh".to_string(), vec!["-c".to_string(), format!("{} {} > {}", q(&program.to_string_lossy()), args.iter().map(|a| q(a)).collect::<Vec<_>>().join(" "), q(&out.to_string_lossy()))])
+        };
+        let result = platform::run_elevated(Path::new(&exe), &argv).map_err(err)?;
+        let text = std::fs::read_to_string(&out).unwrap_or_default();
+        let _ = std::fs::remove_file(&out);
+        if matches!(result, platform::Elevation::Declined) {
+            return Err("Administrator permission was not given.".to_string());
+        }
+        let smart = fast_core::sysreport::parse_smartctl(&text).ok_or("The drive did not return SMART data (it may not support it).")?;
+        let mut system = load_saved(&st).map(|s| s.system).unwrap_or_else(fast_core::sysreport::collect);
+        if let Some(d) = system.disks.iter_mut().find(|d| d.device == device) {
+            fast_core::sysreport::apply_smart(d, smart);
+        }
+        let at = save_hardware(&st, &system);
+        Ok(FullReport { app: app_details(&st), system, cached_at: Some(at) })
+    })
+    .await
+}
+
+fn which_program(name: &str) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
+        .or_else(|| ["/usr/sbin", "/usr/local/sbin", "/opt/homebrew/bin", r"C:\Program Files\smartmontools\bin"].iter().map(|d| Path::new(d).join(&exe)).find(|p| p.is_file()))
+}
+
+// ---------------------------------------------------------------------------
+// In-app passcodes for folders and drives
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockInfo {
+    id: String,
+    path: String,
+    /// Unlocked right now (until it relocks).
+    open: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocksState {
+    has_main: bool,
+    locks: Vec<LockInfo>,
+}
+
+fn locks_state(st: &crate::state::AppState) -> LocksState {
+    let relock = relock_after(st);
+    let locks = st.locks.read();
+    LocksState {
+        has_main: locks.file.main.is_some(),
+        locks: locks.file.locks.iter().map(|l| LockInfo { id: l.id.clone(), path: l.path.clone(), open: locks.is_open(&l.id, relock) }).collect(),
+    }
+}
+
+fn save_locks(st: &crate::state::AppState) -> CmdResult<()> {
+    st.locks.read().save(&st.paths.locks).map_err(err)
+}
+
+#[tauri::command]
+pub async fn locks_list(state: State<'_, Shared>) -> CmdResult<LocksState> {
+    Ok(locks_state(&state))
+}
+
+/// Lock a folder or drive. The first lock may also set the main password.
+#[tauri::command]
+pub async fn lock_add(state: State<'_, Shared>, path: String, passcode: String, main_password: Option<String>) -> CmdResult<LocksState> {
+    let st = state.inner().clone();
+    blocking(move || {
+        {
+            let mut locks = st.locks.write();
+            if let Some(main) = main_password.filter(|m| !m.is_empty()) {
+                locks.set_main("", &main).map_err(err)?;
+            }
+            locks.add(&path, &passcode).map_err(err)?;
+        }
+        save_locks(&st)?;
+        st.listings.lock().clear();
+        Ok(locks_state(&st))
+    })
+    .await
+}
+
+/// Try a passcode for whatever covers `path`. Returns whether it opened.
+#[tauri::command]
+pub async fn lock_unlock(state: State<'_, Shared>, path: String, passcode: String) -> CmdResult<bool> {
+    let st = state.inner().clone();
+    blocking(move || Ok(st.locks.write().unlock(&path, &passcode))).await
+}
+
+#[tauri::command]
+pub async fn lock_remove(state: State<'_, Shared>, id: String, secret: String) -> CmdResult<LocksState> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.locks.write().remove(&id, &secret).map_err(err)?;
+        save_locks(&st)?;
+        Ok(locks_state(&st))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn lock_set_main(state: State<'_, Shared>, old: String, new: String) -> CmdResult<LocksState> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.locks.write().set_main(&old, &new).map_err(err)?;
+        save_locks(&st)?;
+        Ok(locks_state(&st))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn locks_relock(state: State<'_, Shared>) -> CmdResult<LocksState> {
+    state.locks.write().relock_all();
+    state.listings.lock().clear();
+    Ok(locks_state(&state))
+}
+
+// ---------------------------------------------------------------------------
+// What the app itself is using
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceUsage {
+    /// Share of one CPU core the app used since the last reading (can exceed 100 with several threads).
+    cpu_percent: f32,
+    /// Memory held by the app (resident).
+    memory_bytes: u64,
+    virtual_bytes: u64,
+    /// Bytes the app has read and written since it started.
+    disk_read_total: u64,
+    disk_write_total: u64,
+    threads: usize,
+    cpus: usize,
+    /// The whole machine's memory, and how much of it is free.
+    system_total_bytes: u64,
+    system_available_bytes: u64,
+    /// What the app keeps for later: caches on disk and in memory (see Storage).
+    stored_disk_bytes: u64,
+    cached_memory_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn resource_usage(state: State<'_, Shared>) -> CmdResult<ResourceUsage> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+    let st = state.inner().clone();
+    blocking(move || {
+        let pid = sysinfo::get_current_pid().map_err(|e| e.to_string())?;
+        let mut sys = st.monitor.lock();
+        sys.refresh_memory();
+        sys.refresh_cpu_all();
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::everything());
+        let p = sys.process(pid).ok_or("The app's own process could not be read.")?;
+        let disk = p.disk_usage();
+        let (cpu, mem, virt) = (p.cpu_usage(), p.memory(), p.virtual_memory());
+        let (total, avail, cpus) = (sys.total_memory(), sys.available_memory(), sys.cpus().len().max(1));
+        drop(sys);
+        let disk_bytes: u64 = [&st.paths.thumbs, &st.paths.index, &st.paths.usage, &st.paths.sizes, &st.paths.hardware, &st.paths.scratch, &st.paths.history, &st.paths.predictor]
+            .iter()
+            .map(|p| disk_footprint(p).0)
+            .sum();
+        let cached_mem = st.index.read().memory_bytes() as u64 + st.listings.lock().memory_bytes() as u64 + st.folder_sizes.lock().memory_bytes() as u64;
+        Ok(ResourceUsage {
+            cpu_percent: cpu,
+            memory_bytes: mem,
+            virtual_bytes: virt,
+            disk_read_total: disk.total_read_bytes,
+            disk_write_total: disk.total_written_bytes,
+            threads: thread_count(),
+            cpus,
+            system_total_bytes: total,
+            system_available_bytes: avail,
+            stored_disk_bytes: disk_bytes,
+            cached_memory_bytes: cached_mem,
         })
+    })
+    .await
+}
+
+fn thread_count() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_dir("/proc/self/task").map(|d| d.count()).unwrap_or(0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
+/// Give back memory the app is not using: drop cached folder listings and ask
+/// the allocator to return freed pages to the system. Returns (before, after).
+#[tauri::command]
+pub async fn compact_memory(state: State<'_, Shared>) -> CmdResult<(u64, u64)> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+    let st = state.inner().clone();
+    blocking(move || {
+        let pid = sysinfo::get_current_pid().map_err(|e| e.to_string())?;
+        let read = |st: &crate::state::AppState| {
+            let mut sys = st.monitor.lock();
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_memory());
+            sys.process(pid).map(|p| p.memory()).unwrap_or(0)
+        };
+        let before = read(&st);
+        st.listings.lock().clear();
+        fast_core::browse::clear_cache();
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        // SAFETY: malloc_trim only returns unused heap pages to the system.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+        Ok((before, read(&st)))
     })
     .await
 }
@@ -1239,6 +1857,10 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
         let (scratch_bytes, scratch_items) = disk_footprint(&st.paths.scratch);
         let idx = st.index.read().clone();
         let history = st.history.lock().info(&st.paths.history);
+        let (size_items, size_mem) = {
+            let c = st.folder_sizes.lock();
+            (c.len() as u64, c.memory_bytes() as u64)
+        };
         let (listing_items, listing_mem) = {
             let l = st.listings.lock();
             (l.len() as u64, l.memory_bytes() as u64)
@@ -1272,6 +1894,15 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
                 rebuildable: true,
             },
             CacheEntry {
+                id: "sizes",
+                label: "Folder sizes",
+                description: "How big each folder was the last time it was measured, shown at once and refreshed in the background.",
+                disk_bytes: disk_footprint(&st.paths.sizes).0,
+                memory_bytes: size_mem,
+                items: size_items,
+                rebuildable: true,
+            },
+            CacheEntry {
                 id: "usage",
                 label: "Disk usage snapshots",
                 description: "The last result for each folder analysed, shown immediately next time.",
@@ -1299,6 +1930,15 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
                 rebuildable: false,
             },
             CacheEntry {
+                id: "hardware",
+                label: "Hardware details",
+                description: "What About shows about this computer and its drives, saved so the page opens at once.",
+                disk_bytes: disk_footprint(&st.paths.hardware).0,
+                memory_bytes: 0,
+                items: u64::from(st.paths.hardware.is_file()),
+                rebuildable: true,
+            },
+            CacheEntry {
                 id: "scratch",
                 label: "Administrator work files",
                 description: "Temporary files used while running an action as administrator.",
@@ -1320,8 +1960,12 @@ pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -
         let all = id == "all";
         let wants = |name: &str| all || id == name;
         if wants("listings") {
-            st.folder_sizes.lock().clear();
             st.listings.lock().clear();
+        }
+        if wants("sizes") {
+            let mut c = st.folder_sizes.lock();
+            c.clear();
+            let _ = c.save(&st.paths.sizes);
         }
         if wants("index") {
             *st.index.write() = Arc::new(fast_core::indexset::IndexSet::default());
@@ -1341,6 +1985,9 @@ pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -
         if wants("predictions") {
             st.predictor.lock().clear();
             let _ = st.predictor.lock().save(&st.paths.predictor);
+        }
+        if wants("hardware") {
+            let _ = std::fs::remove_file(&st.paths.hardware);
         }
         if wants("scratch") && st.elevated.lock().is_empty() {
             remove_path(&st.paths.scratch);
@@ -1479,6 +2126,62 @@ pub async fn network_disconnect(app: AppHandle, state: State<'_, Shared>, mount:
         {
             if run_tool("gio", &["mount", "-u", &mount]).is_err() {
                 run_tool("umount", &[&mount])?;
+            }
+        }
+        *st.drives.write() = fast_core::drives::list_drives();
+        Ok(())
+    })
+    .await?;
+    let _ = app.emit("fs-changed", Vec::<String>::new());
+    Ok(())
+}
+
+/// The block device behind a Linux mount point, from /proc/mounts.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn device_of(mount: &str) -> Option<String> {
+    let text = std::fs::read_to_string("/proc/mounts").ok()?;
+    text.lines().find_map(|l| {
+        let mut f = l.split_whitespace();
+        let (dev, at) = (f.next()?, f.next()?);
+        // Mount points with spaces are written as \040.
+        (at.replace("\\040", " ") == mount && dev.starts_with("/dev/")).then(|| dev.to_string())
+    })
+}
+
+/// Safely remove a detachable drive: unmount it, and power the device down
+/// where the system supports that. Only drives the system reports as removable
+/// can be ejected, so a system volume is never touched by mistake.
+#[tauri::command]
+pub async fn drive_eject(app: AppHandle, state: State<'_, Shared>, mount: String) -> CmdResult<()> {
+    let st = state.inner().clone();
+    let allowed = st.drives.read().iter().any(|d| d.mount == mount && (d.removable || d.media == fast_core::drives::Media::Removable));
+    if !allowed {
+        return Err("This drive is not a detachable one.".into());
+    }
+    blocking(move || {
+        #[cfg(windows)]
+        {
+            let letter = mount.trim_end_matches('\\').to_string();
+            if letter.len() != 2 || !letter.ends_with(':') || !letter.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                return Err("Unexpected drive name.".to_string());
+            }
+            let script = format!("$s = New-Object -ComObject Shell.Application; $s.Namespace(17).ParseName('{letter}').InvokeVerb('Eject')");
+            run_tool("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script])?;
+        }
+        #[cfg(target_os = "macos")]
+        run_tool("diskutil", &["eject", &mount])?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let dev = device_of(&mount);
+            let by_udisks = dev.as_ref().map(|d| run_tool("udisksctl", &["unmount", "-b", d]).is_ok()).unwrap_or(false);
+            if by_udisks {
+                // Power down the whole device (the parent of a partition), if the system allows it.
+                if let Some(d) = &dev {
+                    let parent = run_tool("lsblk", &["-no", "pkname", d]).ok().filter(|p| !p.is_empty()).map(|p| format!("/dev/{p}")).unwrap_or_else(|| d.clone());
+                    let _ = run_tool("udisksctl", &["power-off", "-b", &parent]);
+                }
+            } else {
+                run_tool("umount", &[&mount]).map_err(|e| format!("Could not remove the drive: {e}"))?;
             }
         }
         *st.drives.write() = fast_core::drives::list_drives();
@@ -1772,18 +2475,15 @@ pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: Str
 }
 
 
-/// A tab was let go at screen position (x, y) of the calling window. If that
-/// is over the tab bar of another app window, hand the tab to it (it picks the
-/// slot from the position) and report true; the caller then removes its copy.
-/// With `close_source` the calling window had only that tab, so it closes.
-#[tauri::command]
-pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: String, x: f64, y: f64, close_source: bool) -> CmdResult<bool> {
+/// Logical height of the tab strip, used to decide whether a pointer is over another window's tabs.
+const TAB_BAR_HEIGHT: f64 = 46.0;
+
+/// The other app window whose tab strip is under a screen position (physical px):
+/// its label, its left and top edges, and its scale factor.
+fn tab_bar_under(app: &AppHandle, source: &str, px: f64, py: f64) -> Option<(String, f64, f64, f64)> {
     use tauri::Manager;
-    const TAB_BAR_HEIGHT: f64 = 46.0; // logical px: title bar with tabs
-    let scale = window.scale_factor().map_err(err)?;
-    let (px, py) = (x * scale, y * scale);
     for (label, target) in app.webview_windows() {
-        if label == window.label() || !(label == "main" || label.starts_with("window-")) {
+        if label == source || !(label == "main" || label.starts_with("window-")) {
             continue;
         }
         if target.is_minimized().unwrap_or(false) || !target.is_visible().unwrap_or(true) {
@@ -1791,20 +2491,53 @@ pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: St
         }
         let (Ok(pos), Ok(size), Ok(ts)) = (target.outer_position(), target.outer_size(), target.scale_factor()) else { continue };
         let (left, top) = (pos.x as f64, pos.y as f64);
-        let inside = px >= left && px <= left + size.width as f64 && py >= top && py <= top + TAB_BAR_HEIGHT * ts;
-        if !inside {
+        if px >= left && px <= left + size.width as f64 && py >= top && py <= top + TAB_BAR_HEIGHT * ts {
+            return Some((label, left, top, ts));
+        }
+    }
+    None
+}
+
+/// While a tab is being dragged outside its own window: tell the window under
+/// the pointer (if its tab strip is there) where the tab would land, so it can
+/// outline the slot and move its tabs aside. `active: false` clears every outline.
+#[tauri::command]
+pub async fn tab_hover(app: AppHandle, window: tauri::WebviewWindow, x: f64, y: f64, width: f64, active: bool) -> CmdResult<()> {
+    use tauri::Manager;
+    let scale = window.scale_factor().map_err(err)?;
+    let hit = if active { tab_bar_under(&app, window.label(), x * scale, y * scale) } else { None };
+    for (label, _) in app.webview_windows() {
+        if !(label == "main" || label.starts_with("window-")) {
             continue;
         }
-        let payload = serde_json::json!({ "location": location, "x": (px - left) / ts, "y": (py - top) / ts });
-        app.emit_to(label.as_str(), "tab-drop", payload).map_err(err)?;
-        let _ = target.unminimize();
-        let _ = target.set_focus();
-        if close_source {
-            let _ = window.close();
-        }
-        return Ok(true);
+        let payload = match &hit {
+            Some((l, left, _, ts)) if *l == label => serde_json::json!({ "x": (x * scale - left) / ts, "w": width }),
+            _ => serde_json::json!({ "x": serde_json::Value::Null, "w": width }),
+        };
+        let _ = app.emit_to(label.as_str(), "tab-hover", payload);
     }
-    Ok(false)
+    Ok(())
+}
+
+/// A tab was let go at screen position (x, y) of the calling window. If that
+/// is over the tab bar of another app window, hand the tab to it (it picks the
+/// slot from the position) and report true; the caller then removes its copy.
+/// With `close_source` the calling window had only that tab, so it closes.
+#[tauri::command]
+pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: String, x: f64, y: f64, close_source: bool) -> CmdResult<bool> {
+    use tauri::Manager;
+    let scale = window.scale_factor().map_err(err)?;
+    let (px, py) = (x * scale, y * scale);
+    let Some((label, left, top, ts)) = tab_bar_under(&app, window.label(), px, py) else { return Ok(false) };
+    let Some(target) = app.get_webview_window(&label) else { return Ok(false) };
+    let payload = serde_json::json!({ "location": location, "x": (px - left) / ts, "y": (py - top) / ts });
+    app.emit_to(label.as_str(), "tab-drop", payload).map_err(err)?;
+    let _ = target.unminimize();
+    let _ = target.set_focus();
+    if close_source {
+        let _ = window.close();
+    }
+    Ok(true)
 }
 
 /// Open one of the app's panels as its own native window (it moves, resizes

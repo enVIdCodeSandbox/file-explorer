@@ -50,6 +50,8 @@ pub struct Details {
     /// Direct children, for folders.
     pub item_count: Option<u64>,
     pub volume: Option<Drive>,
+    /// What a photo, song or video says about itself (camera, tags, length…).
+    pub media: Vec<crate::media::Fact>,
 }
 
 pub fn details(path: &Path, drives: &[Drive]) -> Result<Details> {
@@ -93,6 +95,7 @@ pub fn details(path: &Path, drives: &[Drive]) -> Result<Details> {
         attributes: attributes(&meta),
         image,
         item_count,
+        media: if is_dir { Vec::new() } else { crate::media::read(path) },
         volume: drives::volume_for(path, drives).cloned(),
     })
 }

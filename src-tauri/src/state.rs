@@ -22,12 +22,24 @@ pub struct Paths {
     pub session: PathBuf,
     pub predictor: PathBuf,
     pub history: PathBuf,
+    /// Remembered folder sizes.
+    pub sizes: PathBuf,
+    /// The last hardware report, so About opens instantly.
+    pub hardware: PathBuf,
+    /// Hashed passcodes for locked folders and drives.
+    pub locks: PathBuf,
     /// Disk-usage snapshots (one small file per scanned folder).
     pub usage: PathBuf,
     /// Working files for administrator helpers; private to the app.
     pub scratch: PathBuf,
     pub index: PathBuf,
     pub thumbs: PathBuf,
+    /// Fingerprints of SFTP servers the person trusted.
+    pub known_hosts: PathBuf,
+    /// Saved server addresses (never passwords).
+    pub servers: PathBuf,
+    /// Files fetched from a server to open them.
+    pub remote_tmp: PathBuf,
 }
 
 impl Paths {
@@ -37,10 +49,16 @@ impl Paths {
             session: config.join("session.json"),
             predictor: config.join("predictor.json"),
             history: config.join("transfer-history.bin"),
+            sizes: cache.join("folder-sizes.json"),
+            hardware: cache.join("hardware-report.json"),
+            locks: config.join("locks.json"),
             usage: cache.join("usage"),
             scratch: cache.join("elevated"),
             index: cache.join("index"),
             thumbs: cache.join("thumbnails"),
+            known_hosts: config.join("known_hosts"),
+            servers: config.join("servers.json"),
+            remote_tmp: cache.join("remote"),
         }
     }
 }
@@ -144,11 +162,17 @@ pub struct AppState {
     pub index: RwLock<Arc<IndexSet>>,
     pub index_status: Mutex<IndexStatus>,
     pub index_busy: AtomicBool,
+    /// Folders that changed and whose index entries need re-reading, and when the last change came.
+    pub index_pending: Mutex<(std::collections::HashSet<PathBuf>, Option<std::time::Instant>)>,
+    pub index_wake: parking_lot::Condvar,
     pub search_cancel: Mutex<Arc<AtomicBool>>,
     /// Stops the running folder-size job when another folder is opened.
     pub size_cancel: Mutex<Arc<AtomicBool>>,
     /// Folder sizes measured recently: path to (bytes, files, when).
-    pub folder_sizes: Mutex<HashMap<PathBuf, (u64, u64, std::time::Instant)>>,
+    pub folder_sizes: Mutex<fast_core::sizecache::SizeCache>,
+    pub locks: RwLock<fast_core::locks::Locks>,
+    /// Kept between calls so CPU use can be measured as a difference.
+    pub monitor: Mutex<sysinfo::System>,
     pub transfers: Mutex<HashMap<u64, TransferHandle>>,
     pub next_id: AtomicU64,
     pub listings: Mutex<ListingCache>,
@@ -164,8 +188,14 @@ pub struct AppState {
     /// Running disk-usage scans, by scanned path.
     pub analyses: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub drives: RwLock<Vec<Drive>>,
+    /// Servers the person logged in to this run, with open connections ready for reuse.
+    pub remotes: Mutex<HashMap<String, crate::remote::Remote>>,
     /// Temporary download links that are currently being served.
     pub shares: fast_core::share::Shares,
+    /// Tells the app when an open folder changed on disk.
+    pub watcher: fast_core::watch::Watcher,
+    /// The folders each window has open, by window label.
+    pub watch_sets: Mutex<HashMap<String, Vec<PathBuf>>>,
     pub thumb_permits: Arc<tokio::sync::Semaphore>,
     pub started: std::time::Instant,
 }

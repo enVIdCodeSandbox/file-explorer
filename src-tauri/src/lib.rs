@@ -2,6 +2,7 @@
 
 mod commands;
 mod native_dnd;
+mod remote;
 mod state;
 
 use fast_core::history::History;
@@ -37,6 +38,15 @@ pub fn run() {
                 thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
                 drives: RwLock::new(session.drives.clone()),
                 shares: Default::default(),
+                remotes: Mutex::new(HashMap::new()),
+                watcher: {
+                    let handle = app.handle().clone();
+                    fast_core::watch::Watcher::new(move |dirs| {
+                        let st = handle.state::<state::Shared>();
+                        commands::fs_changed(&handle, &st, dirs);
+                    })
+                },
+                watch_sets: Mutex::new(HashMap::new()),
                 predictor: Mutex::new(Predictor::load(&paths.predictor)),
                 history: Mutex::new(History::load(&paths.history)),
                 deletes: Mutex::new(HashMap::new()),
@@ -48,9 +58,13 @@ pub fn run() {
                 index: RwLock::new(Arc::new(fast_core::indexset::IndexSet::default())),
                 index_status: Mutex::new(IndexStatus { state: "idle".into(), ..Default::default() }),
                 index_busy: AtomicBool::new(false),
+                index_pending: Mutex::new(Default::default()),
+                index_wake: Default::default(),
                 search_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
                 size_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
-                folder_sizes: Mutex::new(HashMap::new()),
+                folder_sizes: Mutex::new(fast_core::sizecache::SizeCache::load(&paths.sizes)),
+                locks: RwLock::new(fast_core::locks::Locks::load(&paths.locks)),
+                monitor: Mutex::new(sysinfo::System::new()),
                 transfers: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(1),
                 visits_since_save: AtomicU64::new(0),
@@ -63,9 +77,17 @@ pub fn run() {
             // Re-evaluate the resource budget periodically: plugging in or
             // unplugging a laptop changes what background work is allowed.
             let handle = app.handle().clone();
-            std::thread::Builder::new().name("governor".into()).spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(30));
-                commands::apply_budget(&handle, &state);
+            std::thread::Builder::new().name("governor".into()).spawn(move || {
+                let mut tick: u64 = 0;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    commands::apply_budget(&handle, &state);
+                    // Every ten minutes, keep the thumbnail cache inside its size limit.
+                    if tick % 20 == 1 {
+                        commands::trim_thumbnails(&state);
+                    }
+                    tick += 1;
+                }
             })?;
             Ok(())
         })
@@ -78,6 +100,16 @@ pub fn run() {
                     }
                 }
             }
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                // A closed window no longer needs its folders watched.
+                let st = window.state::<state::Shared>();
+                let all: Vec<std::path::PathBuf> = {
+                    let mut sets = st.watch_sets.lock();
+                    sets.remove(window.label());
+                    sets.values().flatten().cloned().collect()
+                };
+                st.watcher.set_dirs(all);
+            }
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let st = window.state::<state::Shared>();
                 let _ = st.predictor.lock().save(&st.paths.predictor);
@@ -86,6 +118,18 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_dir,
+            remote::remote_connect,
+            remote::remote_disconnect,
+            remote::remote_is_connected,
+            remote::remote_mkdir,
+            remote::remote_rename,
+            remote::remote_copy_start,
+            remote::archive_copy_start,
+            remote::remote_remove_start,
+            remote::servers_list,
+            remote::servers_save,
+            remote::servers_remove,
+            remote::servers_forget_host,
             commands::prefetch,
             commands::record_visit,
             commands::frequent_folders,
@@ -93,6 +137,7 @@ pub fn run() {
             commands::folder_stats,
             commands::open_window,
             commands::drop_tab,
+            commands::tab_hover,
             native_dnd::clipboard_set_files,
             native_dnd::clipboard_get_files,
             native_dnd::drag_out,
@@ -117,6 +162,10 @@ pub fn run() {
             commands::analyze_start,
             commands::analyze_cancel,
             commands::check_conflicts,
+            commands::watch_dirs,
+            commands::archive_start,
+            commands::trash_paths,
+            commands::restore_from_trash,
             commands::transfer_start,
             commands::transfer_control,
             commands::transfer_force_stop,
@@ -131,6 +180,9 @@ pub fn run() {
             commands::rename_item,
             commands::create_item,
             commands::open_item,
+            commands::open_choices,
+            commands::open_with_app,
+            commands::open_system_chooser,
             commands::open_terminal,
             commands::get_settings,
             commands::set_settings,
@@ -150,6 +202,16 @@ pub fn run() {
             commands::read_asset,
             commands::delete_asset,
             commands::network_disconnect,
+            commands::drive_eject,
+            commands::locks_list,
+            commands::lock_add,
+            commands::lock_unlock,
+            commands::lock_remove,
+            commands::lock_set_main,
+            commands::locks_relock,
+            commands::resource_usage,
+            commands::compact_memory,
+            commands::disk_smart_admin,
             commands::clear_cache,
         ])
         .build(tauri::generate_context!())

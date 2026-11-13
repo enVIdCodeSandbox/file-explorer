@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { api, type Details, type FolderStats } from "../api";
 import { useStore } from "../store";
 import { formatCount, formatDate, formatSize, kindOf, typeLabel } from "../util/format";
-import { baseName, parentPath, parseLocation } from "../util/path";
+import { baseName, isArchiveLoc, isRemote, maskAddresses, parentPath, parseLocation } from "../util/path";
 import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
 
@@ -95,7 +95,7 @@ function MultiSummary({ paths }: { paths: string[] }) {
         <Row label="Size" value={files.length ? `${formatSize(fileBytes)}${dirs.length ? " in the files" : ""}` : undefined} />
         <Row label="On disk" value={files.length && onDisk !== fileBytes ? formatSize(onDisk) : undefined} />
         <Row label="Largest file" value={big ? `${big.name} (${formatSize(big.size)})` : undefined} />
-        <Row label="Location" value={parents.size === 1 ? [...parents][0] : `${parents.size} different folders`} mono />
+        <Row label="Location" value={parents.size === 1 ? maskAddresses([...parents][0] ?? "") : `${parents.size} different folders`} mono />
         <Row label="Oldest change" value={times.length ? formatDate(Math.min(...times)) : undefined} />
         <Row label="Newest change" value={times.length ? formatDate(Math.max(...times)) : undefined} />
         <Row label="Read-only" value={items.some((d) => d.readonly) ? `${items.filter((d) => d.readonly).length} of ${items.length}` : undefined} />
@@ -208,15 +208,18 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
       </div>
 
       <dl className="details-list">
-        <Row label="Location" value={d.parent} mono />
+        <Row label="Location" value={d.parent ? maskAddresses(d.parent) : d.parent} mono />
         {!isDir && <Row label="Size" value={`${formatSize(d.size)} (${formatCount(d.size)} bytes)`} />}
         {!isDir && d.sizeOnDisk != null && <Row label="Size on disk" value={formatSize(d.sizeOnDisk)} />}
-        {isDir && <Row label="Contains" value={d.itemCount != null ? `${formatCount(d.itemCount)} items` : null} />}
+        {isDir && <Row label="Contains" value={d.itemCount != null ? `${formatCount(d.itemCount)} ${d.itemCount === 1 ? "item" : "items"}` : null} />}
         <Row label="Modified" value={formatDate(d.modified)} />
         <Row label="Created" value={formatDate(d.created)} />
         <Row label="Accessed" value={formatDate(d.accessed)} />
         <Row label="Content type" value={d.mime} />
         <Row label="Dimensions" value={d.image ? `${d.image[0]} × ${d.image[1]} px` : null} />
+        {d.media.map((f) => (
+          <Row key={f.label} label={f.label} value={f.value} />
+        ))}
         <Row label="Link target" value={d.symlinkTarget} mono />
         <Row label="Read-only" value={d.readonly ? "Yes" : null} />
         <Row label="Hidden" value={d.hidden ? "Yes" : null} />
@@ -225,7 +228,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
           <>
             <Row label="Permissions" value={`${d.unix.mode} (${d.unix.octal})`} mono />
             <Row label="Owner / group" value={`${d.unix.uid} / ${d.unix.gid}`} />
-            <Row label="Hard links" value={d.unix.hardLinks > 1 ? d.unix.hardLinks : null} />
+            <Row label="Hard links" value={!isDir && d.unix.hardLinks > 1 ? d.unix.hardLinks : null} />
             <Row label="Inode" value={d.unix.inode} />
           </>
         )}
@@ -237,7 +240,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
         )}
       </dl>
 
-      {!isDir && (
+      {!isDir && !isRemote(d.path) && !isArchiveLoc(d.path) && (
         <div className="details-section">
           {hash === null ? (
             <button className="secondary" onClick={calcHash}>
@@ -253,7 +256,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
         </div>
       )}
 
-      {isDir && (
+      {isDir && !isRemote(d.path) && !isArchiveLoc(d.path) && (
         <div className="details-section">
           {stats === null ? (
             <button className="secondary" onClick={calcStats}>

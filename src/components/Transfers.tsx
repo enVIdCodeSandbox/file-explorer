@@ -28,6 +28,15 @@ function titleOf(j: Job): string {
   if (j.kind === "delete") {
     const p = j.p;
     const what = p.selected === 1 ? `"${p.firstName}"` : `${formatCount(p.selected)} items`;
+    if (p.action === "compress") return p.phase === "done" ? `Compressed ${what}` : p.phase === "cancelled" ? "Compressing cancelled" : p.phase === "failed" ? `Could not compress ${what}` : `Compressing ${what}`;
+    if (p.action === "extract") return p.phase === "done" ? `Extracted ${what}` : p.phase === "cancelled" ? "Extracting cancelled" : p.phase === "failed" ? `Could not extract ${what}` : `Extracting ${what}`;
+    if (p.action === "upload" || p.action === "download") {
+      const [ing, ed, to] = p.action === "upload" ? ["Uploading", "Uploaded", "Upload"] : ["Downloading", "Downloaded", "Download"];
+      return p.phase === "done" ? `${ed} ${what}` : p.phase === "cancelled" ? `${to} cancelled` : p.phase === "failed" ? `Could not ${to.toLowerCase()} ${what}` : p.phase === "scanning" ? `Preparing to ${to.toLowerCase()} ${what}…` : `${ing} ${what}`;
+    }
+    if (p.action === "unpack") return p.phase === "done" ? `Copied ${what} out of the archive` : p.phase === "cancelled" ? "Copying out cancelled" : p.phase === "failed" ? `Could not copy ${what} out of the archive` : p.phase === "scanning" ? `Preparing to copy ${what} out of the archive…` : `Copying ${what} out of the archive`;
+    if (p.action === "open") return p.phase === "failed" ? `Could not open ${what}` : p.phase === "cancelled" ? "Opening cancelled" : p.phase === "done" ? `Opened ${what}` : `Fetching ${what} to open it`;
+    if (p.action === "remote-delete") return p.phase === "done" ? `Deleted ${what} from the server` : p.phase === "cancelled" ? "Delete cancelled" : p.phase === "failed" ? `Could not delete ${what}` : `Deleting ${what} from the server`;
     if (p.phase === "scanning") return `Preparing to delete ${what}…`;
     if (p.phase === "done") return `Deleted ${what}`;
     if (p.phase === "cancelled") return "Delete cancelled";
@@ -162,7 +171,7 @@ function Card({ job }: { job: Job }) {
             </>
           ) : (
             <div className="transfer-stats muted">
-              <span>{formatCount(job.p.itemsDone)} / {formatCount(job.p.itemsTotal)} items{scanning ? " found so far" : ""}</span>
+              {job.p.bytesTotal > 0 ? <span>{formatSize(job.p.bytesDone)} / {formatSize(job.p.bytesTotal)}</span> : <span>{formatCount(job.p.itemsDone)} / {formatCount(job.p.itemsTotal)} items{scanning ? " found so far" : ""}</span>}
               <span>{formatDuration(job.p.elapsedSecs)}</span>
             </div>
           )}
@@ -361,14 +370,28 @@ function DeleteDetail({ p }: { p: DeleteProgress }) {
   return (
     <div className="transfer-detail">
       <div className="percent">
-        <strong>{p.phase === "scanning" ? "Counting items…" : `${Math.round(fraction * 100)}% complete`}</strong>
+        <strong>{p.phase === "scanning" ? (p.action === "delete" || p.action === "remote-delete" ? "Counting items…" : "Getting ready…") : `${Math.round(fraction * 100)}% complete`}</strong>
       </div>
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
       <dl className="details-list transfer-facts">
-        <dt>Items</dt>
-        <dd>{formatCount(p.itemsDone)} of {formatCount(p.itemsTotal)}</dd>
-        <dt>Method</dt>
-        <dd>{p.permanent ? "Permanent delete" : "Moved to the Recycle Bin / Trash"}</dd>
+        {p.bytesTotal > 0 && (
+          <>
+            <dt>Copied</dt>
+            <dd>{formatSize(p.bytesDone)} of {formatSize(p.bytesTotal)}</dd>
+          </>
+        )}
+        {(p.action === "delete" || p.action === "remote-delete") && (
+          <>
+            <dt>Items</dt>
+            <dd>{formatCount(p.itemsDone)} of {formatCount(p.itemsTotal)}</dd>
+            {p.action === "delete" && (
+              <>
+                <dt>Method</dt>
+                <dd>{p.permanent ? "Permanent delete" : "Moved to the Recycle Bin / Trash"}</dd>
+              </>
+            )}
+          </>
+        )}
         <dt>Elapsed</dt>
         <dd>{formatDuration(p.elapsedSecs)}</dd>
         {p.current && (

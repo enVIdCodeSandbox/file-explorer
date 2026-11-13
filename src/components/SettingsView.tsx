@@ -10,6 +10,8 @@ import { SECTIONS, SETTINGS, getSetting, setSetting, type SettingDef } from "../
 import { useStore } from "../store";
 import { MENU_CATALOG } from "./ContextMenu";
 import { Icon } from "./Icons";
+import { LocksPanel } from "./Locks";
+import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
 import { CustomActionsPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
@@ -103,6 +105,16 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <LayoutEditor />;
     case "storage":
       return <StoragePanel />;
+    case "perfPresets":
+      return <PerfPresetsPanel />;
+    case "uiPresets":
+      return <UiPresetsPanel />;
+    case "profiles":
+      return <ProfilesPanel />;
+    case "resources":
+      return <ResourcesPanel />;
+    case "locks":
+      return <LocksPanel />;
     case "menuItems": {
       const hidden = new Set(value as string[]);
       return (
@@ -243,7 +255,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             <section key={name}>
               <h3>{name}</h3>
               {defs.map((d) => {
-                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage"].includes(d.control.type);
+                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "perfPresets", "uiPresets", "profiles", "resources", "locks"].includes(d.control.type);
                 return (
                   <div key={d.key} className="setting" data-wide={wide || undefined} data-setting={d.key}>
                     <div className="setting-text">

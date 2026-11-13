@@ -33,6 +33,11 @@ fn cache_file(cache_dir: &Path, path: &Path, len: u64, mtime: i64, px: u32) -> P
 
 /// PNG bytes of a thumbnail at most `px` pixels on its longest side.
 pub fn thumbnail(path: &Path, px: u32, cache_dir: &Path) -> Result<Vec<u8>> {
+    thumbnail_cached(path, px, Some(cache_dir))
+}
+
+/// Like [`thumbnail`], but with `None` nothing is read from or written to disk.
+pub fn thumbnail_cached(path: &Path, px: u32, cache_dir: Option<&Path>) -> Result<Vec<u8>> {
     if !is_supported(path) {
         return Err(CoreError::Unsupported("thumbnail for this file type"));
     }
@@ -42,8 +47,8 @@ pub fn thumbnail(path: &Path, px: u32, cache_dir: &Path) -> Result<Vec<u8>> {
     }
     let px = px.clamp(16, 512);
     let mtime = crate::to_millis(meta.modified()).unwrap_or(0);
-    let cached = cache_file(cache_dir, path, meta.len(), mtime, px);
-    if let Ok(bytes) = fs::read(&cached) {
+    let cached = cache_dir.map(|d| cache_file(d, path, meta.len(), mtime, px));
+    if let Some(Ok(bytes)) = cached.as_ref().map(fs::read) {
         return Ok(bytes);
     }
 
@@ -65,8 +70,10 @@ pub fn thumbnail(path: &Path, px: u32, cache_dir: &Path) -> Result<Vec<u8>> {
         .map_err(|e| CoreError::Invalid(format!("cannot encode thumbnail: {e}")))?;
 
     // Best effort: a failed cache write only costs a re-decode next time.
-    if fs::create_dir_all(cache_dir).is_ok() {
-        let _ = fs::write(&cached, &bytes);
+    if let (Some(dir), Some(file)) = (cache_dir, cached) {
+        if fs::create_dir_all(dir).is_ok() {
+            let _ = fs::write(&file, &bytes);
+        }
     }
     Ok(bytes)
 }

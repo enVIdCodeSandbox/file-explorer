@@ -156,6 +156,15 @@ pub struct DeleteProgress {
     pub elapsed_secs: f64,
     /// Name of the first selected item, for the card title.
     pub first_name: String,
+    /// "delete", or "compress" / "extract" when the same card shows an archive job.
+    pub action: String,
+    /// For a finished archive job: the zip or folder that was made.
+    pub result: String,
+    /// For jobs that move bytes (uploads and downloads): how far along, and the expected total.
+    #[serde(default)]
+    pub bytes_done: u64,
+    #[serde(default)]
+    pub bytes_total: u64,
 }
 
 const MAX_REPORTED_ERRORS: usize = 50;
@@ -303,6 +312,10 @@ pub fn delete_with_progress(
         error_count: ctx.error_count.load(Ordering::Relaxed),
         elapsed_secs: started.elapsed().as_secs_f64(),
         first_name: first_name.clone(),
+        action: "delete".into(),
+        result: String::new(),
+        bytes_done: 0,
+        bytes_total: 0,
     };
     let finished = AtomicBool::new(false);
 

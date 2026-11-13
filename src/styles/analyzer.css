@@ -97,3 +97,12 @@
 .doc-table table { border-collapse: collapse; font-size: 13px; }
 .doc-table th, .doc-table td { border: 1px solid var(--border, rgba(128,128,128,.3)); padding: 4px 8px; text-align: left; vertical-align: top; }
 .doc-table th { background: var(--hover, rgba(128,128,128,.14)); }
+.analyzer-view .section-head { padding-left: 0; padding-right: 0; }
+.type-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
+.type-row .type-name { min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.type-row .grow { flex: 1; }
+.type-size { font-variant-numeric: tabular-nums; }
+.share-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.share-options label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.share-options label:last-child { grid-column: 1 / -1; }
+.share-options select { width: 100%; max-width: none; }

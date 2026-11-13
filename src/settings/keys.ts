@@ -20,6 +20,18 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "editLayout", label: "Edit the window layout", default: "Ctrl+Alt+L" },
   { id: "thisPc", label: "Go to This PC", default: "Ctrl+Shift+C" },
   { id: "home", label: "Go to Home", default: "Alt+Home" },
+  { id: "open", label: "Open the selected item", default: "Enter" },
+  { id: "rename", label: "Rename", default: "F2" },
+  { id: "delete", label: "Delete", default: "Delete" },
+  { id: "newFolder", label: "New folder", default: "Ctrl+Shift+N" },
+  { id: "properties", label: "Properties", default: "Alt+Enter" },
+  { id: "refresh", label: "Refresh", default: "F5" },
+  { id: "goUp", label: "Up one level", default: "Alt+ArrowUp" },
+  { id: "back", label: "Back", default: "Alt+ArrowLeft" },
+  { id: "forward", label: "Forward", default: "Alt+ArrowRight" },
+  { id: "focusAddress", label: "Edit the address", default: "Ctrl+L" },
+  { id: "focusSearch", label: "Search", default: "Ctrl+F" },
+  { id: "toggleHidden", label: "Show or hide hidden files", default: "Ctrl+H" },
 ];
 
 export function keyFor(settings: Settings | null, id: string): string {

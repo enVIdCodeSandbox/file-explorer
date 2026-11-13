@@ -101,3 +101,40 @@ Cancelling asks the workers to stop and waits for them to reach a checkpoint, wh
 3. Build its command line in `command()` and its parser in `parse()`. If it reports on stderr, return true from `reports_on_stderr`. Define success in `succeeded()`.
 4. Add the option to `transfer.method` in `src/settings/schema.ts`, the union types in `src/api.ts` and the label in `Transfers.tsx` (`METHOD_LABEL`).
 5. Unit-test the command and the parser (see `method.rs` tests); if the tool exists on CI, add an end-to-end test like the rsync one in `engine.rs`.
+
+## Benchmarks
+
+`crates/fast-core/examples/transfer_bench.rs` copies three data sets with the
+engine (auto, built-in, one stream), `cp -R` and `rsync -a`, and prints the
+median of the runs. Point it at scratch folders on the drives you care about:
+
+    cargo run --release -p fast-core --example transfer_bench -- SRC_DIR DEST_DIR [--runs 3] [--big-mb 512] [--small 20000]
+
+It drops the page cache between runs when it can (Linux, root) and says so.
+
+Result on one Linux cloud VM (2 vCPU, virtual disk, `--runs 3 --big-mb 256 --small 10000`).
+**This is one machine, not an SSD, an HDD or a network share; do not read it as a general claim.**
+
+| Data set | Engine (auto) | Engine (best variant) | `cp -R` | `rsync -a` |
+|---|---|---|---|---|
+| 10,000 small files (38 MB) | 0.52 s | 0.41 s (one stream) | 0.65 s | 0.65 s |
+| 1,000 mixed files (1.2 GB) | 0.67 s | 0.59 s (built-in) | 0.76 s | 1.71 s |
+| 4 large files (1 GB) | 0.71 s | 0.65 s (built-in) | **0.52 s** | 1.51 s |
+
+On this machine the engine beats `cp` and `rsync` on small and mixed folders and
+loses to `cp` by about 20% on a few large files. Run-to-run noise is large on a
+shared VM; differences under about 10% mean nothing.
+
+What the benchmark found and fixed:
+
+* The progress ticker slept its whole interval (500 ms) after the workers had
+  finished, adding up to half a second to every job. It now stops as soon as the
+  workers are done.
+* The speed probe ran even when the job would finish in well under the time the
+  probe costs. It now runs only when the job is guessed to take over ten seconds.
+* On Linux, large files are copied with `copy_file_range` in chunks (falling back
+  to read/write when the filesystem refuses), and files are no longer preallocated
+  with `set_len` on Unix, where it made copies slower.
+
+Not yet measured: SSD against HDD, SMB and NFS shares, Windows, macOS, and
+Explorer or Finder as the baseline.

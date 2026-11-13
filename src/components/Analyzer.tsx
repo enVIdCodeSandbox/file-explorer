@@ -5,7 +5,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, on, type Analysis, type AnalysisProgress, type SizeNode } from "../api";
-import { deletePaths, showProperties, useStore } from "../store";
+import { deletePaths, openFile, showProperties, useStore } from "../store";
 import {
   CATEGORIES,
   NO_EXT,
@@ -60,6 +60,7 @@ export function AnalyzerView({ path }: { path: string }) {
   const [exts, setExts] = useState<ReadonlySet<string>>(new Set());
   const [minBytes, setMinBytes] = useState(0);
   const [text, setText] = useState("");
+  const [notText, setNotText] = useState("");
   const [sort, setSort] = useState<{ key: ListSort; asc: boolean }>({ key: "size", asc: false });
   const canvas = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -236,7 +237,7 @@ export function AnalyzerView({ path }: { path: string }) {
     const inTree = t.isDir && analysis && findNode(analysis.tree, t.path);
     const ext = t.isDir ? null : extOf(t.name);
     return [
-      { id: "open", label: "Open", icon: "folderOpen", run: () => (t.isDir ? navigate(t.path) : void api.openItem(t.path).catch((e) => showToast(String(e)))) },
+      { id: "open", label: "Open", icon: "folderOpen", run: () => (t.isDir ? navigate(t.path) : void openFile(t.path)) },
       ...(t.isDir ? [{ id: "newTab", label: "Open in new tab", run: () => newTab(t.path) }] : []),
       {
         id: "reveal",
@@ -367,7 +368,7 @@ export function AnalyzerView({ path }: { path: string }) {
   }
 
   // ---- Side lists ----------------------------------------------------------
-  const filter = { text, minBytes, exts };
+  const filter = { text, minBytes, exts, notText };
   const trail: string[] = [];
   for (let p: string | null = focus; p && p.length >= path.length; p = parentPath(p)) trail.unshift(p);
 
@@ -441,6 +442,10 @@ export function AnalyzerView({ path }: { path: string }) {
         <div className="search-box analyzer-search">
           <Icon name="search" size={14} />
           <input value={text} placeholder="Find a name" aria-label="Find a name" onChange={(e) => setText(e.target.value)} />
+        </div>
+        <div className="search-box analyzer-search">
+          <Icon name="filter" size={14} />
+          <input value={notText} placeholder="Name is not…" aria-label="Name does not contain" onChange={(e) => setNotText(e.target.value)} />
         </div>
         <select aria-label="Hide small files" value={minBytes} onChange={(e) => setMinBytes(Number(e.target.value))}>
           {minSizes().map(([v, label]) => (
@@ -608,7 +613,7 @@ export function AnalyzerView({ path }: { path: string }) {
                   className="contents-row"
                   title={c.path}
                   onClick={() => c.isDir && c.path && setFocus(c.path)}
-                  onDoubleClick={() => c.path && (c.isDir ? navigate(c.path) : void api.openItem(c.path))}
+                  onDoubleClick={() => c.path && (c.isDir ? navigate(c.path) : void openFile(c.path))}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     if (c.path) openMenu(e.clientX, e.clientY, { path: c.path, name: c.name, isDir: c.isDir });

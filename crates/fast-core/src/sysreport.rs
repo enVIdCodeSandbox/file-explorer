@@ -9,11 +9,11 @@
 
 #![allow(dead_code)]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OsInfo {
     pub name: String,
@@ -25,7 +25,7 @@ pub struct OsInfo {
     pub desktop: Option<String>,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Machine {
     pub manufacturer: Option<String>,
@@ -34,7 +34,7 @@ pub struct Machine {
     pub firmware: Option<String>,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CpuInfo {
     pub brand: String,
@@ -44,7 +44,7 @@ pub struct CpuInfo {
     pub mhz: u64,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MemInfo {
     pub total: u64,
@@ -55,7 +55,7 @@ pub struct MemInfo {
     pub modules: Vec<String>,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BatteryInfo {
     pub percent: f32,
@@ -70,7 +70,7 @@ pub struct BatteryInfo {
     pub lifespan: Option<Lifespan>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Lifespan {
     /// One sentence a person can read.
@@ -81,9 +81,39 @@ pub struct Lifespan {
     pub basis: String,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+/// One labelled fact about a drive (firmware, interface speed, cycles…).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskFact {
+    pub label: String,
+    pub value: String,
+}
+
+/// One row of a SATA drive's SMART attribute table.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartAttr {
+    pub id: u64,
+    pub name: String,
+    pub value: Option<u64>,
+    pub worst: Option<u64>,
+    pub threshold: Option<u64>,
+    /// The raw counter as the drive reports it.
+    pub raw: String,
+    /// True when the normalised value has fallen to its failure threshold.
+    pub failing: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PhysicalDisk {
+    /// The device node or id SMART is read from (`/dev/sda`, `disk0`, `0`).
+    pub device: String,
+    /// Everything else the drive reports, like a hardware monitor lists it.
+    pub facts: Vec<DiskFact>,
+    pub attributes: Vec<SmartAttr>,
+    /// SMART could not be read, and an administrator may be able to read it.
+    pub needs_admin: bool,
     pub name: String,
     pub model: String,
     pub kind: String,
@@ -102,14 +132,14 @@ pub struct PhysicalDisk {
     pub source: String,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Proc {
     pub name: String,
     pub memory: u64,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Software {
     pub process_count: usize,
@@ -117,7 +147,7 @@ pub struct Software {
     pub own_memory: u64,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemReport {
     pub os: OsInfo,
@@ -323,6 +353,9 @@ pub fn parse_windows(json: &str) -> Option<WindowsData> {
                 } else {
                     "Windows reports health only; this drive gives no detailed counters (running as administrator may reveal more)".into()
                 },
+                device: text(d, "Number").or_else(|| num(d, "Number").map(|n| (n as u64).to_string())).map(|n| format!("/dev/pd{n}")).unwrap_or_default(),
+                needs_admin: !any_counter,
+                ..PhysicalDisk::default()
             }
         })
         .collect();
@@ -342,6 +375,8 @@ pub struct Smart {
     pub rotational: Option<bool>,
     pub nvme: bool,
     pub model: Option<String>,
+    pub facts: Vec<DiskFact>,
+    pub attributes: Vec<SmartAttr>,
 }
 
 pub fn parse_smartctl(json: &str) -> Option<Smart> {
@@ -378,7 +413,115 @@ pub fn parse_smartctl(json: &str) -> Option<Smart> {
             }
         }
     }
+    collect_facts(&v, &mut s);
     Some(s)
+}
+
+/// "data_units_written" -> "Data units written".
+fn prettify(key: &str) -> String {
+    let mut out = key.replace('_', " ");
+    if let Some(first) = out.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    out
+}
+
+fn show(v: &Value) -> Option<String> {
+    match v {
+        Value::String(t) if !t.trim().is_empty() => Some(t.trim().to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(if *b { "Yes" } else { "No" }.into()),
+        _ => None,
+    }
+}
+
+/// Everything smartctl knows about the drive that is not already a named field.
+fn collect_facts(v: &Value, s: &mut Smart) {
+    let mut add = |label: &str, value: Option<String>| {
+        if let Some(value) = value {
+            s.facts.push(DiskFact { label: label.to_string(), value });
+        }
+    };
+    add("Model", text(v, "model_name"));
+    add("Model family", text(v, "model_family"));
+    add("Serial number", text(v, "serial_number"));
+    add("Firmware", text(v, "firmware_version"));
+    add("Interface", v["device"]["protocol"].as_str().map(str::to_string));
+    add("Interface speed", v["interface_speed"]["current"]["string"].as_str().map(str::to_string));
+    add("Maximum interface speed", v["interface_speed"]["max"]["string"].as_str().map(str::to_string));
+    add("SATA version", v["sata_version"]["string"].as_str().map(str::to_string));
+    add("ATA version", v["ata_version"]["string"].as_str().map(str::to_string));
+    add("Form factor", v["form_factor"]["name"].as_str().map(str::to_string));
+    add("Rotation rate", v["rotation_rate"].as_u64().map(|r| if r == 0 { "Solid state (not rotating)".to_string() } else { format!("{r} rpm") }));
+    add("Logical sector size", v["logical_block_size"].as_u64().map(|b| format!("{b} bytes")));
+    add("Physical sector size", v["physical_block_size"].as_u64().map(|b| format!("{b} bytes")));
+    add("User capacity", v["user_capacity"]["bytes"].as_u64().map(|b| format!("{b} bytes")));
+    add("TRIM supported", show(&v["trim"]["supported"]));
+    add("Write cache", show(&v["ata_write_cache"]["enabled"]));
+    add("Read look-ahead", show(&v["ata_read_lookahead"]["enabled"]));
+    add("Power cycles", show(&v["power_cycle_count"]));
+    add("SMART overall result", v["smart_status"]["passed"].as_bool().map(|p| if p { "Passed" } else { "FAILED" }.to_string()));
+    add("Error log entries", show(&v["ata_smart_error_log"]["summary"]["count"]));
+    add("Self-tests logged", show(&v["ata_smart_self_test_log"]["standard"]["count"]));
+    add("Lowest temperature", show(&v["temperature"]["lifetime_min"]));
+    add("Highest temperature", show(&v["temperature"]["lifetime_max"]));
+    add("NVMe version", v["nvme_version"]["string"].as_str().map(str::to_string));
+    add("NVMe namespaces", show(&v["nvme_number_of_namespaces"]));
+    add("NVMe total capacity", v["nvme_total_capacity"].as_u64().map(|b| format!("{b} bytes")));
+    add("NVMe controller id", show(&v["nvme_controller_id"]));
+    if let Some(log) = v["nvme_smart_health_information_log"].as_object() {
+        for (k, val) in log {
+            if k == "temperature_sensors" {
+                if let Some(list) = val.as_array() {
+                    let t: Vec<String> = list.iter().filter_map(|x| x.as_i64()).map(|c| format!("{c} °C")).collect();
+                    add("Temperature sensors", (!t.is_empty()).then(|| t.join(", ")));
+                }
+            } else {
+                add(&prettify(k), show(val));
+            }
+        }
+    }
+    if let Some(table) = v["ata_smart_attributes"]["table"].as_array() {
+        for a in table {
+            let id = a["id"].as_u64().unwrap_or(0);
+            let value = a["value"].as_u64();
+            let threshold = a["thresh"].as_u64();
+            let failing = matches!((value, threshold), (Some(v), Some(t)) if t > 0 && v <= t);
+            s.attributes.push(SmartAttr {
+                id,
+                name: a["name"].as_str().map(|n| prettify(&n.replace('-', " "))).unwrap_or_default(),
+                value,
+                worst: a["worst"].as_u64(),
+                threshold,
+                raw: a["raw"]["string"].as_str().map(str::to_string).or_else(|| a["raw"]["value"].as_u64().map(|r| r.to_string())).unwrap_or_default(),
+                failing,
+            });
+        }
+    }
+}
+
+/// Copy what SMART told us onto a drive.
+pub fn apply_smart(disk: &mut PhysicalDisk, s: Smart) {
+    disk.health = s.passed.map(|p| if p { "Healthy".to_string() } else { "Failing".to_string() }).or(disk.health.take());
+    disk.temperature_c = s.temperature_c;
+    disk.power_on_hours = s.power_on_hours;
+    disk.wear_percent = s.wear_percent;
+    disk.bytes_written = s.bytes_written;
+    disk.reallocated_sectors = s.reallocated;
+    disk.media_errors = s.media_errors;
+    disk.facts = s.facts;
+    disk.attributes = s.attributes;
+    disk.needs_admin = false;
+    disk.source = "SMART data from smartctl".into();
+    disk.lifespan = estimate_drive_life(&disk.kind, disk.power_on_hours, disk.wear_percent, disk.health.as_deref());
+}
+
+/// The program and arguments that read every SMART field of a drive, for the
+/// administrator retry. `None` when the device name is not one we recognise,
+/// so nothing odd ever reaches a shell.
+pub fn smartctl_args(device: &str) -> Option<Vec<String>> {
+    let ok = |d: &str| !d.is_empty() && d.len() < 64 && d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '\\' | ':'));
+    ok(device).then(|| vec!["-x".into(), "-j".into(), device.to_string()])
 }
 
 /// Fields read from `diskutil info` text on macOS.
@@ -459,7 +602,7 @@ $ErrorActionPreference='SilentlyContinue'
 $disks=@(Get-PhysicalDisk | ForEach-Object {
   $r = $_ | Get-StorageReliabilityCounter
   [pscustomobject]@{ Name=$_.FriendlyName; Model=$_.Model; Media=[string]$_.MediaType; Bus=[string]$_.BusType;
-    Size=$_.Size; Health=[string]$_.HealthStatus; Temp=$r.Temperature; Hours=$r.PowerOnHours; Wear=$r.Wear;
+    Number=$_.DeviceId; Size=$_.Size; Health=[string]$_.HealthStatus; Temp=$r.Temperature; Hours=$r.PowerOnHours; Wear=$r.Wear;
     ReadErrors=$r.ReadErrorsTotal }
 })
 @{
@@ -579,6 +722,12 @@ fn platform_details(report: &mut SystemReport) {
             report.gpus = w.gpus;
             report.memory.modules = w.modules;
             report.disks = w.disks;
+            // smartctl, when installed, gives the full attribute table (and needs administrator rights on Windows).
+            for disk in report.disks.iter_mut().filter(|d| !d.device.is_empty()) {
+                if let Some(smart) = run("smartctl", &["-x", "-j", &disk.device], 12).and_then(|o| parse_smartctl(&o)) {
+                    apply_smart(disk, smart);
+                }
+            }
         }
         None => report.notes.push("Could not read the hardware details Windows returned.".into()),
     }
@@ -638,20 +787,14 @@ fn platform_details(report: &mut SystemReport) {
             source: "Kernel device information only".into(),
             ..PhysicalDisk::default()
         };
-        match run("smartctl", &["-j", "-a", &format!("/dev/{name}")], 8) {
+        disk.device = format!("/dev/{name}");
+        match run("smartctl", &["-x", "-j", &disk.device], 12) {
             Some(out) => match parse_smartctl(&out) {
-                Some(s) => {
-                    disk.health = s.passed.map(|p| if p { "Healthy".to_string() } else { "Failing".to_string() });
-                    disk.temperature_c = s.temperature_c;
-                    disk.power_on_hours = s.power_on_hours;
-                    disk.wear_percent = s.wear_percent;
-                    disk.bytes_written = s.bytes_written;
-                    disk.reallocated_sectors = s.reallocated;
-                    disk.media_errors = s.media_errors;
-                    disk.source = "SMART data from smartctl".into();
-                    disk.lifespan = estimate_drive_life(&disk.kind, disk.power_on_hours, disk.wear_percent, disk.health.as_deref());
+                Some(s) => apply_smart(&mut disk, s),
+                None => {
+                    smart_denied = true;
+                    disk.needs_admin = true;
                 }
-                None => smart_denied = true,
             },
             None => smart_missing = true,
         }
@@ -660,7 +803,7 @@ fn platform_details(report: &mut SystemReport) {
     if smart_missing {
         report.notes.push("Drive health needs smartmontools. Install it (for example `sudo apt install smartmontools`) and restart to see SMART data.".into());
     } else if smart_denied {
-        report.notes.push("Reading drive health needs permission. Start the app as an administrator (root) to see SMART data.".into());
+        report.notes.push("Reading drive health needs permission. Use \"Run as administrator\" on a drive to read its SMART data.".into());
     }
 }
 
@@ -716,16 +859,14 @@ fn platform_details(report: &mut SystemReport) {
             source: "macOS SMART status".into(),
             ..PhysicalDisk::default()
         };
-        if let Some(out) = run("smartctl", &["-j", "-a", &id], 8) {
-            if let Some(s) = parse_smartctl(&out) {
-                smartctl_seen = true;
-                disk.temperature_c = s.temperature_c;
-                disk.power_on_hours = s.power_on_hours;
-                disk.wear_percent = s.wear_percent;
-                disk.bytes_written = s.bytes_written;
-                disk.reallocated_sectors = s.reallocated;
-                disk.media_errors = s.media_errors;
-                disk.source = "SMART data from smartctl".into();
+        disk.device = id.clone();
+        if let Some(out) = run("smartctl", &["-x", "-j", &id], 12) {
+            match parse_smartctl(&out) {
+                Some(s) => {
+                    smartctl_seen = true;
+                    apply_smart(&mut disk, s);
+                }
+                None => disk.needs_admin = true,
             }
         }
         disk.lifespan = estimate_drive_life(&disk.kind, disk.power_on_hours, disk.wear_percent, disk.health.as_deref());
@@ -826,6 +967,39 @@ mod tests {
         assert_eq!(s.wear_percent, Some(3.0));
         assert_eq!(s.rotational, Some(false));
         assert!(parse_smartctl(r#"{"smartctl":{"messages":[{"string":"Permission denied"}]}}"#).is_none());
+    }
+
+    #[test]
+    fn collects_every_smart_fact_and_attribute() {
+        let sata = r#"{"model_name":"WDC WD10","serial_number":"WD-123","firmware_version":"01.01A01","rotation_rate":7200,
+          "smart_status":{"passed":true},"power_cycle_count":321,"logical_block_size":512,"physical_block_size":4096,
+          "interface_speed":{"current":{"string":"6.0 Gb/s"}},"trim":{"supported":false},
+          "ata_smart_attributes":{"table":[
+            {"id":1,"name":"Raw_Read_Error_Rate","value":200,"worst":200,"thresh":51,"raw":{"value":0,"string":"0"}},
+            {"id":197,"name":"Current_Pending_Sector","value":10,"worst":10,"thresh":10,"raw":{"value":8,"string":"8"}}]}}"#;
+        let s = parse_smartctl(sata).unwrap();
+        let fact = |l: &str| s.facts.iter().find(|f| f.label == l).map(|f| f.value.clone());
+        assert_eq!(fact("Serial number").as_deref(), Some("WD-123"));
+        assert_eq!(fact("Rotation rate").as_deref(), Some("7200 rpm"));
+        assert_eq!(fact("Physical sector size").as_deref(), Some("4096 bytes"));
+        assert_eq!(fact("TRIM supported").as_deref(), Some("No"));
+        assert_eq!(s.attributes.len(), 2);
+        assert_eq!(s.attributes[0].name, "Raw Read Error Rate");
+        assert!(!s.attributes[0].failing);
+        assert!(s.attributes[1].failing, "value at its threshold is failing");
+
+        let nvme = r#"{"model_name":"X","device":{"protocol":"NVMe"},"nvme_smart_health_information_log":{"percentage_used":3,"unsafe_shutdowns":12,"temperature_sensors":[41,44]}}"#;
+        let n = parse_smartctl(nvme).unwrap();
+        assert!(n.facts.iter().any(|f| f.label == "Unsafe shutdowns" && f.value == "12"));
+        assert!(n.facts.iter().any(|f| f.label == "Temperature sensors" && f.value == "41 °C, 44 °C"));
+    }
+
+    #[test]
+    fn admin_command_only_accepts_plain_device_names() {
+        assert_eq!(smartctl_args("/dev/sda").unwrap(), vec!["-x", "-j", "/dev/sda"]);
+        assert!(smartctl_args("/dev/sda; rm -rf /").is_none());
+        assert!(smartctl_args("$(id)").is_none());
+        assert!(smartctl_args("").is_none());
     }
 
     #[test]

@@ -128,3 +128,9 @@ blocks remote resources), but it can hide the interface. To recover, open
 - **Imports**: fonts (`ttf/otf/woff/woff2`), CSS files and background pictures are copied into the settings folder (`fonts/`, `css/`, `images/`). Imported CSS is applied in the order listed and can be switched on or off per file. Remove a file and it stops being used.
 - **Layout**: tabs, address bar, command bar, navigation pane and details pane are panels. Each can be docked top/bottom/left/right, floated, popped out behind a button, collapsed or hidden. Use presets, the table in Settings > Layout, or "Arrange on screen" and drag panel handles. Stored in `settings.appearance.layout`.
 - **Advanced** (Settings > Advanced): dozens of tuning options (`settings.advanced`), remappable shortcuts (`settings.keys`), your own right-click programs (`settings.customActions`, started directly, never through a shell), and a raw JSON settings editor.
+
+## Windows 11, macOS and GNOME looks
+
+`win11-dark`, `win11-light`, `mac-dark`, `mac-light`, `adwaita-dark` and `adwaita-light` are ordinary themes (see `tokens.css`), and the icon style `fluent` draws toolbar and menu glyphs from Microsoft's open-source Fluent UI System Icons (MIT). `scripts/gen-fluent-icons.mjs` regenerates `src/components/fluentIcons.ts` from the npm package `@fluentui/svg-icons`. No Windows, macOS or GNOME image or font file is used: the colours are written out as variables and the fonts are whatever the system provides.
+
+The **Interface style** presets (`src/settings/presets.ts`) combine one of these themes with a layout, corner roundness, icon style, menu style, window-button side (`ui.windowControlsSide`) and keyboard shortcuts.

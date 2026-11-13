@@ -190,6 +190,81 @@
   --icon-folder: #e0a21b; --icon-file: #8a5a6f; --icon-page: #fbeaf1;
   --treemap-text: #ffffff;
 }
+/* Windows 11 (WinUI 3 palette: Mica layers, Segoe-like type, 4/8 px corners) */
+:root[data-theme="win11-dark"] {
+  color-scheme: dark;
+  --bg: #202020; --surface: #2b2b2b; --surface-raised: #323232;
+  --surface-hover: rgba(255,255,255,.0605); --surface-active: rgba(255,255,255,.0419);
+  --border: rgba(255,255,255,.0698); --border-strong: rgba(255,255,255,.16);
+  --text: #ffffff; --text-muted: rgba(255,255,255,.7869);
+  --accent: #4cc2ff; --accent-text: #000000;
+  --selection: rgba(255,255,255,.0837); --selection-border: color-mix(in srgb, var(--accent) 70%, transparent);
+  --shadow: 0 8px 16px rgba(0,0,0,.26), 0 0 2px rgba(0,0,0,.24);
+  --icon-folder: #ffb900; --icon-file: #9aa0a6; --icon-page: #383838;
+  --treemap-text: #ffffff; --danger: #ff99a4;
+}
+:root[data-theme="win11-light"] {
+  color-scheme: light;
+  --bg: #f3f3f3; --surface: #fbfbfb; --surface-raised: #ffffff;
+  --surface-hover: rgba(0,0,0,.0373); --surface-active: rgba(0,0,0,.0241);
+  --border: rgba(0,0,0,.0578); --border-strong: rgba(0,0,0,.2);
+  --text: #1a1a1a; --text-muted: rgba(0,0,0,.6063);
+  --accent: #005fb8; --accent-text: #ffffff;
+  --selection: rgba(0,95,184,.12); --selection-border: rgba(0,95,184,.6);
+  --shadow: 0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12);
+  --icon-folder: #ffb900; --icon-file: #6b7280; --icon-page: #f4f5f7;
+  --treemap-text: #ffffff; --danger: #c42b1c;
+}
+/* macOS-like (system blue, vibrant grey sidebar, SF-style type) */
+:root[data-theme="mac-dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e; --surface: #2a2a2c; --surface-raised: #323234;
+  --surface-hover: rgba(255,255,255,.07); --surface-active: rgba(255,255,255,.12);
+  --border: rgba(255,255,255,.1); --border-strong: rgba(255,255,255,.2);
+  --text: #f5f5f7; --text-muted: rgba(235,235,245,.6);
+  --accent: #0a84ff; --accent-text: #ffffff;
+  --selection: rgba(10,132,255,.35); --selection-border: rgba(10,132,255,.8);
+  --shadow: 0 10px 30px rgba(0,0,0,.5);
+  --icon-folder: #5ac8fa; --icon-file: #a1a1a6; --icon-page: #3a3a3c;
+  --treemap-text: #ffffff; --danger: #ff453a;
+}
+:root[data-theme="mac-light"] {
+  color-scheme: light;
+  --bg: #ececec; --surface: #ffffff; --surface-raised: #ffffff;
+  --surface-hover: rgba(0,0,0,.05); --surface-active: rgba(0,0,0,.09);
+  --border: rgba(0,0,0,.1); --border-strong: rgba(0,0,0,.22);
+  --text: #1d1d1f; --text-muted: rgba(60,60,67,.6);
+  --accent: #007aff; --accent-text: #ffffff;
+  --selection: rgba(0,122,255,.2); --selection-border: rgba(0,122,255,.7);
+  --shadow: 0 10px 30px rgba(0,0,0,.18);
+  --icon-folder: #3ea8f0; --icon-file: #8e8e93; --icon-page: #f2f2f7;
+  --treemap-text: #ffffff; --danger: #ff3b30;
+}
+/* GNOME / Adwaita-like (libadwaita palette) */
+:root[data-theme="adwaita-dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e; --surface: #2e2e32; --surface-raised: #38383c;
+  --surface-hover: rgba(255,255,255,.07); --surface-active: rgba(255,255,255,.12);
+  --border: rgba(255,255,255,.1); --border-strong: rgba(255,255,255,.2);
+  --text: #ffffff; --text-muted: rgba(255,255,255,.65);
+  --accent: #78aeed; --accent-text: #001c3c;
+  --selection: rgba(120,174,237,.28); --selection-border: rgba(120,174,237,.7);
+  --shadow: 0 6px 20px rgba(0,0,0,.5);
+  --icon-folder: #62a0ea; --icon-file: #9a9996; --icon-page: #3d3846;
+  --treemap-text: #ffffff; --danger: #ff7b63;
+}
+:root[data-theme="adwaita-light"] {
+  color-scheme: light;
+  --bg: #fafafb; --surface: #ffffff; --surface-raised: #ffffff;
+  --surface-hover: rgba(0,0,0,.06); --surface-active: rgba(0,0,0,.1);
+  --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.25);
+  --text: #2e3436; --text-muted: rgba(46,52,54,.7);
+  --accent: #3584e4; --accent-text: #ffffff;
+  --selection: rgba(53,132,228,.2); --selection-border: rgba(53,132,228,.7);
+  --shadow: 0 6px 20px rgba(0,0,0,.18);
+  --icon-folder: #62a0ea; --icon-file: #77767b; --icon-page: #f6f5f4;
+  --treemap-text: #ffffff; --danger: #e01b24;
+}
 :root[data-theme="contrast-dark"] {
   color-scheme: dark;
   --bg: #000000; --surface: #000000; --surface-raised: #000000;

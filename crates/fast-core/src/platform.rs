@@ -73,6 +73,30 @@ pub fn trash(paths: &[std::path::PathBuf]) -> Result<()> {
     trash::delete_all(paths).map_err(|e| CoreError::Invalid(format!("could not move to trash: {e}")))
 }
 
+/// Put items that were moved to the Trash back where they came from, and say
+/// how many were found there. When the same path was trashed more than once,
+/// the most recent one comes back. Items that are not in the Trash (already
+/// emptied, deleted permanently) are skipped.
+#[cfg(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub fn restore_from_trash(paths: &[std::path::PathBuf]) -> Result<usize> {
+    let items = trash::os_limited::list().map_err(|e| CoreError::Invalid(format!("could not read the trash: {e}")))?;
+    let chosen: Vec<_> = paths
+        .iter()
+        .filter_map(|p| items.iter().filter(|i| i.original_path() == *p).max_by_key(|i| i.time_deleted).cloned())
+        .collect();
+    let found = chosen.len();
+    if found > 0 {
+        trash::os_limited::restore_all(chosen).map_err(|e| CoreError::Invalid(format!("could not restore from the trash: {e}")))?;
+    }
+    Ok(found)
+}
+
+/// macOS has no programmatic way to put an item back from the Trash.
+#[cfg(not(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+pub fn restore_from_trash(_paths: &[std::path::PathBuf]) -> Result<usize> {
+    Err(CoreError::Invalid("Items cannot be put back from the Trash automatically on this system. Open the Trash and use Put Back.".into()))
+}
+
 /// The root of the volume containing `path` (`C:\` or the mount point).
 pub fn drive_root(path: &Path) -> std::path::PathBuf {
     #[cfg(windows)]
@@ -466,6 +490,22 @@ pub fn show_properties(_paths: &[std::path::PathBuf]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[test]
+    fn a_trashed_file_comes_back_where_it_was() {
+        // Under $HOME so the file is on the home volume, whose trash always exists.
+        let home = dirs::home_dir().unwrap();
+        let dir = tempfile::Builder::new().prefix("fast-restore-").tempdir_in(&home).unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        trash(std::slice::from_ref(&file)).unwrap();
+        assert!(!file.exists());
+        assert_eq!(restore_from_trash(std::slice::from_ref(&file)).unwrap(), 1);
+        assert_eq!(std::fs::read(&file).unwrap(), b"hello");
+        // Asking again finds nothing in the trash and is not an error.
+        assert_eq!(restore_from_trash(std::slice::from_ref(&file)).unwrap(), 0);
+    }
 
     #[test]
     fn known_folders_exist() {

@@ -49,7 +49,10 @@ interface, only the top two layers are replaced.
 | `resources.rs` | Turns CPU, RAM and battery state into a `Budget` |
 | `drives.rs` | Volumes and media types |
 | `thumbs.rs` | Thumbnails with a disk cache |
-| `platform.rs` | Everything OS-specific: known folders, trash, terminals, elevation |
+| `platform.rs` | Everything OS-specific: known folders, trash (and restoring from it), terminals, elevation |
+| `watch.rs` | Live folder watching: the `notify` crate on the open folders only (not recursive), events merged until a folder is quiet for 200 ms (at most every 2 s), at most 48 folders. The shell invalidates the listing cache and emits `fs-changed` |
+| `archive.rs` | Zip create, and zip/tar/tar.gz extract, in pure Rust. `safe_relative` refuses names that leave the target folder; existing files are never replaced; links are skipped; cancel flag removes a half-written zip |
+| `browse.rs` | Archives opened like folders: `archive://<file>!/<inside>` locations, a cached index of what is inside (zip, tar, tar.gz/bz2/xz, 7z, single gz/bz2/xz in Rust; rar, cab, iso and more through 7-Zip or bsdtar when installed), folder listings built from it, and unpacking of chosen items. Read-only; same name safety rules as `archive.rs` |
 | `settings.rs`, `session.rs` | Persisted settings; tabs, pins, recents |
 
 ### The index
@@ -178,6 +181,28 @@ Settings, the advanced Transfers view and dragged-out tabs can each live in thei
 
 "Share → Temporary download link…" starts a small HTTP server for one file. The address holds a random 128-bit token (`getrandom`), so it cannot be guessed. The server only serves that file (no path from the request is ever used, so there is no traversal), ends on expiry or after the allowed number of complete downloads, and allows at most 8 simultaneous connections. Interrupted downloads do not use up the allowance. It is plain HTTP, reachable on the local network (or only this computer, by choice), and only while the app runs. With "internet" selected the server listens on loopback only and a `cloudflared tunnel --url http://127.0.0.1:<port>` child process (a Cloudflare quick tunnel) provides the public https address, parsed from its output (`find_tunnel_url`). The tunnel is killed when the share is stopped, expires or is used up, and by `stop_all` when the app exits. Folders are refused; archive them first. Windows may ask the firewall for permission the first time.
 
+## Undo, redo and batch rename
+
+Undo lives in the interface (`store.ts`): `UndoAction` is `rename`, `renameMany`, `create`, `move`, `copy` or `trash`, kept in two stacks (`undo`, `redo`; any new action empties `redo`). `reverse(action, "undo" | "redo")` runs the opposite or the same operation, so each kind is defined once. Create and copy are undone by moving the result to the Trash (`trash_paths`), which is what makes redo possible (`restore_from_trash`, Linux and Windows). A delete registers its undo when `delete-progress` reports it finished without errors.
+
+Batch rename keeps its rules in `src/util/batchRename.ts`: `planRenames` turns the selection and rules into new names and problems (empty, invalid, too long, duplicate, exists), and `orderRenames` splits them into rounds so a shifted series or a swap goes through temporary names and never overwrites. The dialog only displays `planRenames`, so what the preview shows is what happens. `applyRenames` carries out the rounds and records one `renameMany` undo.
+
+## Live folder watching
+
+The interface reports its open folders with `watch_dirs` whenever the set of tab locations changes (150 ms debounce; app pages such as Home and Search are skipped). The shell keeps one set per window and watches the union. Events from reading files are ignored so the app's own listing cannot cause a loop. Setting `general.liveRefresh` turns it off, and the listing then refreshes only after the app's own operations and on F5.
+
+## Servers (`fast-core/src/remote`)
+
+A location on a server is a URL, `sftp://anna@host:2222/home/anna`, and travels through the app like any path (`isRemote` in `util/path.ts`, `Location` in Rust). The path part is verbatim, not percent-encoded. Passwords never appear in it and are never written to disk.
+
+* `mod.rs`: `Server`, `Location`, the `Session` trait (`list`, `download`, `upload`, `mkdir`, `remove`, `rename`, `exists`), and protocol-independent tree helpers (`download_tree_as`, `upload_tree_as`, `remove_tree`, `measure_tree`, `free_name`) that every protocol shares. `Control` carries the cancel flag and a byte counter.
+* `ftp.rs` (suppaftp; MLSD with a LIST fallback), `sftp.rs` (russh + russh-sftp on a one-thread tokio runtime, trust on first use with a `known_hosts` file, password or key login), `webdav.rs` (PROPFIND/MKCOL/MOVE/DELETE; listings parsed with quick-xml). All pure Rust: no C toolchain, no OpenSSL.
+* `http.rs` is a small HTTP/1.1 client written for WebDAV, because the common clients refuse the WebDAV methods. Short requests reuse one connection; transfers stream on their own. TLS is rustls with the system's trusted certificates.
+* Shell side, `src-tauri/src/remote.rs`: one pool per server key (`scheme://user@host:port`), at most four idle connections, a dead connection is replaced and the call retried once. Jobs (`remote_copy_start`, `remote_remove_start`) run on their own thread and report on the same `delete-progress` card the delete and archive jobs use, with byte counts. Uploads and downloads stream straight between disk and socket; a copy between two servers passes through a temporary folder.
+* `list_dir` and `get_details` dispatch on the address, so the existing folder view, breadcrumbs, tabs and drag and drop work unchanged; the interface hides actions that only make sense locally (`localOnly` in `FileView.tsx`).
+* Tests: unit tests in each module, and `crates/fast-core/tests/remote_servers.rs`, which runs the same checks against real FTP, SFTP and WebDAV servers. `scripts/test-servers.sh` starts pyftpdlib, asyncssh and wsgidav locally and runs them; without servers the tests are skipped.
+* Not done: FTPS (encrypted FTP), SFTP agent login, resuming interrupted transfers, preserving modification times on download.
+
 ## Tabs and windows
 
 Tabs open at `tabs.width` and shrink together down to `tabs.minWidth` before the bar scrolls. A window made by dragging a tab out is an ordinary new window. Dropping a tab on another window's tab bar calls `drop_tab`, which hit-tests every app window by screen position, emits `tab-drop` to the one under the pointer (it picks the slot), and closes the source window if it had no other tab.
@@ -189,3 +214,12 @@ Tabs open at `tabs.width` and shrink together down to `tabs.minWidth` before the
 ## Mapped drives when run as administrator
 
 An elevated process runs in a different logon session and does not see the user's mapped drive letters. The drive list also reads `HKCU\Network` and mounts those shares by UNC path, keeping the letter in the name.
+
+## Presets, profiles and locks
+
+* `src/settings/presets.ts` holds the twelve performance presets, the three interface presets and the profile helpers. A preset is a plain object of "setting key -> value", applied with the same `setSetting` the settings screen uses, so presets can never drift from real settings (a test checks every key exists).
+* Profiles are stored in `settings.profiles` (Rust `Profile`), each with a snapshot of every setting. `store.updateSettings` saves changes into the active profile of the user's own.
+* `crates/fast-core/src/locks.rs` keeps Argon2id hashes in `locks.json`; unlocked state lives only in memory with a timestamp. `commands::guard` is called by every command that reads or changes a path (list, details, thumbnails, open, search results, transfers, deletes, rename, create) and returns `locked:<path>`, which the interface turns into a passcode card.
+* `system_report` stores the last hardware reading in `hardware-report.json` (`cache.hardware`, `cache.hardwareMaxAgeHours`). `disk_smart_admin` runs `smartctl` through `platform::run_elevated`, redirecting its output to a private scratch file because the elevated helper cannot return output.
+* `resource_usage` reads the app's own process with `sysinfo`; `compact_memory` drops cached listings and calls `malloc_trim` on glibc.
+* `tab_hover` / `drop_tab` find the other window whose tab strip is under the pointer (`tab_bar_under`); the target shows an outline through the `tab-hover` event and shifts its tabs.

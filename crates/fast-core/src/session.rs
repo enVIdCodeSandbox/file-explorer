@@ -60,6 +60,8 @@ pub struct Session {
     pub pins: Option<Vec<Pin>>,
     pub recent: Vec<Recent>,
     pub drives: Vec<Drive>,
+    /// Earlier search texts, newest first. How many are kept is a setting.
+    pub searches: Vec<String>,
 }
 
 pub const MAX_RECENT: usize = 100;

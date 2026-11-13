@@ -9,7 +9,11 @@ import {
   ICON_PX,
   VIEW_LEVELS,
   createPath,
+  compressPaths,
   deletePaths,
+  extractArchive,
+  isArchiveName,
+  openFile,
   promptText,
   renamePath,
   showProperties,
@@ -19,8 +23,10 @@ import {
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
 import { formatDate, formatSize, kindOf, typeLabel } from "../util/format";
 import { adv } from "../settings/advanced";
+import { LockedCard } from "./Locks";
+import { commandFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
-import { analyzeLocation, joinPath, parentPath } from "../util/path";
+import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
@@ -109,12 +115,19 @@ export function FileView({ path }: { path: string }) {
   const [folderSizes, setFolderSizes] = useState<Record<string, FolderSize>>({});
   const sizedPath = useRef("");
   useEffect(() => {
-    if (!current || !wantSizes) return;
+    if (!current || !wantSizes || isRemote(current.path) || isArchiveLoc(current.path)) return;
     const same = sizedPath.current === current.path;
     sizedPath.current = current.path;
     if (!same) setFolderSizes({});
     const names = current.entries.filter((e) => e.isDir && !e.isSymlink).map((e) => e.name);
-    if (names.length) void api.folderSizesStart(current.path, names, same).catch(() => {});
+    if (names.length) {
+      const policy = {
+        remember: adv<boolean>(settings, "files.sizeCache"),
+        freshSecs: adv<number>(settings, "files.sizeCacheFreshMin") * 60,
+        maxEntries: adv<number>(settings, "files.sizeCacheMax"),
+      };
+      void api.folderSizesStart(current.path, names, same, policy).catch(() => {});
+    }
   }, [current, wantSizes]);
   useEffect(() => {
     if (!wantSizes) return;
@@ -146,6 +159,16 @@ export function FileView({ path }: { path: string }) {
     setSelection([...selected].map((n) => joinPath(path, n)));
   }, [selected, path, setSelection]);
 
+  // Items that were moved, deleted or renamed away are no longer selected.
+  useEffect(() => {
+    if (!current) return;
+    const names = new Set(current.entries.map((e) => e.name));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((n) => names.has(n)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [current]);
+
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -155,6 +178,20 @@ export function FileView({ path }: { path: string }) {
     return () => ro.disconnect();
   }, []);
 
+  /** One item is renamed in place; several open the Rename dialog with a preview. */
+  const startRename = () => {
+    const chosen = entries.filter((e) => selected.has(e.name));
+    if (chosen.length === 1) setRenaming(chosen[0].name);
+    else if (chosen.length > 1)
+      useStore.setState({
+        batchRename: {
+          dir: path,
+          items: chosen.map((e) => ({ name: e.name, isDir: e.isDir, modified: e.modified ?? 0 })),
+          siblings: (current?.entries ?? []).map((e) => e.name),
+        },
+      });
+  };
+
   // Commands from the command bar (Select all, Rename…) and a name to select
   // once it exists (after creating something).
   useEffect(() => {
@@ -162,10 +199,7 @@ export function FileView({ path }: { path: string }) {
     if (command.name === "selectAll") setSelected(new Set(entries.map((e) => e.name)));
     else if (command.name === "selectNone") setSelected(new Set());
     else if (command.name === "invert") setSelected(new Set(entries.filter((e) => !selected.has(e.name)).map((e) => e.name)));
-    else if (command.name === "rename") {
-      const first = entries.find((e) => selected.has(e.name));
-      if (first) setRenaming(first.name);
-    }
+    else if (command.name === "rename") startRename();
   }, [command?.tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -205,13 +239,17 @@ export function FileView({ path }: { path: string }) {
   const customRow = adv<number>(settings, "ui.rowHeight");
   const rowHeight = details ? (customRow > 0 ? customRow : compact ? 26 : 34) : tileLayout.h;
   const headerHeight = details ? 28 : 0;
-  const rowsWidth = columns.name + columns.modified + columns.type + columns.size;
+  // Name takes whatever width the other columns leave, so the list fits its pane
+  // (no sideways scrollbar) unless the other columns are made wider than the pane.
+  const cols = { ...columns, name: Math.max(MIN_COLUMN.name, width - 14 - columns.modified - columns.type - columns.size) };
+  const rowsWidth = cols.name + cols.modified + cols.type + cols.size;
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller.current,
     estimateSize: () => rowHeight,
     // The sticky column header sits inside the scroller, above the rows.
     scrollMargin: headerHeight,
+    paddingStart: details ? 0 : 8,
     // With lazy loading off, render further ahead at the cost of more DOM.
     overscan: settings.performance.lazyLoading ? (details ? adv<number>(settings, "perf.overscanRows") : 2) : 40,
   });
@@ -226,8 +264,25 @@ export function FileView({ path }: { path: string }) {
       if (adv<boolean>(settings, "files.foldersInNewTab")) newTab(fullPath(e.name));
       else navigate(fullPath(e.name));
     } else {
-      addRecent(fullPath(e.name), false);
-      api.openItem(fullPath(e.name)).catch((err) => showToast(String(err)));
+      const target = fullPath(e.name);
+      if (isArchiveLoc(target)) {
+        // A file inside an archive is unpacked to a temporary place and opened from there.
+        api.archiveCopyStart([target], "", true).catch((err) => showToast(String(err)));
+        return;
+      }
+      if (isArchiveFile(e.name) && adv<boolean>(settings, "files.openArchives") && !isRemote(target)) {
+        // Archives open like folders; "Open with…" still hands them to another program.
+        if (adv<boolean>(settings, "files.foldersInNewTab")) newTab(archiveUrl(target));
+        else navigate(archiveUrl(target));
+        return;
+      }
+      if (isRemote(target)) {
+        // A file on a server is fetched to a temporary place and opened from there.
+        api.remoteCopyStart([target], "", false, true).catch((err) => showToast(String(err)));
+        return;
+      }
+      addRecent(target, false);
+      void openFile(target);
     }
   };
 
@@ -294,6 +349,7 @@ export function FileView({ path }: { path: string }) {
       ? [
           single && { id: "open", label: "Open", shortcut: "Enter", run: () => open(single) },
           single?.isDir && { id: "openNewTab", label: "Open in new tab", run: () => newTab(fullPath(single.name), { background: true }) },
+          single && !single.isDir && !isRemote(fullPath(single.name)) && !isArchiveLoc(fullPath(single.name)) && { id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(fullPath(single.name)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           ...custom.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           single && {
@@ -315,6 +371,9 @@ export function FileView({ path }: { path: string }) {
             ],
           },
           sendTo.length > 0 && { id: "sendTo", label: "Send to", icon: "forward", children: sendTo },
+          { id: "archive-zip", label: "Compress to ZIP", icon: "archive", run: () => void compressPaths(paths) },
+          single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-here", label: "Extract here", icon: "archive", run: () => void extractArchive(fullPath(single.name), true) },
+          single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-to", label: `Extract to "${single.name.replace(/(\.tar)?\.[^.]+$/i, "")}"`, icon: "archive", run: () => void extractArchive(fullPath(single.name), false) },
           { id: "cut", label: "Cut", shortcut: "Ctrl+X", icon: "cut", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
           { id: "copy", label: "Copy", shortcut: "Ctrl+C", icon: "copy", run: () => setClipboard({ paths, op: "copy" }) },
           single?.isDir && {
@@ -331,14 +390,22 @@ export function FileView({ path }: { path: string }) {
           },
           { id: "delete", label: "Delete", shortcut: "Del", icon: "trash", run: () => void deletePaths(paths) },
           { id: "deletePermanent", label: "Delete permanently", shortcut: "Shift+Del", danger: true, run: () => void deletePaths(paths, true) },
-          single && { id: "rename", label: "Rename", shortcut: "F2", icon: "rename", run: () => setRenaming(single.name) },
+          paths.length > 0 && { id: "rename", label: paths.length > 1 ? `Rename ${paths.length} items…` : "Rename", shortcut: "F2", icon: "rename", run: startRename },
           single?.isDir && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirForTerminal, "here") },
           single?.isDir && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirForTerminal, "admin") },
           single?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(fullPath(single.name))) },
           { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => void showProperties(paths) },
+          // Last, and apart from everything people use all the time.
+          single?.isDir && !isRemote(fullPath(single.name)) && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(fullPath(single.name)) },
         ]
       : [
-          { id: "paste", label: "Paste", shortcut: "Ctrl+V", icon: "paste", run: paste },
+          ...(splitArchive(path)
+            ? [
+                { id: "extractAll-to", label: "Extract all to a folder next to the archive", icon: "archive", run: () => void extractArchive(splitArchive(path)!.archive, false) } as MenuItem,
+                { id: "extractAll-here", label: "Extract all here", icon: "archive", run: () => void extractArchive(splitArchive(path)!.archive, true) } as MenuItem,
+              ]
+            : []),
+          { id: "paste", label: "Paste", shortcut: "Ctrl+V", icon: "paste", separatorBefore: !!splitArchive(path), run: paste },
           { id: "newFolder", label: "New folder", shortcut: "Ctrl+Shift+N", icon: "folderOpen", separatorBefore: true, run: () => void create(true) },
           { id: "newFile", label: "New file", icon: "newItem", run: () => void create(false) },
           {
@@ -370,9 +437,16 @@ export function FileView({ path }: { path: string }) {
           { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(path)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => void showProperties([path]) },
+          { id: "lock", label: "Lock this folder with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(path) },
         ];
     const hidden = new Set(settings.contextMenu.hidden);
-    return items.filter((i): i is MenuItem => !!i && !hidden.has(i.id));
+    // Things that only make sense for files on this computer.
+    const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "properties", "newFile", "custom", "lock"]);
+    const inArchive = !!insideArchive(path);
+    const remote = isRemote(path) || inArchive;
+    // An archive can only be read: nothing in it can be changed.
+    const readOnly = new Set(["cut", "rename", "delete", "paste", "newFolder"]);
+    return items.filter((i): i is MenuItem => !!i && !(inArchive && readOnly.has(i.id)) && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")) && !(remote && localOnly.has(i.id.replace(/-.*/, ""))));
   };
 
   /**
@@ -384,7 +458,7 @@ export function FileView({ path }: { path: string }) {
     const ticket = ++menuTicket.current;
     const first = buildMenu(target);
     setMenu({ x, y, items: first });
-    if (!settings.general.shellExtras) return;
+    if (!settings.general.shellExtras || isRemote(path) || isArchiveLoc(path)) return;
     const paths = target ? selectedPathsWith(target) : [path];
     void fetchFor(paths, !target).then((shell) => {
       if (ticket !== menuTicket.current || shell.length === 0) return;
@@ -402,6 +476,8 @@ export function FileView({ path }: { path: string }) {
     lastSet.current = next;
     setSelected(next);
   };
+  /** Set when a plain press landed on an item inside a multi-selection; see itemProps. */
+  const collapseOnClick = useRef<number | null>(null);
   const selectIndex = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
     const entry = entries[i];
     if (!entry) return;
@@ -440,7 +516,15 @@ export function FileView({ path }: { path: string }) {
     const paths = selectedPaths();
     const first = entries.find((x) => selected.has(x.name));
     let handled = true;
-    if (e.key === "ArrowDown") moveCursor(columnsPerRow, e.shiftKey);
+    // Shortcuts from Settings (the defaults are the keys below, so nothing changes unless they were).
+    const cmd = commandFor(settings, e.nativeEvent);
+    if (cmd === "open" && first) open(first);
+    else if (cmd === "rename" && first) startRename();
+    else if (cmd === "delete" && paths.length) void deletePaths(paths, e.shiftKey);
+    else if (cmd === "newFolder") void create(true);
+    else if (cmd === "properties" && paths.length) void showProperties(paths);
+    else if (cmd === "refresh") refresh();
+    else if (e.key === "ArrowDown") moveCursor(columnsPerRow, e.shiftKey);
     else if (e.key === "ArrowUp") moveCursor(-columnsPerRow, e.shiftKey);
     else if (e.key === "ArrowRight" && !details) moveCursor(1, e.shiftKey);
     else if (e.key === "ArrowLeft" && !details) moveCursor(-1, e.shiftKey);
@@ -453,9 +537,8 @@ export function FileView({ path }: { path: string }) {
       const up = parentPath(path);
       if (up) navigate(up);
     } else if (e.key === "Delete" && paths.length) void deletePaths(paths, e.shiftKey);
-    else if (e.key === "F2" && first) setRenaming(first.name);
+    else if (e.key === "F2" && first) startRename();
     else if (e.key === "F5") refresh();
-    else if (mod && e.key.toLowerCase() === "z") void import("../store").then((m) => m.undoLast());
     else if (mod && e.key.toLowerCase() === "a") setSelected(new Set(entries.map((x) => x.name)));
     else if (mod && e.key.toLowerCase() === "c" && paths.length) setClipboard({ paths, op: "copy" });
     else if (mod && e.key.toLowerCase() === "x" && paths.length) setClipboard({ paths, op: "move" });
@@ -483,7 +566,7 @@ export function FileView({ path }: { path: string }) {
   const onHover = (e: FileEntry) => {
     clearTimeout(hoverTimer.current);
     if (!e.isDir || !settings.performance.predictivePrefetch) return;
-    hoverTimer.current = setTimeout(() => void api.prefetch([fullPath(e.name)]).catch(() => {}), adv<number>(settings, "perf.prefetchDelayMs"));
+    if (!isRemote(path) && !isArchiveLoc(path)) hoverTimer.current = setTimeout(() => void api.prefetch([fullPath(e.name)]).catch(() => {}), adv<number>(settings, "perf.prefetchDelayMs"));
   };
 
   const cut = clipboard?.op === "move" ? new Set(clipboard.paths) : null;
@@ -520,10 +603,21 @@ export function FileView({ path }: { path: string }) {
     "data-hidden": e.isHidden || undefined,
     "data-kind": kindOf(e.name, e.isDir),
     onMouseDown: (ev: React.MouseEvent) => {
-      if (ev.button === 0) selectIndex(i, ev);
+      collapseOnClick.current = null;
+      const plain = ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey;
+      if (plain && selected.size > 1 && selected.has(e.name) && adv<boolean>(settings, "files.keepSelectionOnDrag")) {
+        // Pressing on one of several selected items may start a drag of all of them.
+        // The selection narrows to this item only if the button is released without dragging.
+        collapseOnClick.current = i;
+        cursor.current = i;
+      } else if (ev.button === 0) selectIndex(i, ev);
       ev.stopPropagation();
     },
     onClick: (ev: React.MouseEvent) => {
+      if (collapseOnClick.current === i) {
+        collapseOnClick.current = null;
+        selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false });
+      }
       if (adv<boolean>(settings, "files.singleClickOpen") && ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey) open(e);
     },
     onDoubleClick: () => !adv<boolean>(settings, "files.singleClickOpen") && open(e),
@@ -569,10 +663,13 @@ export function FileView({ path }: { path: string }) {
     const target = ev.currentTarget;
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
-    const start = columns[key];
+    // Name fills what the others leave, so its edge moves the Date column the other way.
+    const real: keyof Columns = key === "name" ? "modified" : key;
+    const sign = key === "name" ? -1 : 1;
+    const start = columns[real];
     let latest = columns;
     const move = (m: PointerEvent) => {
-      latest = { ...columns, [key]: Math.max(MIN_COLUMN[key], Math.round(start + m.clientX - startX)) };
+      latest = { ...columns, [real]: Math.max(MIN_COLUMN[real], Math.round(start + sign * (m.clientX - startX))) };
       setColumns(latest);
     };
     const up = () => {
@@ -589,7 +686,7 @@ export function FileView({ path }: { path: string }) {
   };
 
   const header = (key: SortKey, label: string, col: keyof Columns) => (
-    <div className="column-cell" key={key} style={{ width: columns[col] }}>
+    <div className="column-cell" key={key} style={{ width: cols[col] }}>
       <button
         className="column-header"
         data-column={key}
@@ -598,7 +695,7 @@ export function FileView({ path }: { path: string }) {
       >
         {label}
       </button>
-      <div className="column-grip" role="separator" aria-label={`Resize ${label}`} onPointerDown={(e) => resize(col, e)} onDoubleClick={() => setColumns({ ...columns, [col]: DEFAULT_COLUMNS[col] })} />
+      <div className="column-grip" role="separator" aria-label={`Resize ${label}`} onPointerDown={(e) => resize(col, e)} onDoubleClick={() => setColumns({ ...columns, [col === "name" ? "modified" : col]: DEFAULT_COLUMNS[col === "name" ? "modified" : col] })} />
     </div>
   );
 
@@ -630,7 +727,15 @@ export function FileView({ path }: { path: string }) {
             {header("size", "Size", "size")}
           </div>
         )}
-        {error ? (
+        {error && isRemote(path) && /^(needs-login|untrusted-host|changed-host):/.test(error) ? (
+          <div className="empty-state">
+            <strong>Log in to {remoteLabel(path)}</strong>
+            <span>The password is not kept between sessions.</span>
+            <button className="primary" onClick={() => useStore.getState().openConnect({ url: path })}>Log in…</button>
+          </div>
+        ) : error && error.startsWith("locked:") ? (
+          <LockedCard path={path} onOpened={refresh} />
+        ) : error ? (
           <div className="empty-state" data-error>
             <strong>This folder can't be opened</strong>
             <span>{error}</span>
@@ -638,7 +743,7 @@ export function FileView({ path }: { path: string }) {
         ) : !current ? (
           <div className="loading-bar" />
         ) : entries.length === 0 ? (
-          <div className="empty-state">{filtered ? "Nothing matches the filter." : "This folder is empty."}</div>
+          <div className="empty-state"><strong>{filtered ? "Nothing matches the filter." : "This folder is empty."}</strong>{!filtered && <span>Drop files here, or use New to make something.</span>}</div>
         ) : (
           <div className="file-rows" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((row) =>
@@ -652,13 +757,13 @@ export function FileView({ path }: { path: string }) {
                       style={{ transform: `translateY(${row.start - headerHeight}px)`, height: rowHeight, width: rowsWidth }}
                       {...itemProps(e, row.index)}
                     >
-                      <div className="cell cell-name" style={{ width: columns.name }}>
+                      <div className="cell cell-name" style={{ width: cols.name }}>
                         <FileIcon kind={kindOf(e.name, e.isDir)} name={e.name} />
                         {nameCell(e)}
                       </div>
                       <div className="cell cell-date" style={{ width: columns.modified }}>{formatDate(e.modified)}</div>
                       <div className="cell cell-type" style={{ width: columns.type }}>{typeLabel(e.name, e.isDir)}</div>
-                      <div className="cell cell-size" style={{ width: columns.size }}>{!e.isDir ? formatSize(e.size) : !wantSizes || e.isSymlink ? "" : folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "…"}</div>
+                      <div className="cell cell-size" style={{ width: columns.size }}>{!e.isDir ? formatSize(e.size) : !wantSizes || e.isSymlink || isRemote(path) || isArchiveLoc(path) ? "" : folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "…"}</div>
                     </div>
                   );
                 })()

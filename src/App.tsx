@@ -5,17 +5,22 @@ import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from 
 import { DetailsPane } from "./components/DetailsPane";
 import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
-import { Dialog, DragOverlay, PropertiesDialog, Toast } from "./components/Overlays";
+import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
+import { LockDialog } from "./components/Locks";
+import { Setup } from "./components/Setup";
 import { ShareDialog } from "./components/Share";
+import { BatchRename } from "./components/BatchRename";
+import { ConnectServer } from "./components/ConnectServer";
 import { SettingsView } from "./components/SettingsView";
 import { Notices } from "./components/Notices";
 import { DetachedTransfers, Transfers } from "./components/Transfers";
 import { AnalyzerView } from "./components/Analyzer";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
-import { onJobFinished, useStore } from "./store";
+import { onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
-import { HOME, THIS_PC, parseLocation } from "./util/path";
+import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } from "./util/path";
+import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 
@@ -24,6 +29,7 @@ export default function App() {
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
   const activeTab = useStore((s) => s.activeTab);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const settings = useStore((s) => s.settings);
   const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
   const os = useStore((s) => s.info?.os);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -31,6 +37,18 @@ export default function App() {
   const [layout] = useLayout();
 
   useAppearance();
+
+  // Tell the backend which folders are open, so it can watch them and refresh
+  // the listing when another program changes one. The key is a string so the
+  // effect only runs when the set of folders really changes.
+  const openFolders = useStore((s) => {
+    if (!s.ready || !s.settings?.general.liveRefresh) return "";
+    return [...new Set(s.tabs.map((t) => t.location).filter((l) => !isAppLocation(l) && !isRemote(l) && !isArchiveLoc(l)))].sort().join("\n");
+  });
+  useEffect(() => {
+    const timer = window.setTimeout(() => void api.watchDirs(openFolders ? openFolders.split("\n") : []).catch(() => {}), 150);
+    return () => window.clearTimeout(timer);
+  }, [openFolders]);
 
   useEffect(() => {
     const s = useStore.getState();
@@ -61,7 +79,22 @@ export default function App() {
           const b = el.getBoundingClientRect();
           return x > b.left + b.width / 2;
         }).length;
+        useStore.setState({ incomingTab: null });
         useStore.getState().insertTabs([location], index);
+      }),
+      // Another window is dragging a tab over our tab strip: outline where it would land.
+      on("tab-hover", ({ x, w }) => {
+        if (x == null) {
+          if (useStore.getState().incomingTab) useStore.setState({ incomingTab: null });
+          return;
+        }
+        const slots = [...document.querySelectorAll<HTMLElement>(".tab-bar .tab[data-tab-id]")];
+        const index = slots.filter((el) => {
+          const b = el.getBoundingClientRect();
+          return x > b.left + b.width / 2;
+        }).length;
+        const cur = useStore.getState().incomingTab;
+        if (!cur || cur.index !== index || cur.w !== w) useStore.setState({ incomingTab: { index, w } });
       }),
       // Files dragged in from other programs.
       listenForExternalDrops().then((off) => () => off()),
@@ -84,12 +117,40 @@ export default function App() {
     if (was.transfers) void api.openTransfersWindow().catch(() => {});
   }, [ready]);
 
+  // Give memory back a couple of minutes after the window goes to the background.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const away = () => {
+      clearTimeout(timer);
+      if (!adv<boolean>(useStore.getState().settings, "perf.compactWhenIdle")) return;
+      timer = setTimeout(() => void api.compactMemory().catch(() => {}), 120_000);
+    };
+    const back = () => clearTimeout(timer);
+    window.addEventListener("blur", away);
+    window.addEventListener("focus", back);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("blur", away);
+      window.removeEventListener("focus", back);
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
       if (s.dialog) return;
       // While a shortcut is being recorded in Settings, leave the keys alone.
       if ((e.target as HTMLElement | null)?.closest?.("[data-capture-key]")) return;
+      // Undo and Redo work wherever the focus is (a dialog that just closed leaves
+      // none), except while typing, where the text box has its own undo.
+      const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.altKey && !typing && ["z", "y"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        if (e.key.toLowerCase() === "y" || e.shiftKey) void redoLast();
+        else void undoLast();
+        return;
+      }
       const command = commandFor(s.settings, e);
       if (!command) return;
       const i = s.tabs.findIndex((t) => t.id === s.activeTab);
@@ -105,6 +166,7 @@ export default function App() {
         case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
         case "thisPc": s.navigate(THIS_PC); break;
         case "home": s.navigate(HOME); break;
+        case "toggleHidden": s.updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)); break;
         default: return;
       }
       e.preventDefault();
@@ -166,11 +228,17 @@ export default function App() {
       />
       <Transfers />
       <Notices />
+      {settings && !settings.setupDone && <Setup />}
       {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
       {settingsOpen && <SettingsView />}
       <PropertiesDialog />
+      <OpenWithDialog />
+      <LockDialog />
       <ShareDialog />
+      <BatchRename />
+      <ConnectServer />
       <DragOverlay />
+      <Tooltips />
       <Dialog />
       <Toast />
     </div>

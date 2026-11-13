@@ -190,6 +190,8 @@ export const MENU_CATALOG: { id: string; label: string }[] = [
   { id: "sendTo", label: "Send to" },
   { id: "share", label: "Share" },
   { id: "createShortcut", label: "Create shortcut" },
-  { id: "shellExtras", label: "Entries added by other programs (Edit, 7-Zip, Print…)" },
+  { id: "archive", label: "Compress and Extract" },
+  { id: "shellExtras", label: "Entries from other programs" },
   { id: "properties", label: "Properties" },
+  { id: "lock", label: "Lock with passcode" },
 ];

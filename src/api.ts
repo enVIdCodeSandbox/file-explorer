@@ -64,6 +64,8 @@ export interface Details {
   image: [number, number] | null;
   itemCount: number | null;
   volume: Drive | null;
+  /** What a photo, song or video says about itself, in the order worth showing. */
+  media: { label: string; value: string }[];
 }
 
 export interface PathStat {
@@ -82,6 +84,19 @@ export interface FolderStats {
   oldest: PathStat | null;
   emptyFolders: number;
   complete: boolean;
+}
+
+export interface OpenApp {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+}
+
+export interface OpenChoices {
+  extension: string;
+  default: OpenApp | null;
+  suggested: OpenApp[];
+  others: OpenApp[];
 }
 
 export interface Hit {
@@ -254,6 +269,41 @@ export interface DeleteProgress {
   elapsedSecs: number;
   /** Name of the first selected item. */
   firstName: string;
+  /** "delete", or "compress" / "extract" for an archive job shown on the same card. */
+  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "remote-delete";
+  /** For a finished archive or server job: what was made (for "open": the downloaded file). */
+  result: string;
+  /** Server jobs: bytes moved so far and expected in total. */
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+export type ServerProtocol = "ftp" | "sftp" | "dav";
+
+/** Everything needed to log in to a server. The password is never saved. */
+export interface Server {
+  protocol: ServerProtocol;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  keyFile?: string | null;
+  /** WebDAV: use HTTPS. */
+  tls: boolean;
+  /** SFTP: the host key fingerprint the person agreed to trust. */
+  trust?: string | null;
+}
+
+/** A server address kept in the list of servers (no password). */
+export interface SavedServer {
+  name: string;
+  protocol: ServerProtocol;
+  host: string;
+  port: number;
+  user: string;
+  tls: boolean;
+  keyFile?: string | null;
+  path: string;
 }
 
 /** Work that can be run through the operating system's administrator prompt. */
@@ -332,6 +382,7 @@ export interface Settings {
     foldersFirst: boolean;
     nativeProperties: boolean;
     shellExtras: boolean;
+    liveRefresh: boolean;
   };
   appearance: {
     theme: string;
@@ -386,6 +437,20 @@ export interface Settings {
   /** Shortcuts that differ from the defaults, by command id. */
   keys: Record<string, string>;
   customActions: CustomAction[];
+  /** Saved sets of settings (see settings/presets.ts). */
+  profiles: Profile[];
+  activeProfile: string;
+  /** False until the first-run setup has been completed or skipped. */
+  setupDone: boolean;
+}
+
+export interface Profile {
+  id: string;
+  name: string;
+  description: string;
+  builtIn: boolean;
+  /** A Settings object without the profile fields. */
+  snapshot: Record<string, unknown>;
 }
 
 export interface CustomAction {
@@ -433,6 +498,7 @@ export interface Session {
   pins: Pin[] | null;
   recent: Recent[];
   drives: Drive[];
+  searches: string[];
 }
 
 export interface Budget {
@@ -480,6 +546,19 @@ export type TerminalMode = "here" | "home" | "driveRoot" | "admin";
 
 export const api = {
   listDir: (path: string) => invoke<Listing>("list_dir", { path }),
+  remoteConnect: (server: Server, path?: string) => invoke<string>("remote_connect", { server, path: path ?? null }),
+  remoteDisconnect: (location: string) => invoke<void>("remote_disconnect", { location }),
+  remoteIsConnected: (location: string) => invoke<boolean>("remote_is_connected", { location }),
+  remoteMkdir: (parent: string, name: string) => invoke<string>("remote_mkdir", { parent, name }),
+  remoteRename: (from: string, newName: string) => invoke<string>("remote_rename", { from, newName }),
+  /** Copy items out of an archive into a folder, or (open) fetch one file to a temporary place and open it. */
+  archiveCopyStart: (sources: string[], dest: string, open = false) => invoke<number>("archive_copy_start", { sources, dest, open }),
+  remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => invoke<number>("remote_copy_start", { sources, dest, mv, open }),
+  remoteRemoveStart: (paths: string[]) => invoke<number>("remote_remove_start", { paths }),
+  serversList: () => invoke<SavedServer[]>("servers_list"),
+  serversSave: (entry: SavedServer) => invoke<SavedServer[]>("servers_save", { entry }),
+  serversRemove: (name: string) => invoke<SavedServer[]>("servers_remove", { name }),
+  serversForgetHost: (host: string, port: number) => invoke<void>("servers_forget_host", { host, port }),
   prefetch: (paths: string[]) => invoke<void>("prefetch", { paths }),
   recordVisit: (from: string | null, to: string) => invoke<string[]>("record_visit", { from, to }),
   getDetails: (path: string) => invoke<Details>("get_details", { path }),
@@ -495,6 +574,10 @@ export const api = {
   analyzeStart: (path: string) => invoke<void>("analyze_start", { path }),
   analyzeCancel: (path: string) => invoke<void>("analyze_cancel", { path }),
   frequentFolders: (limit: number) => invoke<string[]>("frequent_folders", { limit }),
+  trashPaths: (paths: string[]) => invoke<void>("trash_paths", { paths }),
+  restoreFromTrash: (paths: string[]) => invoke<number>("restore_from_trash", { paths }),
+  archiveStart: (action: "compress" | "extract", paths: string[], here = false) => invoke<number>("archive_start", { action, paths, here }),
+  watchDirs: (dirs: string[]) => invoke<void>("watch_dirs", { dirs }),
   checkConflicts: (sources: string[], destDir: string) =>
     invoke<string[]>("check_conflicts", { sources, destDir }),
   transferStart: (spec: TransferSpec) => invoke<number>("transfer_start", { spec }),
@@ -516,10 +599,14 @@ export const api = {
   historyInfo: () => invoke<HistoryInfo>("history_info"),
   networkMap: (remote: string, letter: string | null) => invoke<string | null>("network_map", { remote, letter }),
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
+  driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),
   renameItem: (path: string, newName: string) => invoke<string>("rename_item", { path, newName }),
   createItem: (dir: string, name: string, folder: boolean) =>
     invoke<string>("create_item", { dir, name, folder }),
   openItem: (path: string) => invoke<void>("open_item", { path }),
+  openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
+  openWithApp: (path: string, app: string, always: boolean) => invoke<void>("open_with_app", { path, app, always }),
+  openSystemChooser: (path: string) => invoke<void>("open_system_chooser", { path }),
   openTerminal: (path: string, mode: TerminalMode) => invoke<void>("open_terminal", { path, mode }),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
@@ -537,7 +624,16 @@ export const api = {
   configFolder: () => invoke<string | null>("config_folder"),
   importSettings: (json: string) => invoke<Settings>("import_settings", { json }),
   resolvePath: (input: string) => invoke<{ path: string; isDir: boolean }>("resolve_path", { input }),
-  systemReport: () => invoke<FullReport>("system_report"),
+  systemReport: (refresh = false) => invoke<FullReport>("system_report", { refresh }),
+  diskSmartAdmin: (device: string) => invoke<FullReport>("disk_smart_admin", { device }),
+  resourceUsage: () => invoke<ResourceUsage>("resource_usage"),
+  compactMemory: () => invoke<[number, number]>("compact_memory"),
+  locksList: () => invoke<LocksState>("locks_list"),
+  lockAdd: (path: string, passcode: string, mainPassword?: string) => invoke<LocksState>("lock_add", { path, passcode, mainPassword }),
+  lockUnlock: (path: string, passcode: string) => invoke<boolean>("lock_unlock", { path, passcode }),
+  lockRemove: (id: string, secret: string) => invoke<LocksState>("lock_remove", { id, secret }),
+  lockSetMain: (old: string, next: string) => invoke<LocksState>("lock_set_main", { old, new: next }),
+  locksRelock: () => invoke<LocksState>("locks_relock"),
   openTransfersWindow: () => invoke<void>("open_transfers_window"),
   openWindow: (location: string, x?: number, y?: number) => invoke<void>("open_window", { location, x, y }),
   /** Drop a tab on another window's tab bar. True when one took it. */
@@ -545,15 +641,25 @@ export const api = {
   shareInternetAvailable: () => invoke<boolean>("share_internet_available"),
   shareStop: (id: string) => invoke<void>("share_stop", { id }),
   shareList: () => invoke<ShareInfo[]>("share_list"),
+  tabHover: (x: number, y: number, width: number, active: boolean) => invoke<void>("tab_hover", { x, y, width, active }),
   dropTab: (location: string, x: number, y: number, closeSource: boolean) => invoke<boolean>("drop_tab", { location, x, y, closeSource }),
   openSettingsWindow: () => invoke<void>("open_settings_window"),
   reattach: (kind: "settings" | "transfers", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
-  folderSizesStart: (dir: string, names: string[], refresh: boolean) => invoke<void>("folder_sizes_start", { dir, names, refresh }),
+  folderSizesStart: (dir: string, names: string[], refresh: boolean, policy: SizePolicy) => invoke<void>("folder_sizes_start", { dir, names, refresh, policy }),
   cacheUsage: () => invoke<CacheEntry[]>("cache_usage"),
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
 };
 
+/** How remembered folder sizes are used. */
+export interface SizePolicy {
+  remember: boolean;
+  freshSecs: number;
+  maxEntries: number;
+}
+
 export interface FolderSize {
+  /** A remembered size; a fresh measurement may follow. */
+  cached?: boolean;
   dir: string;
   name: string;
   bytes: number;
@@ -579,6 +685,8 @@ export interface BackendEvents {
   detached: { kind: "settings" | "transfers" | string; open: boolean };
   reattach: { kind: "settings" | "transfers" | string; payload?: unknown };
   "tab-drop": { location: string; x: number; y: number };
+  /** Another window is dragging a tab over this one (x is null once it leaves). */
+  "tab-hover": { x: number | null; w: number };
   "settings-changed": Settings;
 }
 
@@ -596,7 +704,24 @@ export interface Lifespan {
   yearsLeft: number | null;
   basis: "projection" | "rule of thumb" | string;
 }
+export interface DiskFact {
+  label: string;
+  value: string;
+}
+export interface SmartAttr {
+  id: number;
+  name: string;
+  value: number | null;
+  worst: number | null;
+  threshold: number | null;
+  raw: string;
+  failing: boolean;
+}
 export interface PhysicalDisk {
+  device: string;
+  facts: DiskFact[];
+  attributes: SmartAttr[];
+  needsAdmin: boolean;
   name: string;
   model: string;
   kind: string;
@@ -649,4 +774,30 @@ export interface FullReport {
     cacheDir: string;
   };
   system: SystemReport;
+  /** Unix seconds when the hardware was read, if this is a saved copy. */
+  cachedAt: number | null;
+}
+
+export interface ResourceUsage {
+  cpuPercent: number;
+  memoryBytes: number;
+  virtualBytes: number;
+  diskReadTotal: number;
+  diskWriteTotal: number;
+  threads: number;
+  cpus: number;
+  systemTotalBytes: number;
+  systemAvailableBytes: number;
+  storedDiskBytes: number;
+  cachedMemoryBytes: number;
+}
+
+export interface LockInfo {
+  id: string;
+  path: string;
+  open: boolean;
+}
+export interface LocksState {
+  hasMain: boolean;
+  locks: LockInfo[];
 }

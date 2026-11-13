@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type BatteryInfo, type FullReport, type Lifespan, type PhysicalDisk } from "../api";
 import { DEVELOPER, PROJECT } from "../about";
 import { useStore } from "../store";
+import { Icon } from "./Icons";
 import { formatCount, formatDate, formatDuration, formatMemory, formatSize } from "../util/format";
 
 type Row = [label: string, value: React.ReactNode];
@@ -51,8 +52,22 @@ function Life({ life }: { life: Lifespan | null }) {
   );
 }
 
-function Disk({ d }: { d: PhysicalDisk }) {
+function Disk({ d, onReport }: { d: PhysicalDisk; onReport: (r: FullReport) => void }) {
   const ok = d.health && /^(healthy|ok|passed|verified)$/i.test(d.health);
+  const [open, setOpen] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const { showToast } = useStore.getState();
+  const runAsAdmin = () => {
+    setAsking(true);
+    api
+      .diskSmartAdmin(d.device)
+      .then((r) => {
+        onReport(r);
+        showToast("Read the drive's health with administrator rights.");
+      })
+      .catch((e) => showToast(String(e)))
+      .finally(() => setAsking(false));
+  };
   return (
     <div className="disk-card">
       <div className="disk-head">
@@ -81,6 +96,55 @@ function Disk({ d }: { d: PhysicalDisk }) {
       />
       <Life life={d.lifespan} />
       <p className="muted about-source">Source: {d.source}</p>
+      {d.needsAdmin && (
+        <div className="button-row">
+          <button className="secondary" disabled={asking} onClick={runAsAdmin} title="Asks your system for permission once, for this drive only. The app itself keeps running without it.">
+            <Icon name="shield" size={13} /> {asking ? "Waiting for permission…" : "Run as administrator to read this drive"}
+          </button>
+          <span className="muted">Health data for this drive needs administrator rights.</span>
+        </div>
+      )}
+      {(d.facts.length > 0 || d.attributes.length > 0) && (
+        <button className="link-button" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Hide all details" : `Show all details (${d.facts.length + d.attributes.length})`}
+        </button>
+      )}
+      {open && d.facts.length > 0 && (
+        <dl className="details-list disk-facts">
+          {d.facts.map((f, i) => (
+            <div key={f.label + i} className="about-row">
+              <dt>{f.label}</dt>
+              <dd>{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {open && d.attributes.length > 0 && (
+        <table className="smart-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Attribute</th>
+              <th>Value</th>
+              <th>Worst</th>
+              <th>Threshold</th>
+              <th>Raw</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.attributes.map((a) => (
+              <tr key={a.id + a.name} data-failing={a.failing || undefined}>
+                <td>{a.id}</td>
+                <td>{a.name}</td>
+                <td>{a.value ?? "—"}</td>
+                <td>{a.worst ?? "—"}</td>
+                <td>{a.threshold ?? "—"}</td>
+                <td>{a.raw}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -137,16 +201,16 @@ export function About() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
+  const load = useCallback((refresh = false) => {
     setBusy(true);
     setError(null);
     api
-      .systemReport()
+      .systemReport(refresh)
       .then(setReport)
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(false));
   }, []);
-  useEffect(load, [load]);
+  useEffect(() => load(false), [load]);
 
   if (!info || !budget) return null;
   const tier = { full: "Full", balanced: "Balanced", saver: "Power saver", manual: "Manual" }[budget.tier];
@@ -166,8 +230,8 @@ export function About() {
       </div>
 
       <div className="button-row">
-        <button className="secondary" disabled={busy} onClick={load}>
-          {busy ? "Reading this computer…" : "Refresh"}
+        <button className="secondary" disabled={busy} onClick={() => load(true)}>
+          {busy ? "Reading this computer…" : "Read again now"}
         </button>
         <button
           className="secondary"
@@ -177,6 +241,11 @@ export function About() {
           Copy report
         </button>
       </div>
+      {report?.cachedAt != null && !busy && (
+        <p className="muted">
+          Hardware details were saved {formatDate(report.cachedAt * 1000)} so this page opens at once. Choose “Read again now” to update them; how long they are kept is set in Settings &gt; Storage.
+        </p>
+      )}
       {error && <p className="error-text">Could not read the system report: {error}</p>}
       {loading && <p className="muted">Reading hardware and drive health. This can take a few seconds the first time.</p>}
 
@@ -186,7 +255,7 @@ export function About() {
             ["Version", `${info.version}${report ? ` (${report.app.profile} build)` : ""}`],
             ["License", report?.app.license ? `${PROJECT.licenseName} (${report.app.license})` : PROJECT.licenseName],
             ["Platform", report && `${report.app.os} ${report.app.arch}`],
-            ["Shell", report && `Tauri ${report.app.tauri}`],
+            ["Tauri", report && report.app.tauri],
             ["Web view", report?.app.webview],
             ["Running for", report && formatDuration(report.app.startedSecsAgo)],
             ["Memory used by the app", s && s.software.ownMemory > 0 && formatSize(s.software.ownMemory)],
@@ -278,7 +347,7 @@ export function About() {
       <Section title="Physical drives" hint="Health, wear and expected life as reported by the drives themselves.">
         {loading && <p className="muted">Reading drive health…</p>}
         {s && s.disks.length === 0 && <p className="muted">No physical drives could be listed.</p>}
-        {s?.disks.map((d) => <Disk key={d.name + d.model} d={d} />)}
+        {s?.disks.map((d) => <Disk key={d.name + d.model} d={d} onReport={setReport} />)}
         {s?.notes.map((n) => (
           <p key={n} className="muted about-note">
             {n}

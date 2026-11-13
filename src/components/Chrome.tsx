@@ -3,36 +3,45 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Drive, type TerminalMode } from "../api";
+import { api, type Drive, type SavedServer, type TerminalMode } from "../api";
 import {
   GROUP_COLORS,
   VIEW_LEVELS,
-  ask,
   createPath,
   deletePaths,
+  openFile,
   promptText,
   showProperties,
   tabTitle,
   thisPcLabel,
   undoLast,
+  redoLast,
   useStore,
 } from "../store";
 import { adv } from "../settings/advanced";
-import { driveName, driveRemote } from "../util/drives";
+import { commandFor } from "../settings/keys";
+import { driveName, driveRemote, hidesAddress } from "../util/drives";
 import { isFiltering, toSearchQuery } from "../util/filter";
 import {
   HOME,
   THIS_PC,
   analyzeLocation,
+  archiveDisplay,
+  archiveFromTyped,
+  archiveUrl,
   baseName,
   crumbs,
   isAppLocation,
+  isArchiveFile,
+  isRemote,
+  maskAddresses,
   parentPath,
   parseLocation,
   searchLocation,
 } from "../util/path";
 import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
+import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
 
 // ---------------------------------------------------------------------------
@@ -40,7 +49,7 @@ import { FileIcon, Icon } from "./Icons";
 // ---------------------------------------------------------------------------
 
 /** Minimize, maximize/restore and close, drawn like Windows 11's. */
-function WindowControls() {
+function WindowControls({ side = "right" }: { side?: "left" | "right" }) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -51,7 +60,7 @@ function WindowControls() {
   }, []);
   const win = () => getCurrentWindow();
   return (
-    <div className="window-controls">
+    <div className="window-controls" data-side={side} data-look={side === "left" ? "round" : undefined}>
       <button aria-label="Minimize" title="Minimize" onClick={() => void win().minimize()}>
         <Icon name="minimize" size={12} />
       </button>
@@ -68,18 +77,22 @@ function WindowControls() {
 /** A slim strip with the window buttons, for when the tabs are not in the top row. */
 export function CaptionStrip() {
   const os = useStore((s) => s.info?.os);
+  const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   return (
     <div className="title-bar caption-strip" data-tauri-drag-region data-os={os}>
       {os === "macos" && <div className="traffic-light-space" data-tauri-drag-region />}
+      {os !== "macos" && side === "left" && <WindowControls side="left" />}
       <span className="caption-title" data-tauri-drag-region>FAST File Explorer</span>
       <div className="title-drag" data-tauri-drag-region />
-      {os !== "macos" && <WindowControls />}
+      {os !== "macos" && side === "right" && <WindowControls />}
     </div>
   );
 }
 
 export function TabBar({ controls = true, vertical = false }: { controls?: boolean; vertical?: boolean } = {}) {
   const os = useStore((s) => s.info?.os);
+  const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
+  const incoming = useStore((s) => s.incomingTab);
   const tabs = useStore((s) => s.tabs);
   const groups = useStore((s) => s.groups);
   const activeTab = useStore((s) => s.activeTab);
@@ -149,8 +162,9 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
   const scrollBy = (dir: -1 | 1) => barRef.current?.scrollBy(vertical ? { top: dir * 160, behavior: "smooth" } : { left: dir * 240, behavior: "smooth" });
 
   // ---- Dragging a tab: reorder inside the bar, or drop outside for a new window
-  const { moveTab, detachTab } = useStore.getState();
-  const [drag, setDrag] = useState<{ id: string; x: number; y: number; w: number; index: number; inside: boolean } | null>(null);
+  const { moveTab, moveGroup, detachTab } = useStore.getState();
+  const [drag, setDrag] = useState<{ id: string; group?: string; x: number; y: number; w: number; index: number; inside: boolean } | null>(null);
+  const suppressChipClick = useRef(false);
   const startDrag = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest(".tab-close")) return;
     const [sx, sy] = [e.clientX, e.clientY];
@@ -171,16 +185,32 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       });
       return (last = { index, inside });
     };
+    let lastHover = 0;
+    let hovering = false;
     const move = (ev: PointerEvent) => {
       if (!started && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
       started = true;
-      setDrag({ id, x: ev.clientX, y: ev.clientY, w, ...where(ev) });
+      const at = where(ev);
+      setDrag({ id, x: ev.clientX, y: ev.clientY, w, ...at });
+      // Outside this window's tab strip: let the window underneath show where it would land.
+      if (!at.inside) {
+        const t = performance.now();
+        if (t - lastHover > 40) {
+          lastHover = t;
+          hovering = true;
+          void api.tabHover(ev.screenX, ev.screenY, w, true).catch(() => {});
+        }
+      } else if (hovering) {
+        hovering = false;
+        void api.tabHover(0, 0, w, false).catch(() => {});
+      }
     };
     const finish = (commit: boolean, ev?: PointerEvent) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("keydown", key, true);
       setDrag(null);
+      if (hovering) void api.tabHover(0, 0, w, false).catch(() => {});
       if (!started || !commit || !ev) return;
       const at = where(ev);
       if (at.inside) moveTab(id, at.index);
@@ -193,14 +223,65 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
     window.addEventListener("keydown", key, true);
   };
 
+  // ---- Dragging a group chip: the whole group moves as one block ---------------
+  const startGroupDrag = (e: React.PointerEvent, groupId: string) => {
+    if (e.button !== 0) return;
+    const [sx, sy] = [e.clientX, e.clientY];
+    const w = (e.currentTarget as HTMLElement).offsetWidth;
+    let started = false;
+    let last = { index: 0, inside: true };
+    const where = (ev: PointerEvent) => {
+      const bar = barRef.current;
+      if (!bar) return last;
+      const r = bar.getBoundingClientRect();
+      const slack = 34;
+      const inside = ev.clientX >= r.left - slack && ev.clientX <= r.right + slack && ev.clientY >= r.top - slack && ev.clientY <= r.bottom + slack;
+      const rest = useStore.getState().tabs.filter((t) => t.groupId !== groupId);
+      let index = 0;
+      for (const t of rest) {
+        const el = bar.querySelector<HTMLElement>(`.tab[data-tab-id="${t.id}"]`);
+        if (!el) continue;
+        const b = el.getBoundingClientRect();
+        if (vertical ? ev.clientY > b.top + b.height / 2 : ev.clientX > b.left + b.width / 2) index = rest.indexOf(t) + 1;
+      }
+      // Never land inside another group: snap to the start of the group we are over.
+      while (index > 0 && index < rest.length && rest[index].groupId && rest[index].groupId === rest[index - 1].groupId) index--;
+      return (last = { index, inside });
+    };
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+      started = true;
+      setDrag({ id: "", group: groupId, x: ev.clientX, y: ev.clientY, w, ...where(ev) });
+    };
+    const finish = (commit: boolean, ev?: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key, true);
+      setDrag(null);
+      if (!started) return;
+      suppressChipClick.current = true; // the click that follows a drag must not collapse the group
+      setTimeout(() => (suppressChipClick.current = false), 0);
+      if (!commit || !ev) return;
+      const at = where(ev);
+      if (at.inside) moveGroup(groupId, at.index);
+    };
+    const up = (ev: PointerEvent) => finish(true, ev);
+    const key = (ev: KeyboardEvent) => ev.key === "Escape" && finish(false);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", key, true);
+  };
+
   const dragged = drag ? tabs.find((t) => t.id === drag.id) : undefined;
-  const shadow = (key: string) => <div key={key} className="tab-drop-shadow" aria-hidden="true" style={vertical ? undefined : { width: drag?.w }} />;
+  const draggedGroup = drag?.group ? groups.find((g) => g.id === drag.group) : undefined;
+  const shadow = (key: string, width = drag?.w) => <div key={key} className="tab-drop-shadow" aria-hidden="true" style={vertical ? undefined : { width }} />;
 
   let lastGroup: string | null = null;
   let slot = 0;
   return (
     <div className="title-bar" data-tauri-drag-region data-os={os} data-vertical={vertical || undefined} data-controls={controls || undefined}>
      {controls && os === "macos" && <div className="traffic-light-space" data-tauri-drag-region />}
+     {controls && os !== "macos" && side === "left" && <WindowControls side="left" />}
      <div className="tab-strip" data-vertical={vertical || undefined}>
       {more.before && (
         <button className="tab-scroll" aria-label="Scroll tabs back" title="Scroll tabs back" onClick={() => scrollBy(-1)}>
@@ -223,8 +304,13 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
         const chip = group && group.id !== lastGroup;
         lastGroup = group?.id ?? null;
         const hidden = group?.collapsed && t.id !== activeTab;
-        const isDragged = drag?.id === t.id;
-        const before = drag?.inside && !isDragged && slot === drag.index ? shadow(`shadow-${t.id}`) : null;
+        const isDragged = drag?.group ? t.groupId === drag.group : drag?.id === t.id;
+        const before =
+          drag?.inside && !isDragged && slot === drag.index
+            ? shadow(`shadow-${t.id}`)
+            : !drag && incoming && slot === incoming.index
+              ? shadow(`incoming-${t.id}`, incoming.w)
+              : null;
         if (!isDragged) slot++;
         return (
           <div key={t.id} className="tab-slot" data-dragging={isDragged || undefined} style={group ? { ["--group-color" as string]: group.color } : undefined}>
@@ -233,7 +319,8 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
               <button
                 className="tab-group-chip"
                 title={group.collapsed ? "Expand group" : "Collapse group"}
-                onClick={() => updateGroup(group.id, { collapsed: !group.collapsed })}
+                onPointerDown={(e) => startGroupDrag(e, group.id)}
+                onClick={() => !suppressChipClick.current && updateGroup(group.id, { collapsed: !group.collapsed })}
                 onContextMenu={(e) => open(e, groupMenu(group.id))}
               >
                 {group.name}
@@ -253,7 +340,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
                 onMouseDown={(e) => e.button === 0 && activate(t.id)}
                 onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
                 onContextMenu={(e) => open(e, tabMenu(t.id, t.groupId))}
-                title={isAppLocation(t.location) ? tabTitle(t.location) : t.location}
+                title={isAppLocation(t.location) ? tabTitle(t.location) : maskAddresses(t.location)}
               >
                 <FileIcon kind={isAppLocation(t.location) ? "file" : "folder"} size={14} />
                 <span className="tab-title">{tabTitle(t.location)}</span>
@@ -271,6 +358,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
         );
       })}
       {drag?.inside && slot <= drag.index && shadow("shadow-end")}
+      {!drag && incoming && slot <= incoming.index && shadow("incoming-end", incoming.w)}
       </div>
       {more.after && (
         <button className="tab-scroll" aria-label="Scroll tabs forward" title="Scroll tabs forward" data-forward onClick={() => scrollBy(1)}>
@@ -282,7 +370,12 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       </button>
      </div>
      {!vertical && <div className="title-drag" data-tauri-drag-region />}
-     {controls && os !== "macos" && <WindowControls />}
+     {controls && os !== "macos" && side === "right" && <WindowControls />}
+     {drag && draggedGroup && (
+       <div className="tab-group-chip tab-ghost-chip" style={{ left: drag.x - drag.w / 2, top: drag.y - 10, ["--group-color" as string]: draggedGroup.color }}>
+         {draggedGroup.name}
+       </div>
+     )}
      {drag && dragged && (
        <div className="tab tab-ghost" data-detach={!drag.inside || undefined} style={{ left: drag.x - drag.w / 2, top: drag.y - 17, width: drag.w }}>
          <FileIcon kind={isAppLocation(dragged.location) ? "file" : "folder"} size={14} />
@@ -308,6 +401,9 @@ export function Toolbar() {
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const searches = useStore((s) => s.searches);
+  const [boxFocused, setBoxFocused] = useState(false);
+  const historyLimit = adv<number>(settings, "search.historyLimit");
 
   const location = tab?.location ?? HOME;
   const loc = parseLocation(location);
@@ -337,17 +433,25 @@ export function Toolbar() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if ((mod && e.key.toLowerCase() === "f") || e.key === "F3") {
+      const cmd = commandFor(useStore.getState().settings, e);
+      const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
+      if (cmd === "focusSearch" || e.key === "F3") {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
-      } else if ((mod && e.key.toLowerCase() === "l") || (e.altKey && e.key.toLowerCase() === "d")) {
+      } else if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
         e.preventDefault();
         setEditing(true);
-      } else if (e.altKey && e.key === "ArrowLeft") back();
-      else if (e.altKey && e.key === "ArrowRight") forward();
-      else if (e.altKey && e.key === "ArrowUp" && up) navigate(up);
+      } else if (cmd === "back" && !(typing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        back();
+      } else if (cmd === "forward" && !(typing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        forward();
+      } else if (cmd === "goUp" && up && !(typing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        navigate(up);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -372,7 +476,12 @@ export function Toolbar() {
 
   /** This PC > Main-Dev-Drive (A:) > Projects: the drive shows its name and letter. */
   const trail: { label: string; path: string; icon?: string }[] = [{ label: "", path: THIS_PC, icon: "pc" }, { label: thisPcLabel(info?.os), path: THIS_PC }];
-  if (folder) {
+  if (folder && isRemote(folder)) {
+    // A server starts its own trail: "tester@host › folder › subfolder".
+    trail.length = 0;
+    trail.push({ label: "", path: THIS_PC, icon: "pc" });
+    for (const c of crumbs(folder)) trail.push({ label: c.label, path: c.path });
+  } else if (folder) {
     for (const [i, c] of crumbs(folder).entries()) {
       const drive = i === 0 ? drives.find((d) => d.mount === c.path || d.mount.replace(/[\\/]$/, "") === c.path.replace(/[\\/]$/, "")) : undefined;
       trail.push({ label: drive ? driveName(drive, settings.appearance) : c.label, path: c.path });
@@ -414,17 +523,25 @@ export function Toolbar() {
           <input
             className="address-input"
             autoFocus
-            defaultValue={folder ?? ""}
+            defaultValue={folder ? archiveDisplay(folder) : ""}
             placeholder="Type a path"
             onFocus={(e) => e.target.select()}
             onBlur={() => setEditing(false)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && e.currentTarget.value.trim()) {
-                const typed = e.currentTarget.value;
+                const typed = e.currentTarget.value.trim();
+                if (isRemote(typed)) {
+                  // A server address: opens it, asking for the login if needed.
+                  navigate(typed);
+                  setEditing(false);
+                  return;
+                }
+                const viaArchive = archiveFromTyped(typed);
                 void api
                   .resolvePath(typed)
                   .then((r) => {
-                    if (r.isDir) navigate(r.path);
+                    if (!r.isDir && isArchiveFile(r.path) && adv<boolean>(settings, "files.openArchives")) navigate(archiveUrl(r.path));
+                    else if (r.isDir) navigate(r.path);
                     else {
                       // A file: show its folder with the file selected.
                       const dir = parentPath(r.path);
@@ -435,7 +552,13 @@ export function Toolbar() {
                     }
                     setEditing(false);
                   })
-                  .catch((err) => showToast(String(err)));
+                  .catch((err) => {
+                    // Not on disk as typed: perhaps it goes through an archive (a.zip/docs).
+                    if (viaArchive) {
+                      navigate(viaArchive);
+                      setEditing(false);
+                    } else showToast(String(err));
+                  });
               } else if (e.key === "Escape") setEditing(false);
               e.stopPropagation();
             }}
@@ -463,7 +586,7 @@ export function Toolbar() {
         )}
       </div>
 
-      <div className="search-box">
+      <div className="search-box" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { setBoxFocused(false); if (loc.kind === "search") useStore.getState().addSearch(query); } }}>
         <Icon name="search" size={14} />
         <input
           ref={searchRef}
@@ -472,14 +595,40 @@ export function Toolbar() {
           aria-label="Search"
           title="Try: report *.pdf ext:jpg type:folder size:>10mb"
           onChange={(e) => onSearch(e.target.value)}
+          onFocus={() => setBoxFocused(true)}
           onKeyDown={(e) => {
+            if (e.key === "Escape") setBoxFocused(false);
             if (e.key === "Enter" && query.trim()) {
               clearTimeout(timer.current);
+              useStore.getState().addSearch(query);
+              setBoxFocused(false);
               navigate(searchLocation(query, scopeRef.current), { replace: loc.kind === "search" });
             }
             e.stopPropagation();
           }}
         />
+        {boxFocused && historyLimit > 0 && searches.length > 0 && (
+          <div className="search-history" role="listbox" aria-label="Previous searches">
+            <div className="search-history-head">
+              <span>Recent searches</span>
+              <button className="link-button" onMouseDown={(e) => e.preventDefault()} onClick={() => useStore.getState().clearSearches()}>Clear</button>
+            </div>
+            {searches
+              .filter((t) => !query.trim() || (t.toLowerCase().includes(query.trim().toLowerCase()) && t !== query))
+              .slice(0, 12)
+              .map((t) => (
+                <div key={t} className="search-history-row" role="option" aria-selected={false}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setQuery(t); setBoxFocused(false); useStore.getState().addSearch(t); navigate(searchLocation(t, scopeRef.current), { replace: loc.kind === "search" }); }}>
+                  <Icon name="clock" size={13} />
+                  <span className="search-history-text">{t}</span>
+                  <button className="search-history-x" aria-label={`Forget ${t}`} onClick={(e) => { e.stopPropagation(); useStore.getState().removeSearch(t); }}>
+                    <Icon name="close" size={9} />
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
       </div>
       <button className="icon-button" aria-label="Open terminal" title="Open terminal" onClick={terminalMenu}>
         <Icon name="terminal" />
@@ -511,46 +660,17 @@ const SORT_NAMES: [string, string][] = [
   ["size", "Size"],
 ];
 
-/** Pick a drive letter that is not in use, for the Map network drive dialog. */
-function freeLetters(drives: Drive[]): string[] {
-  const used = new Set(drives.map((d) => d.mount.slice(0, 1).toUpperCase()));
-  return "ZYXWVUTSRQPONMLKJIHGFED".split("").filter((l) => !used.has(l));
-}
-
-async function mapNetworkDrive(drives: Drive[], auto: boolean, os: string | undefined) {
-  const { showToast, refreshDrives } = useStore.getState();
-  const windows = os === "windows";
-  const r = await ask({
-    title: auto || !windows ? "Add a network location" : "Map network drive",
-    message: windows ? "Folder or computer to connect to, like \\\\server\\share" : "Server and share to connect to, like smb://server/share",
-    input: windows ? "\\\\" : "smb://",
-    select: auto || !windows ? undefined : { label: "Drive letter", options: freeLetters(drives).map((l) => ({ value: `${l}:`, label: `${l}:` })) },
-    buttons: [
-      { id: "ok", label: "Connect", primary: true },
-      { id: "cancel", label: "Cancel" },
-    ],
-  });
-  if (!r || r.button !== "ok" || !r.input.trim()) return;
-  try {
-    const mount = await api.networkMap(r.input.trim(), auto || !windows ? null : r.selected || null);
-    showToast("Connected.");
-    refreshDrives();
-    if (mount) useStore.getState().navigate(mount);
-  } catch (e) {
-    showToast(String(e));
-  }
-}
-
 export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: DOMRect) => void; vertical?: boolean }) {
   const os = useStore((s) => s.info?.os);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location ?? HOME);
   const selection = useStore((s) => s.selection);
   const undoCount = useStore((s) => s.undo.length);
+  const redoCount = useStore((s) => s.redo.length);
   const sort = useStore((s) => s.sort);
   const filter = useStore((s) => s.filter);
   const drives = useStore((s) => s.drives);
   const settings = useStore((s) => s.settings)!;
-  const { setClipboard, setSort, updateSettings, setViewLevel, showToast, refreshDrives } = useStore.getState();
+  const { setClipboard, setSort, updateSettings, setViewLevel, showToast } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   const loc = parseLocation(location);
@@ -610,7 +730,6 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
         id: "details-pane",
         label: "Details pane",
         separatorBefore: true,
-        icon: "details",
         checked: settings.appearance.showDetailsPane,
         run: () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)),
       },
@@ -636,31 +755,15 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
 
   const more = (e: React.MouseEvent) => {
     const onThisPc = loc.kind === "thispc";
-    const network = drives.filter((d) => d.media === "network");
     below(e, [
       { id: "undo", label: "Undo", icon: "undo", shortcut: "Ctrl+Z", disabled: undoCount === 0, run: () => void undoLast() },
+      { id: "redo", label: "Redo", icon: "redo", shortcut: "Ctrl+Y", disabled: redoCount === 0, run: () => void redoLast() },
       ...(onThisPc
         ? [
-            { id: "addNetwork", label: "Add a network location", icon: "network", separatorBefore: true, run: () => void mapNetworkDrive(drives, true, os) },
-            ...(os === "windows" ? [{ id: "mapDrive", label: "Map network drive", icon: "network", run: () => void mapNetworkDrive(drives, false, os) }] : []),
-            {
-              id: "disconnect",
-              label: os === "windows" ? "Disconnect network drive" : "Disconnect network location",
-              icon: "network",
-              disabled: network.length === 0,
-              children: network.map((d) => ({
-                id: `disc-${d.mount}`,
-                label: driveName(d, settings.appearance),
-                run: () =>
-                  void api
-                    .networkDisconnect(d.mount)
-                    .then(() => (showToast("Disconnected."), refreshDrives()))
-                    .catch((err) => showToast(String(err))),
-              })),
-            },
+            ...networkMenuItems(drives, os, settings.appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           ]
         : []),
-      { id: "selectAll", label: "Select all", icon: "check", shortcut: "Ctrl+A", separatorBefore: true, disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
+      { id: "selectAll", label: "Select all", shortcut: "Ctrl+A", separatorBefore: true, disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
       { id: "selectNone", label: "Select none", disabled: !inFolder, run: () => useStore.getState().runCommand("selectNone") },
       { id: "invert", label: "Invert selection", disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
       { id: "properties", label: "Properties", icon: "info", separatorBefore: true, disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
@@ -683,7 +786,7 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
       {button("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, title: "Cut (Ctrl+X)" })}
       {button("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, title: "Copy (Ctrl+C)" })}
       {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: "Paste (Ctrl+V)" })}
-      {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length !== 1, title: "Rename (F2)" })}
+      {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, title: selection.length > 1 ? "Rename the selected items (F2)" : "Rename (F2)" })}
       {button("share", "Share", "share", share, { disabled: !hasSel, caret: true })}
       {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: "Delete (Del) — Shift+click deletes permanently" })}
       <span className="cmd-sep" />
@@ -777,6 +880,51 @@ export function FilterPanel({ anchor, onClose }: { anchor: DOMRect; onClose: () 
             </select>
           </label>
         </div>
+        <div className="filter-not" role="group" aria-label="Leave out (is not)">
+          <h4>Leave out (is not)</h4>
+          <label className="filter-field">
+            <span>Name does not contain</span>
+            <input className="text-input" value={filter.notText} placeholder="e.g. backup" onChange={(e) => change({ notText: e.target.value })} />
+          </label>
+          {facets.kinds.length > 0 && (
+            <div className="filter-group">
+              <h5>Type is not</h5>
+              <div className="chips">
+                {facets.kinds.map(([k, n]) => (
+                  <button key={k} className="chip" data-not data-on={filter.notKinds.includes(k) || undefined} onClick={() => change({ notKinds: toggle(filter.notKinds, k) })}>
+                    {KIND_LABEL[k] ?? k} <span className="muted">{n}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {facets.extensions.length > 1 && (
+            <div className="filter-group">
+              <h5>Extension is not</h5>
+              <div className="chips">
+                {facets.extensions.map(([x, n]) => (
+                  <button key={x} className="chip" data-not data-on={filter.notExtensions.includes(x) || undefined} onClick={() => change({ notExtensions: toggle(filter.notExtensions, x) })}>
+                    .{x} <span className="muted">{n}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="filter-row">
+            <label>
+              <span>Date modified is not</span>
+              <select value={filter.notModified} onChange={(e) => change({ notModified: e.target.value })}>
+                {MODIFIED.map(([v, l]) => <option key={v} value={v}>{v === "any" ? "(nothing left out)" : l}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Size is not</span>
+              <select value={filter.notSize} onChange={(e) => change({ notSize: e.target.value })}>
+                {SIZES.map(([v, l]) => <option key={v} value={v}>{v === "any" ? "(nothing left out)" : l}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
         <label className="filter-check">
           <input type="checkbox" checked={filter.subfolders} disabled={!folder} onChange={(e) => setSubfolders(e.target.checked)} />
           Include subfolders
@@ -798,11 +946,21 @@ const COLLAPSED_WIDTH = 52;
 const MIN_WIDTH = 150;
 const MAX_WIDTH = 480;
 
+/** The address a saved server opens at. */
+function serverUrl(s: SavedServer): string {
+  const scheme = s.protocol === "dav" ? (s.tls ? "davs" : "dav") : s.protocol;
+  const port = s.port === (s.protocol === "ftp" ? 21 : s.protocol === "sftp" ? 22 : s.tls ? 443 : 80) ? "" : `:${s.port}`;
+  const user = s.user ? `${s.user}@` : "";
+  const path = s.path ? (s.path.startsWith("/") ? s.path : `/${s.path}`) : "/";
+  return `${scheme}://${user}${s.host}${port}${path}`;
+}
+
 export function Sidebar() {
   const pins = useStore((s) => s.pins);
   const places = useStore((s) => s.places);
   const drives = useStore((s) => s.drives);
   const frequent = useStore((s) => s.frequent);
+  const servers = useStore((s) => s.servers);
   const info = useStore((s) => s.info);
   const appearance = useStore((s) => s.settings!.appearance);
   const settings = useStore((s) => s.settings);
@@ -858,11 +1016,11 @@ export function Sidebar() {
       data-pin-index={extra?.pinIndex}
       onPointerDown={extra?.drag ? (e) => beginDrag(e, () => extra.drag!) : undefined}
       data-active={location === target || undefined}
-      title={extra?.tip ?? (isAppLocation(target) ? label : `${label}\n${target}`)}
+      title={extra?.tip ?? (isAppLocation(target) ? label : `${label}\n${maskAddresses(target)}`)}
       onClick={() => {
         if (extra?.isFile) {
           addRecent(target, false);
-          api.openItem(target).catch((e) => showToast(String(e)));
+          void openFile(target);
         } else navigate(target);
       }}
       onAuxClick={(e) => e.button === 1 && !extra?.isFile && newTab(target, { background: true })}
@@ -895,10 +1053,19 @@ export function Sidebar() {
           checked: current === n,
           run: () => updateSettings((st) => void (st.advanced = { ...st.advanced, [rowsKey]: n })),
         })),
+        ...(flag === "showDrives" ? networkMenuItems(drives, info?.os, appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)) : []),
         { id: "hide", label: "Hide this section", separatorBefore: true, run: () => updateSettings((st) => void (st.appearance[flag] = false)) },
       ],
     });
   };
+  // Sections can be folded to just their heading; the choice is remembered.
+  const folded = new Set(String(settings?.advanced?.["sidebar.folded"] ?? "").split(",").filter(Boolean));
+  const toggleFold = (id: string) =>
+    updateSettings((st) => {
+      const next = new Set(String(st.advanced?.["sidebar.folded"] ?? "").split(",").filter(Boolean));
+      next.has(id) ? next.delete(id) : next.add(id);
+      st.advanced = { ...st.advanced, ["sidebar.folded"]: [...next].join(",") };
+    });
   const heading = (text: string, rowsKey?: string, flag?: "showFrequent" | "showPinned" | "showDrives", id?: string) =>
     collapsed ? (
       <div className="side-divider" key={text} />
@@ -909,9 +1076,12 @@ export function Sidebar() {
         data-drop={id === "pinned" ? "pins" : undefined}
         data-pin-count={id === "pinned" ? pins.length : undefined}
         onPointerDown={id ? (e) => beginDrag(e, () => ({ paths: [], dirs: [], section: id, label: text })) : undefined}
+        onClick={id ? () => toggleFold(id) : undefined}
         onContextMenu={rowsKey && flag ? (e) => sectionMenu(e, rowsKey, flag) : undefined}
-        title={rowsKey ? "Drag to move this section · right-click for options" : undefined}
+        title={rowsKey ? `${folded.has(id ?? "") ? "Click to expand" : "Click to collapse"} · drag to move · right-click for options` : undefined}
+        aria-expanded={id ? !folded.has(id) : undefined}
       >
+        {id && <span className="side-fold" data-folded={folded.has(id) || undefined}><Icon name="chevron" size={9} /></span>}
         {text}
       </div>
     );
@@ -935,7 +1105,7 @@ export function Sidebar() {
         {appearance.showFrequent && frequentShown.length > 0 && (
         <>
           {heading("Frequently used", "sidebar.frequentRows", "showFrequent", "frequent")}
-          {section(
+          {!folded.has("frequent") && section(
             "sidebar.frequentRows",
             frequentShown.map((p) =>
               item(`freq-${p}`, baseName(p), p, <FileIcon kind="folder" />, {
@@ -954,8 +1124,8 @@ export function Sidebar() {
         {appearance.showPinned && (
         <>
           {heading("Pinned", "sidebar.pinnedRows", "showPinned", "pinned")}
-          {pins.length === 0 && !collapsed && <div className="side-empty" data-drop="pins" data-pin-count={0}>Drag a folder here to pin it.</div>}
-          {section(
+          {!folded.has("pinned") && pins.length === 0 && !collapsed && <div className="side-empty" data-drop="pins" data-pin-count={0}>Drag a folder here to pin it.</div>}
+          {!folded.has("pinned") && section(
             "sidebar.pinnedRows",
             pins.map((p, i) =>
               item(`pin-${p.path}`, p.label, p.path, <FileIcon kind={p.isFile ? "file" : "folder"} name={p.isFile ? p.label : places.some((pl) => pl.path === p.path) ? p.label : undefined} />, {
@@ -976,14 +1146,17 @@ export function Sidebar() {
         {appearance.showDrives && (
         <>
           {heading("Drives", "sidebar.drivesRows", "showDrives", "drives")}
-          {section(
+          {!folded.has("drives") && section(
             "sidebar.drivesRows",
             drives.map((d) =>
               item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
                 drop: d.online ? "folder" : undefined,
                 sub: d.online ? undefined : "offline",
-                tip: driveRemote(d, appearance) ? `${driveName(d, appearance)}\n${d.remote}` : undefined,
-                menu: [{ id: "analyze", label: "Analyze disk usage", run: () => navigate(analyzeLocation(d.mount)) }],
+                tip: `${driveName(d, appearance)}\n${hidesAddress(d, appearance) ? maskAddresses(d.mount, true) : d.mount}${driveRemote(d, appearance) ? `\n${d.remote}` : ""}`,
+                menu: [
+                  { id: "open", label: "Open", run: () => navigate(d.mount), disabled: !d.online },
+                  ...driveMenuItems(d, { os: info?.os, drives, appearance }).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+                ],
               }),
             ),
           )}
@@ -995,7 +1168,7 @@ export function Sidebar() {
 
   return (
     <div className="sidebar-wrap" style={{ width }}>
-    <nav className="sidebar" aria-label="Places" data-collapsed={collapsed || undefined}>
+    <nav className="sidebar" aria-label="Places" data-collapsed={collapsed || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
       <button
         className="side-item side-toggle"
         title={collapsed ? "Expand the navigation pane" : "Collapse to icons"}
@@ -1010,6 +1183,34 @@ export function Sidebar() {
       {info?.home && item("analyze", "Disk usage", analyzeLocation(info.home), <Icon name="chart" />, { tip: "Disk usage" })}
 
       {sidebarOrder(settings).map((id) => blocks[id])}
+
+      <div className="side-group" key="servers">
+        {collapsed ? <div className="side-divider" /> : (
+          <div className="side-heading" aria-expanded={!folded.has("servers")} title={folded.has("servers") ? "Click to expand" : "Click to collapse"} onClick={() => toggleFold("servers")}>
+            <span className="side-fold" data-folded={folded.has("servers") || undefined}><Icon name="chevron" size={9} /></span>
+            Servers
+          </div>
+        )}
+        {(!folded.has("servers") || collapsed) && <div className="side-section">
+          {servers.map((sv) => {
+            const url = serverUrl(sv);
+            return item(`server-${sv.name}`, sv.name, url, <Icon name="network" />, {
+              sub: undefined,
+              drop: "folder",
+              tip: `${sv.name}\n${maskAddresses(url)}`,
+              menu: [
+                { id: "server-login", label: "Log in again…", run: () => useStore.getState().openConnect({ saved: sv }) },
+                { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((e) => showToast(String(e))) },
+                { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(useStore.getState().setServers).catch((e) => showToast(String(e))) },
+              ],
+            });
+          })}
+          <button className="side-item" title="Connect to an FTP, SFTP or WebDAV server" onClick={() => useStore.getState().openConnect()}>
+            <Icon name="network" />
+            {!collapsed && <span className="side-label">Connect to server…</span>}
+          </button>
+        </div>}
+      </div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </nav>
     <div

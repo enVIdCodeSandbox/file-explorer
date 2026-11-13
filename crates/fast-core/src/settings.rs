@@ -24,6 +24,25 @@ pub struct Settings {
     pub keys: std::collections::BTreeMap<String, String>,
     /// Programs the person added to the right-click menu.
     pub custom_actions: Vec<CustomAction>,
+    /// Saved sets of settings, switchable in one click.
+    pub profiles: Vec<Profile>,
+    /// The id of the profile in use, if any.
+    pub active_profile: String,
+    /// False until the person has been through the first-run setup.
+    pub setup_done: bool,
+}
+
+/// A saved set of settings. `snapshot` is a Settings object without the
+/// profile fields; built-in profiles are written by the app, the rest by the
+/// person (or saved automatically from their changes).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Profile {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub built_in: bool,
+    pub snapshot: serde_json::Value,
 }
 
 /// A user-defined right-click entry that runs a program on the selection.
@@ -61,6 +80,8 @@ pub struct General {
     /// Add the entries other programs put in the right-click menu (Edit with…,
     /// archivers, Open with). Turn off for the fastest possible menu.
     pub shell_extras: bool,
+    /// Folders that are open refresh by themselves when something else changes them.
+    pub live_refresh: bool,
 }
 
 impl Default for General {
@@ -76,6 +97,7 @@ impl Default for General {
             folders_first: true,
             native_properties: true,
             shell_extras: true,
+            live_refresh: true,
         }
     }
 }
@@ -186,7 +208,7 @@ impl Default for Appearance {
             show_pinned: true,
             show_drives: true,
             show_drive_space: true,
-            hide_network_address: false,
+            hide_network_address: true,
             drive_names: Default::default(),
             layout: serde_json::Value::Null,
             style: Style::default(),

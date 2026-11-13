@@ -17,7 +17,12 @@ export type Control =
   | { type: "font" }
   | { type: "imports" }
   | { type: "layout" }
-  | { type: "storage" };
+  | { type: "storage" }
+  | { type: "perfPresets" }
+  | { type: "uiPresets" }
+  | { type: "profiles" }
+  | { type: "resources" }
+  | { type: "locks" };
 
 export interface SettingDef {
   /** Dotted path into the Settings object, e.g. "general.showHidden". */
@@ -34,12 +39,14 @@ export interface SettingDef {
 
 export const SECTIONS = [
   "General",
+  "Presets and profiles",
   "Appearance",
   "Themes",
   "Layout",
   "Navigation pane",
   "Performance",
   "Storage",
+  "Privacy and locks",
   "File transfers",
   "Search",
   "Notifications",
@@ -58,29 +65,35 @@ export const SETTINGS: SettingDef[] = [
   { key: "general.restoreSession", section: "General", label: "Reopen tabs from last time", description: "Tabs and tab groups are saved as you work and restored at launch.", control: toggle, keywords: "session remember startup" },
   { key: "general.showHidden", section: "General", label: "Show hidden files and folders", control: toggle, keywords: "dotfiles" },
   { key: "general.showExtensions", section: "General", label: "Show file name extensions", control: toggle },
+  { key: "general.liveRefresh", section: "General", label: "Refresh folders when they change", description: "A folder that is open updates by itself when another program adds, renames or deletes files in it.", control: toggle, keywords: "watch auto update live" },
   { key: "general.foldersFirst", section: "General", label: "List folders before files", control: toggle, keywords: "sort" },
   { key: "general.deleteToTrash", section: "General", label: "Delete moves items to the Recycle Bin / Trash", description: "Turn off to delete permanently. Shift+Delete always deletes permanently.", control: toggle },
   { key: "general.confirmDelete", section: "General", label: "Ask before deleting", control: toggle, keywords: "confirm" },
   { key: "general.nativeProperties", section: "General", label: "Use the system's Properties window", description: "Opens Windows' own Properties (or the equivalent). Turn off to always use the app's own window, which also works where the system has none.", control: toggle, keywords: "properties dialog native" },
   { key: "general.shellExtras", section: "General", label: "Add entries from other programs to the right-click menu", description: "Edit with…, Open with, archivers and similar. They load a moment after the menu opens, so the menu itself is never slowed down. Turn off to skip them.", control: toggle, keywords: "context menu shell extensions 7-zip open with send to" },
 
+  // ---- Presets and profiles ----
+  { key: "presets.ui", section: "Presets and profiles", label: "Interface style", description: "Windows, macOS or Linux: layout, colours, icons, window buttons and shortcuts in one step.", control: { type: "uiPresets" }, keywords: "preset windows mac macos linux finder explorer layout look style" },
+  { key: "presets.performance", section: "Presets and profiles", label: "Performance preset", description: "Twelve steps from Barebones to God-like, each with the kind of device it suits.", control: { type: "perfPresets" }, keywords: "preset barebones feather reduced acceptable average satisfactory decent performance power excelling exceptional godlike speed memory" },
+  { key: "presets.profiles", section: "Presets and profiles", label: "Your profiles", description: "Saved copies of all your settings, as many as you want.", control: { type: "profiles" }, keywords: "profile save switch settings backup work laptop" },
+
   // ---- Appearance ----
   { key: "appearance.accent", section: "Appearance", label: "Accent colour", control: { type: "color" } },
   { key: "appearance.density", section: "Appearance", label: "Row density", description: "Compact fits as many rows as Windows 10 did.", control: { type: "select", options: [{ value: "compact", label: "Compact" }, { value: "comfortable", label: "Comfortable" }] }, keywords: "spacing size" },
   { key: "appearance.viewLevel", section: "Appearance", label: "Folder view", description: "Ctrl + scroll over a folder changes this too, and it is remembered.", control: { type: "select", options: [{ value: "0", label: "Details" }, { value: "1", label: "List" }, { value: "2", label: "Small icons" }, { value: "3", label: "Medium icons" }, { value: "4", label: "Large icons" }, { value: "5", label: "Extra large icons" }] }, keywords: "icons thumbnails details list size" },
   { key: "appearance.showDriveSpace", section: "Appearance", label: "Show drive space on This PC", description: "Free or used space under every drive (choose which on the This PC page).", control: toggle, keywords: "storage capacity" },
-  { key: "appearance.hideNetworkAddress", section: "Appearance", label: "Hide server addresses in network drive names", description: "Shows \"games (S:)\" instead of \"games (\\\\192.168.1.5) (S:)\". Any drive can override this from its right-click menu.", control: toggle, keywords: "ip network share unc" },
+  { key: "appearance.hideNetworkAddress", section: "Appearance", label: "Hide server addresses and IPs", description: "On by default. Hides hosts, IP addresses and share paths for network drives, servers and shares: \"games (S:)\" instead of \"games (\\\\192.168.1.5) (S:)\". Applies to names, tooltips, tabs, breadcrumbs and details. A drive can override this from its right-click menu. The address bar shows the real address while you are editing it.", control: toggle, keywords: "ip network share unc" },
   { key: "appearance.showDetailsPane", section: "Appearance", label: "Show the details pane", control: toggle, keywords: "properties preview" },
   { key: "appearance.driveChart", section: "Appearance", label: "Drive space display", control: { type: "select", options: [{ value: "bar", label: "Bars" }, { value: "donut", label: "Rings" }] }, keywords: "pie donut chart this pc" },
   { key: "appearance.driveMetric", section: "Appearance", label: "Drive space shows", control: { type: "select", options: [{ value: "used", label: "Space used" }, { value: "free", label: "Space free" }] } },
 
   // ---- Themes ----
-  { key: "appearance.theme", section: "Themes", label: "Colour theme", description: "Thirteen built in. The accent colour in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colours scheme" },
+  { key: "appearance.theme", section: "Themes", label: "Colour theme", description: "Nineteen built in, including Windows 11, macOS and GNOME looks. The accent colour in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colours scheme" },
   { key: "appearance.style.font", section: "Themes", label: "Font", description: "Built-in stacks, or a font file you import below.", control: { type: "font" }, keywords: "typeface text" },
   { key: "appearance.style.fontSize", section: "Themes", label: "Text size", control: { type: "number", min: 10, max: 22, unit: "px" } },
   { key: "appearance.style.radius", section: "Themes", label: "Corner roundness", control: { type: "number", min: 0, max: 20, unit: "px" }, keywords: "rounded square corners" },
   { key: "appearance.style.menu", section: "Themes", label: "Menu style", control: { type: "select", options: [{ value: "glass", label: "Glass (blurred)" }, { value: "flat", label: "Flat" }, { value: "outlined", label: "Outlined" }, { value: "floating", label: "Floating card" }] }, keywords: "context menu popup" },
-  { key: "appearance.style.icons", section: "Themes", label: "Icon style", control: { type: "select", options: [{ value: "outline", label: "Outline" }, { value: "bold", label: "Bold" }, { value: "thin", label: "Thin" }] }, keywords: "toolbar glyphs" },
+  { key: "appearance.style.icons", section: "Themes", label: "Icon style", control: { type: "select", options: [{ value: "fluent", label: "Fluent (open-source, Windows 11 style)" }, { value: "outline", label: "Outline" }, { value: "bold", label: "Bold" }, { value: "thin", label: "Thin" }] }, keywords: "toolbar glyphs windows 11 fluent" },
   { key: "appearance.style.folderColor", section: "Themes", label: "Folder colour", control: { type: "select", options: [{ value: "classic", label: "Classic yellow" }, { value: "blue", label: "Blue" }, { value: "mono", label: "Grey" }, { value: "accent", label: "Match accent" }] }, keywords: "folder icon" },
   { key: "appearance.style.background", section: "Themes", label: "Window background", control: { type: "select", options: [{ value: "plain", label: "Plain" }, { value: "gradient", label: "Soft gradient" }, { value: "aurora", label: "Aurora" }, { value: "dusk", label: "Dusk" }, { value: "mist", label: "Mist" }, { value: "image", label: "My picture (import below)" }] }, keywords: "wallpaper backdrop" },
   { key: "appearance.style.imports", section: "Themes", label: "Import fonts, style sheets and pictures", description: "Files are copied into the app's own folder. A style sheet is plain CSS that can override any variable or class (see docs/THEMING.md).", control: { type: "imports" }, keywords: "custom font ttf otf woff css background image" },
@@ -97,6 +110,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "appearance.sidebarWidth", section: "Navigation pane", label: "Width", control: { type: "number", min: 150, max: 480, step: 10, unit: "px" } },
 
   // ---- Performance ----
+  { key: "performance.resources", section: "Performance", label: "What the app is using", description: "Live processor, memory and disk use, what is kept for later, and ways to use less.", control: { type: "resources" }, keywords: "cpu ram memory disk usage monitor footprint compress shrink release" },
   { key: "performance.priority", section: "Performance", label: "Resource use", description: "Automatic adapts threads, caches and background work to your CPU, memory and battery. Manual uses the limits below exactly.", control: { type: "select", options: [{ value: "dynamic", label: "Automatic" }, { value: "manual", label: "Manual" }] }, keywords: "priority dynamic battery cpu ram" },
   { key: "performance.maxThreads", section: "Performance", label: "Maximum threads", description: "0 uses one per CPU core.", control: { type: "number", min: 0, max: 128 }, keywords: "cpu cores parallel" },
   { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings.", control: { type: "number", min: 16, max: 16384, step: 16, unit: "MB" }, keywords: "ram memory" },
@@ -129,6 +143,9 @@ export const SETTINGS: SettingDef[] = [
   { key: "search.includeHidden", section: "Search", label: "Include hidden items in results", control: toggle },
   { key: "search.limit", section: "Search", label: "Maximum results", control: { type: "number", min: 10, max: 10000, step: 10 } },
 
+  // ---- Privacy and locks ----
+  { key: "privacy.locks", section: "Privacy and locks", label: "Locked folders and drives", description: "Passcodes that keep folders and drives closed inside this app.", control: { type: "locks" }, keywords: "passcode password lock protect private secure hide" },
+
   // ---- Right-click menu ----
   { key: "contextMenu.hidden", section: "Right-click menu", label: "Entries shown in the right-click menu", control: { type: "menuItems" }, keywords: "context menu customize" },
 
@@ -140,7 +157,7 @@ export const SETTINGS: SettingDef[] = [
 
 /** Advanced options appear in Settings like any other entry (and in search). */
 const sectionOf = (d: (typeof ADVANCED)[number]) =>
-  d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+  d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
 
 for (const d of ADVANCED) {
   SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });

@@ -1,6 +1,5 @@
 // Global UI state. Components subscribe to the slices they need, so a
 // transfer progress tick does not re-render the file list.
-
 import { create } from "zustand";
 import {
   api,
@@ -16,6 +15,7 @@ import {
   type Pin,
   type Progress,
   type Recent,
+  type SavedServer,
   type Session,
   type Settings,
   type Tab,
@@ -25,8 +25,12 @@ import {
 } from "./api";
 import { describeItems, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
+import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatSize, steadyFraction } from "./util/format";
-import { HOME, THIS_PC, baseName, isAppLocation, joinPath, parentPath, parseLocation } from "./util/path";
+import { HOME, THIS_PC, baseName, insideArchive, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
+import { moveGroupBlock } from "./util/tabs";
+import { setAddressPrivacy } from "./util/path";
+import { snapshotOf } from "./settings/presets";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -48,9 +52,23 @@ export interface FilterState {
   size: string;
   /** Look in subfolders too (switches to a search of this folder). */
   subfolders: boolean;
+  // The same questions the other way round: what must NOT match.
+  /** Case-insensitive text the name must not contain. */
+  notText: string;
+  /** Categories to leave out. */
+  notKinds: string[];
+  /** Extensions to leave out. */
+  notExtensions: string[];
+  /** Leave out files modified in this range ("any" leaves out nothing). */
+  notModified: string;
+  /** Leave out files of this size class ("any" leaves out nothing). */
+  notSize: string;
 }
 
-export const NO_FILTER: FilterState = { text: "", kinds: [], extensions: [], modified: "any", size: "any", subfolders: false };
+export const NO_FILTER: FilterState = {
+  text: "", kinds: [], extensions: [], modified: "any", size: "any", subfolders: false,
+  notText: "", notKinds: [], notExtensions: [], notModified: "any", notSize: "any",
+};
 
 /** One speed sample for the transfer graphs. */
 export interface Sample {
@@ -63,9 +81,13 @@ export interface Sample {
 /** Something Undo can reverse. */
 export type UndoAction =
   | { kind: "rename"; from: string; to: string }
+  /** Several items renamed at once, by full path before and after. */
+  | { kind: "renameMany"; pairs: { from: string; to: string }[] }
   | { kind: "create"; path: string }
   | { kind: "move"; pairs: { from: string; to: string }[] }
-  | { kind: "copy"; created: string[] };
+  | { kind: "copy"; created: string[] }
+  /** Items moved to the Trash, by the path they had. */
+  | { kind: "trash"; paths: string[] };
 
 export interface Clipboard {
   paths: string[];
@@ -83,6 +105,16 @@ export interface DialogRequest {
   resolve: (result: { button: string; input: string; selected: string } | null) => void;
 }
 
+/** Asks for the Connect to server dialog, optionally with fields filled in. */
+export interface ConnectRequest {
+  /** A server address to log in to (the saved login was lost, say). */
+  url?: string;
+  /** Fields from a saved server. */
+  saved?: SavedServer;
+  /** Something to tell the person first. */
+  message?: string;
+}
+
 interface State {
   ready: boolean;
   info: AppInfo | null;
@@ -94,6 +126,8 @@ interface State {
   activeTab: string;
   pins: Pin[];
   recent: Recent[];
+  /** Earlier searches, newest first. */
+  searches: string[];
   drives: Drive[];
   drivesFresh: boolean;
   transfers: Record<number, Progress>;
@@ -129,9 +163,20 @@ interface State {
   frequent: string[];
   /** Paths shown in the app's own Properties window. */
   properties: string[] | null;
+  /** The Rename dialog for several items: the folder, what is selected and what else is in it. */
+  batchRename: { dir: string; items: RenameInput[]; siblings: string[] } | null;
+  /** Server addresses kept in the sidebar (no passwords). */
+  servers: SavedServer[];
+  /** The "Connect to server" dialog, with what to fill in. */
+  connect: ConnectRequest | null;
+  openConnect: (request?: ConnectRequest) => void;
+  closeConnect: () => void;
+  setServers: (servers: SavedServer[]) => void;
   /** Files the "Share a download link" dialog is open for. */
   shareFor: string[] | null;
   undo: UndoAction[];
+  /** What Undo took back, for Redo. Any new action empties it. */
+  redo: UndoAction[];
   /** Kinds and extensions in the folder being viewed, for the filter menu. */
   facets: { kinds: [string, number][]; extensions: [string, number][] };
   /** A path to select once the listing has loaded (after New folder, say). */
@@ -157,6 +202,7 @@ interface State {
   newTab: (location?: string, opts?: { background?: boolean; groupId?: string | null }) => void;
   closeTab: (id: string) => void;
   moveTab: (id: string, index: number) => void;
+  moveGroup: (groupId: string, index: number) => void;
   /** Move a tab into its own new window (at a screen position). */
   detachTab: (id: string, x?: number, y?: number) => Promise<void>;
   closeOthers: (id: string) => void;
@@ -172,7 +218,19 @@ interface State {
   /** Move a pin to a new position (counted before the move). */
   movePin: (from: number, to: number) => void;
   addRecent: (path: string, isDir: boolean) => void;
+  /** The "Open with" chooser: the file, and why it is being asked (empty when the person asked for it). */
+  openWith: { path: string; reason: string } | null;
+  /** The folder or drive the "Lock with passcode" dialog is open for. */
+  lockDialog: string | null;
+  /** A tab another window is dragging over this one: the slot it would take. */
+  incomingTab: { index: number; w: number } | null;
+  openLockDialog: (path: string) => void;
+  chooseApp: (path: string, reason?: string) => void;
+  closeChooser: () => void;
   clearRecent: () => void;
+  addSearch: (text: string) => void;
+  removeSearch: (text: string) => void;
+  clearSearches: () => void;
   refreshDrives: () => void;
   setClipboard: (c: Clipboard | null) => void;
   /** Paste what is on the clipboard (from this app or any other) into a folder. */
@@ -206,6 +264,8 @@ function makeTab(location: string, groupId: string | null = null): Tab {
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let nextNoticeId = 1;
+/** Deletes that went to the Trash, by job id, so a finished one can be undone. */
+const trashedBy = new Map<number, string[]>();
 /** Jobs let go with "Force stop": whatever they report later is ignored. */
 const forcedJobs = new Set<number>();
 
@@ -239,6 +299,11 @@ export const useStore = create<State>((set, get) => ({
   activeTab: "",
   pins: [],
   recent: [],
+  searches: [],
+  openWith: null,
+  lockDialog: null,
+  incomingTab: null,
+  openLockDialog: (path) => set({ lockDialog: path }),
   drives: [],
   drivesFresh: false,
   transfers: {},
@@ -271,8 +336,15 @@ export const useStore = create<State>((set, get) => ({
   frequent: [],
   places: [],
   properties: null,
+  batchRename: null,
+  servers: [],
+  connect: null,
+  openConnect: (request = {}) => set({ connect: request }),
+  closeConnect: () => set({ connect: null }),
+  setServers: (servers) => set({ servers }),
   shareFor: null,
   undo: [],
+  redo: [],
   facets: { kinds: [], extensions: [] },
   pendingSelect: null,
   layoutEdit: false,
@@ -309,11 +381,16 @@ export const useStore = create<State>((set, get) => ({
       activeTab,
       pins: session.pins ?? [],
       recent: session.recent,
+      searches: session.searches ?? [],
+      sort: adv<boolean>(settings, "files.rememberSort")
+        ? { key: adv<string>(settings, "files.sortKey") as SortKey, asc: adv<boolean>(settings, "files.sortAsc") }
+        : get().sort,
       // The list from the previous run paints immediately; live data follows.
       drives: session.drives,
     });
     get().refreshDrives();
     get().refreshFrequent();
+    void api.serversList().then((servers) => set({ servers })).catch(() => {});
     void api.knownFolders().then((places) => set({ places })).catch(() => {});
   },
 
@@ -335,7 +412,7 @@ export const useStore = create<State>((set, get) => ({
         return { ...t, location, history, historyIndex: history.length - 1 };
       }),
       selection: id === activeTab ? [] : get().selection,
-      filter: id === activeTab && !location.startsWith("fast://search") ? NO_FILTER : get().filter,
+      filter: id === activeTab && !location.startsWith("fast://search") && !adv<boolean>(get().settings, "files.keepFilter") ? NO_FILTER : get().filter,
     });
     if (!isAppLocation(location)) {
       get().addRecent(location, true);
@@ -384,6 +461,12 @@ export const useStore = create<State>((set, get) => ({
     const rest = tabs.filter((t) => t.id !== id);
     rest.splice(Math.max(0, Math.min(rest.length, index)), 0, tab);
     set({ tabs: rest });
+    persist();
+  },
+
+  /** Move a whole tab group, as one block, to `index` among the tabs outside it. */
+  moveGroup: (groupId, index) => {
+    set({ tabs: moveGroupBlock(get().tabs, groupId, index) });
     persist();
   },
 
@@ -469,6 +552,11 @@ export const useStore = create<State>((set, get) => ({
     if (!current) return;
     const next: Settings = structuredClone(current);
     mutate(next);
+    // While a profile of your own is active, what you change is saved into it.
+    const active = next.profiles?.find((p) => p.id === next.activeProfile && !p.builtIn);
+    if (active && JSON.stringify(current.profiles) === JSON.stringify(next.profiles) && current.activeProfile === next.activeProfile) {
+      active.snapshot = snapshotOf(next);
+    }
     set({ settings: next });
     void api.setSettings(next).catch((e) => get().showToast(String(e)));
   },
@@ -508,8 +596,29 @@ export const useStore = create<State>((set, get) => ({
     persist();
   },
 
+  chooseApp: (path, reason = "") => set({ openWith: { path, reason } }),
+  closeChooser: () => set({ openWith: null }),
+
   clearRecent: () => {
     set({ recent: [] });
+    persist();
+  },
+
+  addSearch: (text) => {
+    const t = text.trim();
+    const limit = adv<number>(get().settings, "search.historyLimit");
+    if (!t || limit <= 0) return;
+    set({ searches: [t, ...get().searches.filter((x) => x !== t)].slice(0, limit) });
+    persist();
+  },
+
+  removeSearch: (text) => {
+    set({ searches: get().searches.filter((x) => x !== text) });
+    persist();
+  },
+
+  clearSearches: () => {
+    set({ searches: [] });
     persist();
   },
 
@@ -559,10 +668,17 @@ export const useStore = create<State>((set, get) => ({
       series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
     }
     set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
+    // Let files appear in the destination folder while they are being copied in.
+    if (p.phase === "running" && !detachedView && Date.now() - (lastDestRefresh[p.id] ?? 0) > 1200) {
+      lastDestRefresh[p.id] = Date.now();
+      get().bumpDirs([p.destDir]);
+    }
     if (p.conflict && !detachedView) void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) {
       // Successful jobs leave on their own; failures stay until dismissed.
-      const secs = adv<number>(get().settings, "transfers.dismissSecs");
+      let secs = adv<number>(get().settings, "transfers.dismissSecs");
+      // A job that was over in a moment has already said so in a notice; do not leave its card lingering.
+      if (secs > 0 && p.elapsedSecs < 3) secs = Math.min(secs, 1.5);
       if (secs > 0) setTimeout(() => get().dismissTransfer(p.id), secs * 1000);
       const spec = get().specs[p.id];
       // The window that started the job reports it; the transfers window only displays.
@@ -577,13 +693,23 @@ export const useStore = create<State>((set, get) => ({
 
   onDeleteProgress: (p) => {
     if (forcedJobs.has(p.id)) return;
-    const ratio = p.itemsTotal > 0 ? p.itemsDone / p.itemsTotal : 0;
+    const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.itemsTotal > 0 ? p.itemsDone / p.itemsTotal : 0;
     const shown = steadyFraction(get().shown[p.id] ?? 0, { phase: p.phase === "done" ? "done" : "running", fraction: p.phase === "scanning" ? 0 : ratio });
     set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown } });
     if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);
+    if (p.action !== "delete") {
+      if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
+        if (p.action === "compress" || p.action === "extract") archiveFinished(p);
+        else remoteFinished(p);
+      }
+      return;
+    }
     if (p.phase === "done" || p.phase === "cancelled") {
       const what = p.selected === 1 && p.firstName ? `"${p.firstName}"` : `${p.selected} items`;
       const where = p.permanent ? "permanently" : `to the ${get().info?.os === "windows" ? "Recycle Bin" : "Trash"}`;
+      const trashed = trashedBy.get(p.id);
+      trashedBy.delete(p.id);
+      if (p.phase === "done" && p.errorCount === 0 && trashed) get().pushUndo({ kind: "trash", paths: trashed });
       if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`);
       else get().notify("info", `Delete stopped`, `${p.itemsDone} of ${p.itemsTotal} done`);
     }
@@ -619,7 +745,18 @@ export const useStore = create<State>((set, get) => ({
     set({ deletes });
   },
 
-  setSort: (sort) => set({ sort }),
+  setSort: (sort) => {
+    set({ sort });
+    // The order is kept for every folder and for the next start.
+    if (adv<boolean>(get().settings, "files.rememberSort")) {
+      const a = get().settings?.advanced;
+      if (a?.["files.sortKey"] !== sort.key || a?.["files.sortAsc"] !== sort.asc) {
+        get().updateSettings((st) => {
+          st.advanced = { ...(st.advanced ?? {}), "files.sortKey": sort.key, "files.sortAsc": sort.asc };
+        });
+      }
+    }
+  },
 
   setFilter: (patch) => set({ filter: patch ? { ...get().filter, ...patch } : NO_FILTER }),
 
@@ -638,7 +775,7 @@ export const useStore = create<State>((set, get) => ({
 
   pushUndo: (a) => {
     const limit = adv<number>(get().settings, "files.undoLimit");
-    set({ undo: limit > 0 ? [...get().undo.slice(-(limit - 1)), a] : [] });
+    set({ undo: limit > 0 ? [...get().undo.slice(-(limit - 1)), a] : [], redo: [] });
   },
 
   startTransfer: async (sources, destDir, op) => {
@@ -648,6 +785,33 @@ export const useStore = create<State>((set, get) => ({
     // that files inside merged folders get asked about too, as in Windows.
     const conflict: Conflict = s.settings.transfer.conflict;
     const spec: TransferSpec = { sources, destDir, op, conflict };
+    if (isArchiveLoc(destDir)) {
+      s.showToast(READ_ONLY);
+      return;
+    }
+    if (sources.some(isArchiveLoc)) {
+      // Out of an archive: unpacked into the folder, nothing already there is replaced.
+      if (isRemote(destDir) || !sources.every(isArchiveLoc)) {
+        s.showToast("Copy items out of an archive into a folder on this computer first.");
+        return;
+      }
+      try {
+        remoteJobs.set(await api.archiveCopyStart(sources, destDir), { op: "copy" });
+        if (op === "move") s.notify("info", "Copied, not moved", "Items inside an archive stay in it.");
+      } catch (e) {
+        s.showToast(friendlyRemoteError(e));
+      }
+      return;
+    }
+    if (isRemote(destDir) || isRemote(sources[0])) {
+      // To or from a server: its own job (no administrator route, no undo).
+      try {
+        remoteJobs.set(await api.remoteCopyStart(sources, destDir, op === "move"), { op });
+      } catch (e) {
+        s.showToast(String(e));
+      }
+      return;
+    }
     try {
       const job: Job = { kind: "transfer", spec };
       const mode = await guardAccess(job, `${op === "move" ? "Moving" : "Copying"} to ${baseName(destDir)}`);
@@ -727,6 +891,7 @@ function persist() {
       activeTab: s.activeTab,
       pins: s.pins,
       recent: s.recent,
+      searches: s.searches,
       drives: [],
     };
     void api.saveSession(session).catch(() => {});
@@ -755,6 +920,8 @@ export function thisPcLabel(os: string | undefined): string {
 }
 
 const askedConflicts = new Set<string>();
+/** When each running job last made its destination folder re-read. */
+const lastDestRefresh: Record<number, number> = {};
 
 /** "This file already exists": Replace, Skip, Keep both, each for this file or for all that follow. */
 async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
@@ -894,9 +1061,41 @@ export async function retryTransferAsAdmin(spec: TransferSpec): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Delete with the user's confirmation and trash preferences applied. */
+/**
+ * Open a file with the system's default program. When there is none, ask which
+ * program to use, the way the person chose in Settings: this app's own chooser,
+ * the system's (Windows), or just a message.
+ */
+export async function openFile(path: string): Promise<void> {
+  const { showToast, chooseApp } = useStore.getState();
+  try {
+    await api.openItem(path);
+  } catch (e) {
+    const text = String(e);
+    if (!text.startsWith("no-handler:")) return showToast(text);
+    const reason = text.slice("no-handler:".length);
+    const how = adv<string>(useStore.getState().settings, "files.noAppAction");
+    if (how === "message") return showToast(`${reason} Right-click the file and choose Open with.`);
+    if (how === "system") {
+      try {
+        await api.openSystemChooser(path);
+        return;
+      } catch {
+        // This system has no chooser of its own: use ours.
+      }
+    }
+    chooseApp(path, reason);
+  }
+}
+
 export async function deletePaths(paths: string[], forcePermanent = false): Promise<boolean> {
   const s = useStore.getState();
   if (!paths.length || !s.settings) return false;
+  if (paths.some((p) => insideArchive(p))) {
+    s.showToast(READ_ONLY);
+    return false;
+  }
+  if (isRemote(paths[0])) return deleteOnServer(paths);
   const permanent = forcePermanent || !s.settings.general.deleteToTrash;
   const forced = adv<number>(s.settings, "files.confirmDeleteOver");
   if (s.settings.general.confirmDelete || permanent || (forced > 0 && paths.length >= forced)) {
@@ -916,7 +1115,10 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
     const mode = await guardAccess(job, "Deleting these items");
     if (mode === "cancel") return false;
     if (mode === "elevated") await api.elevatedStart(job);
-    else await api.deleteStart(paths, permanent);
+    else {
+      const id = await api.deleteStart(paths, permanent);
+      if (!permanent) trashedBy.set(id, paths);
+    }
     return true;
   } catch (e) {
     s.showToast(String(e));
@@ -926,6 +1128,21 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
 
 export async function renamePath(path: string, newName: string): Promise<string | null> {
   const { showToast, pushUndo } = useStore.getState();
+  if (insideArchive(path)) {
+    showToast(READ_ONLY);
+    return null;
+  }
+  if (isRemote(path)) {
+    try {
+      const made = await api.remoteRename(path, newName);
+      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`);
+      refreshRemoteTabs();
+      return made;
+    } catch (e) {
+      showToast(friendlyRemoteError(e));
+      return null;
+    }
+  }
   try {
     const job: Job = { kind: "rename", path, newName };
     const mode = await guardAccess(job, `Renaming "${baseName(path)}"`);
@@ -948,6 +1165,25 @@ export async function renamePath(path: string, newName: string): Promise<string 
 
 export async function createPath(dir: string, name: string, folder: boolean): Promise<string | null> {
   const { showToast, pushUndo } = useStore.getState();
+  if (insideArchive(dir)) {
+    showToast(READ_ONLY);
+    return null;
+  }
+  if (isRemote(dir)) {
+    if (!folder) {
+      showToast("New files can't be made on a server. Make a folder, or copy a file into it.");
+      return null;
+    }
+    try {
+      const made = await api.remoteMkdir(dir, name);
+      useStore.getState().notify("create", `Created folder "${baseName(made)}"`);
+      refreshRemoteTabs();
+      return made;
+    } catch (e) {
+      showToast(friendlyRemoteError(e));
+      return null;
+    }
+  }
   try {
     const job: Job = { kind: "create", dir, name, folder };
     const mode = await guardAccess(job, `Creating "${name}" here`);
@@ -975,25 +1211,241 @@ export async function showProperties(paths: string[]): Promise<void> {
   if (!native) useStore.setState({ properties: paths });
 }
 
-/** Reverse the last rename, create, move or copy. Deleting is not undoable. */
-export async function undoLast(): Promise<void> {
-  const s = useStore.getState();
-  const action = s.undo.at(-1);
-  if (!action) return;
-  useStore.setState({ undo: s.undo.slice(0, -1) });
-  s.notify("undo", `Undid ${({ rename: "rename", create: "create", copy: "copy", move: "move" } as const)[action.kind]}`);
-  try {
-    if (action.kind === "rename") await api.renameItem(action.to, baseName(action.from));
-    else if (action.kind === "create") await deletePaths([action.path]);
-    else if (action.kind === "copy") await deletePaths(action.created);
-    else {
-      for (const p of action.pairs) await api.transferStart({ sources: [p.to], destDir: parentOf(p.from), op: "move", conflict: "keepBoth" });
+const ACTION_NAME = { rename: "rename", renameMany: "rename", create: "create", copy: "copy", move: "move", trash: "delete" } as const;
+
+/** Do the opposite of an action (`undo`), or do it again (`redo`). Throws when it cannot. */
+async function reverse(action: UndoAction, direction: "undo" | "redo"): Promise<void> {
+  const undoing = direction === "undo";
+  switch (action.kind) {
+    case "rename":
+      await (undoing ? api.renameItem(action.to, baseName(action.from)) : api.renameItem(action.from, baseName(action.to)));
+      break;
+    case "renameMany": {
+      const to = (p: { from: string; to: string }) => (undoing ? p : { from: p.to, to: p.from });
+      const pairs = action.pairs.map(to);
+      await applyRenames(parentOf(pairs[0].from), pairs.map((p) => ({ from: baseName(p.from), to: baseName(p.to), changed: true, problem: null })), false);
+      break;
     }
-  } catch (e) {
-    s.showToast(String(e));
+    case "create":
+      await (undoing ? api.trashPaths([action.path]) : restoreFromTrash([action.path]));
+      break;
+    case "copy":
+      await (undoing ? api.trashPaths(action.created) : restoreFromTrash(action.created));
+      break;
+    case "trash":
+      await (undoing ? restoreFromTrash(action.paths) : api.trashPaths(action.paths));
+      break;
+    case "move":
+      for (const p of action.pairs) {
+        const [source, back] = undoing ? [p.to, p.from] : [p.from, p.to];
+        await api.transferStart({ sources: [source], destDir: parentOf(back), op: "move", conflict: "keepBoth" });
+      }
+      break;
   }
 }
+
+/**
+ * Carry out planned renames in `dir` (see `orderRenames` for why there can be
+ * several rounds). Returns what was renamed, by full path. Items that fail are
+ * counted in a toast; the rest still go ahead.
+ */
+export async function applyRenames(dir: string, plans: RenamePlan[], remember = true): Promise<{ from: string; to: string }[]> {
+  const s = useStore.getState();
+  const done = new Map<string, string>();
+  let failed = 0;
+  let firstError = "";
+  const tag = String(Date.now());
+  const rounds = orderRenames(plans, tag);
+  const finalName = new Map(plans.map((p) => [p.from, p.to]));
+  for (const round of rounds) {
+    for (const step of round) {
+      try {
+        await api.renameItem(joinPath(dir, step.from), step.to);
+        // Track by the original name: a temporary name later becomes the final one.
+        const original = step.from.startsWith(`.fast-rename-${tag}-`) ? [...done.entries()].find(([, v]) => v === step.from)?.[0] : step.from;
+        if (original) done.set(original, step.to);
+      } catch (e) {
+        failed++;
+        firstError ||= String(e instanceof Error ? e.message : e);
+      }
+    }
+  }
+  const pairs = [...done.entries()].filter(([from, to]) => finalName.get(from) === to).map(([from, to]) => ({ from: joinPath(dir, from), to: joinPath(dir, to) }));
+  s.bumpDirs([dir]);
+  if (failed) s.showToast(`${failed} item${failed === 1 ? "" : "s"} could not be renamed. ${firstError}`);
+  if (remember && pairs.length) {
+    s.pushUndo({ kind: "renameMany", pairs });
+    s.notify("rename", `Renamed ${describeCount(pairs.length)}`);
+  }
+  if (!remember && failed) throw new Error(firstError || "Some items could not be renamed.");
+  return pairs;
+}
+
+/** Whether the name says it is an archive this app can open and unpack. */
+export const isArchiveName = isArchiveFile;
+
+const READ_ONLY = "Archives are read-only. Extract it first to change what is in it, or copy items out of it.";
+
+/** Archive jobs that are running, by job id, with whether the person asked to extract "here". */
+const archiveJobs = new Map<number, { here: boolean }>();
+
+/** Put the items into a zip next to them. Progress and Cancel are on the transfers card. */
+export async function compressPaths(paths: string[]): Promise<void> {
+  if (!paths.length) return;
+  try {
+    archiveJobs.set(await api.archiveStart("compress", paths), { here: false });
+  } catch (e) {
+    useStore.getState().showToast(String(e instanceof Error ? e.message : e));
+  }
+}
+
+/** Unpack an archive into a folder named after it, or straight into the folder it is in. */
+export async function extractArchive(path: string, here: boolean): Promise<void> {
+  try {
+    archiveJobs.set(await api.archiveStart("extract", [path], here), { here });
+  } catch (e) {
+    useStore.getState().showToast(String(e instanceof Error ? e.message : e));
+  }
+}
+
+/** A compress or extract job ended: say so, make it undoable and select what it made. */
+function archiveFinished(p: DeleteProgress) {
+  const s = useStore.getState();
+  const job = archiveJobs.get(p.id);
+  archiveJobs.delete(p.id);
+  const name = p.selected === 1 && p.firstName ? `"${p.firstName}"` : `${p.selected} items`;
+  if (p.phase === "cancelled") return s.notify("info", `${p.action === "compress" ? "Compressing" : "Extracting"} stopped`, "Nothing was kept");
+  if (p.phase === "failed") return s.notify("error", `Could not ${p.action} ${name}`, p.errors[0]?.message ?? "");
+  if (!p.result) return;
+  const files = `${p.itemsDone} file${p.itemsDone === 1 ? "" : "s"}`;
+  if (p.action === "compress") s.notify("create", `Created "${baseName(p.result)}"`, files);
+  else s.notify("create", `Extracted ${name}`, files);
+  if (p.action === "compress" || !job?.here) s.pushUndo({ kind: "create", path: p.result });
+  s.setSelection([p.result]);
+}
+
+/** Server jobs that are running, by job id. */
+const remoteJobs = new Map<number, { op: "copy" | "move" }>();
+
+/** Tell every open server folder to read its listing again. */
+export function refreshRemoteTabs(): void {
+  const s = useStore.getState();
+  const open = s.tabs.map((t) => t.location).filter(isRemote);
+  if (open.length) s.bumpDirs([...new Set(open)]);
+}
+
+/** Server errors in plain words; the login prompt is handled where it is shown. */
+export function friendlyRemoteError(e: unknown): string {
+  const text = String(e instanceof Error ? e.message : e);
+  if (text.startsWith("needs-login:")) return "Log in to this server again first.";
+  if (text.startsWith("untrusted-host:") || text.startsWith("changed-host:")) return "This server's identity has not been confirmed.";
+  return text;
+}
+
+async function deleteOnServer(paths: string[]): Promise<boolean> {
+  const s = useStore.getState();
+  const what = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;
+  const r = await ask({
+    title: `Delete ${what} from the server?`,
+    message: "Servers have no Recycle Bin or Trash. This cannot be undone.",
+    buttons: [
+      { id: "ok", label: "Delete", primary: true, danger: true },
+      { id: "cancel", label: "Cancel" },
+    ],
+  });
+  if (!r || r.button !== "ok") return false;
+  try {
+    await api.remoteRemoveStart(paths);
+    return true;
+  } catch (e) {
+    s.showToast(friendlyRemoteError(e));
+    return false;
+  }
+}
+
+/** An upload, download or delete on a server ended. */
+function remoteFinished(p: DeleteProgress) {
+  const s = useStore.getState();
+  const job = remoteJobs.get(p.id);
+  remoteJobs.delete(p.id);
+  refreshRemoteTabs();
+  const name = p.selected === 1 && p.firstName ? `"${p.firstName}"` : `${p.selected} items`;
+  const files = `${p.itemsDone} file${p.itemsDone === 1 ? "" : "s"}`;
+  if (p.phase === "cancelled") return s.notify("info", "Stopped", "What was already copied was kept");
+  if (p.phase === "failed") {
+    const message = p.errors[0]?.message ?? "";
+    if (message.startsWith("needs-login:")) {
+      const url = message.slice("needs-login:".length);
+      s.openConnect({ url, message: "Log in to this server again." });
+      return;
+    }
+    if (p.action === "unpack") return s.notify("error", `Could not copy ${name} out of the archive`, message);
+    const verb = p.action === "remote-delete" ? "delete" : p.action === "open" ? "open" : p.action === "upload" ? "upload" : "download";
+    return s.notify("error", `Could not ${verb} ${name}`, friendlyRemoteError(message));
+  }
+  if (p.action === "open") {
+    if (p.result) void openFile(p.result);
+    return;
+  }
+  if (p.action === "remote-delete") return s.notify("delete", `Deleted ${name} from the server`, p.errorCount ? `${p.errorCount} could not be deleted` : `${p.itemsDone} item${p.itemsDone === 1 ? "" : "s"}`);
+  if (p.action === "unpack") return s.notify("copy", `Copied out of the archive: ${name}`, p.errors[0]?.message ?? files);
+  const moved = job?.op === "move";
+  const verb = p.action === "upload" ? (moved ? "Moved to the server" : "Uploaded") : moved ? "Moved from the server" : "Downloaded";
+  s.notify(moved ? "move" : "copy", `${verb}: ${name}`, p.errorCount ? `${p.errorCount} could not be copied` : files);
+}
+
+const describeCount = (n: number) => (n === 1 ? "1 item" : `${n} items`);
+
+/** Put items back from the Trash; complains when none of them are there any more. */
+async function restoreFromTrash(paths: string[]): Promise<void> {
+  const found = await api.restoreFromTrash(paths);
+  if (found === 0) throw new Error("Those items are no longer in the Trash.");
+}
+
+async function runStep(from: "undo" | "redo"): Promise<void> {
+  const s = useStore.getState();
+  const stack = s[from];
+  const action = stack.at(-1);
+  if (!action) return;
+  const other = from === "undo" ? "redo" : "undo";
+  set_({ [from]: stack.slice(0, -1) });
+  try {
+    await reverse(action, from);
+    set_({ [other]: [...useStore.getState()[other], action] });
+    s.notify("undo", `${from === "undo" ? "Undid" : "Redid"} ${ACTION_NAME[action.kind]}`);
+  } catch (e) {
+    s.showToast(String(e instanceof Error ? e.message : e));
+  }
+}
+
+const set_ = (patch: Partial<Pick<State, "undo" | "redo">>) => useStore.setState(patch);
+
+/** Reverse the last rename, create, move, copy or delete to the Trash. */
+export const undoLast = () => runStep("undo");
+/** Do again what Undo took back. */
+export const redoLast = () => runStep("redo");
 
 function parentOf(path: string): string {
   return parentPath(path) ?? path;
 }
+
+// Keep the address-hiding helper in step with the settings and saved servers.
+{
+  let last: unknown[] = [];
+  useStore.subscribe((s) => {
+    const next = [s.settings?.appearance.hideNetworkAddress, s.servers];
+    if (next[0] === last[0] && next[1] === last[1]) return;
+    last = next;
+    setAddressPrivacy(!!s.settings?.appearance.hideNetworkAddress, s.servers);
+  });
+}
+
+// Changing "Sorted by" or "Sort ascending" in Settings (or applying a profile)
+// takes effect at once in the open folder.
+useStore.subscribe((s, prev) => {
+  if (s.settings?.advanced === prev.settings?.advanced || !s.settings) return;
+  if (!adv<boolean>(s.settings, "files.rememberSort")) return;
+  const key = adv<string>(s.settings, "files.sortKey") as SortKey;
+  const asc = adv<boolean>(s.settings, "files.sortAsc");
+  if (s.sort.key !== key || s.sort.asc !== asc) useStore.setState({ sort: { key, asc } });
+});

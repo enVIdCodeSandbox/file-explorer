@@ -226,6 +226,122 @@ impl Index {
         }
     }
 
+    /// Append a copy of the subtree rooted at `old_id` in `from`, under
+    /// `parent` (an id in `self`). Names are copied as they are, not rebuilt.
+    fn copy_subtree(&mut self, from: &Index, old_id: u32, parent: u32) {
+        let end = from.subtree_end(old_id);
+        let base = self.nodes.len() as u32;
+        for old in old_id..end {
+            let n = &from.nodes[old as usize];
+            let new_parent = if old == old_id { parent } else { base + (n.parent - old_id) };
+            let name_off = self.names.len() as u32;
+            let lower_off = self.lower.len() as u32;
+            self.names.push_str(from.name(old));
+            self.lower.extend_from_slice(from.lower_name(old));
+            self.lower.push(SEP);
+            self.nodes.push(Node { parent: new_parent, name_off, lower_off, ..*n });
+        }
+    }
+
+    /// A copy of this index in which the contents of the folder `dir` are
+    /// re-read from disk, leaving everything else as it was. Only `dir`'s
+    /// direct children are looked at again: a subfolder that is still there
+    /// keeps its entries, a new one is scanned, a missing one disappears.
+    /// This is what keeps search current after a change without rescanning
+    /// the drive. `None` when `dir` is not in the index or cannot be read.
+    pub fn refreshed_dir(&self, dir: &Path, skip: &[PathBuf]) -> Option<Index> {
+        let id = self.find_path(dir)?;
+        if !self.node(id).is_dir() {
+            return None;
+        }
+        let read = fs::read_dir(dir).ok()?;
+        let end = self.subtree_end(id);
+        // What the index knew about each child folder, to reuse its subtree.
+        let old_dirs: std::collections::HashMap<&str, u32> = self.children_scan(id).filter(|&c| self.nodes[c as usize].is_dir()).map(|c| (self.name(c), c)).collect();
+
+        const TOP: u32 = u32::MAX - 1;
+        let mut rep = Index::default();
+        let ctx_opts = ScanOptions { skip: skip.to_vec(), threads: 1, ..Default::default() };
+        let ctx = Ctx { opts: &ctx_opts, count: AtomicUsize::new(0), truncated: AtomicBool::new(false) };
+        let mut entries: Vec<_> = read.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            let meta = e.metadata().ok();
+            let is_dir = ft.is_dir();
+            let hidden = crate::entry::is_hidden(&name, meta.as_ref());
+            let (size, mtime) = match &meta {
+                Some(m) => (if is_dir { 0 } else { m.len() }, to_millis(m.modified()).map(|ms| ms / 1000).unwrap_or(0)),
+                None => (0, 0),
+            };
+            let flags = (is_dir as u8 * FLAG_DIR) | (hidden as u8 * FLAG_HIDDEN);
+            if is_dir {
+                if let Some(&old) = old_dirs.get(name.as_str()) {
+                    // Same folder as before: keep what is inside, with its own fresh time.
+                    let at = rep.nodes.len();
+                    rep.copy_subtree(self, old, TOP);
+                    rep.nodes[at].mtime = mtime;
+                    rep.nodes[at].flags = flags;
+                    continue;
+                }
+                let at = rep.push(TOP, &name, flags, 0, mtime);
+                let child = dir.join(&name);
+                if !skip.iter().any(|s| s == &child) {
+                    let sub = scan_dir(&child, &ctx);
+                    rep.flatten(at, sub);
+                }
+            } else {
+                rep.push(TOP, &name, flags, size, mtime);
+            }
+        }
+
+        // Splice: [0..=id] + replacement + [end..], offsets and parents adjusted.
+        let first = id as usize + 1;
+        let tail_start = end as usize;
+        let cut_names = (
+            self.nodes.get(first).map(|n| n.name_off as usize).unwrap_or(self.names.len()),
+            self.nodes.get(tail_start).map(|n| n.name_off as usize).unwrap_or(self.names.len()),
+        );
+        let cut_lower = (
+            self.nodes.get(first).map(|n| n.lower_off as usize).unwrap_or(self.lower.len()),
+            self.nodes.get(tail_start).map(|n| n.lower_off as usize).unwrap_or(self.lower.len()),
+        );
+        let node_delta = rep.nodes.len() as i64 - (end as i64 - id as i64 - 1);
+        let names_delta = rep.names.len() as i64 - (cut_names.1 as i64 - cut_names.0 as i64);
+        let lower_delta = rep.lower.len() as i64 - (cut_lower.1 as i64 - cut_lower.0 as i64);
+
+        let mut out = Index { truncated: self.truncated, built_at: to_millis(Ok(std::time::SystemTime::now())).unwrap_or(0) / 1000, ..Default::default() };
+        out.nodes.reserve(self.nodes.len().saturating_add_signed(node_delta as isize));
+        out.nodes.extend_from_slice(&self.nodes[..first]);
+        if let Some(m) = fs::metadata(dir).ok().and_then(|m| to_millis(m.modified())) {
+            out.nodes[id as usize].mtime = m / 1000;
+        }
+        for n in &rep.nodes {
+            let parent = if n.parent == TOP { id } else { id + 1 + n.parent };
+            out.nodes.push(Node { parent, name_off: n.name_off + cut_names.0 as u32, lower_off: n.lower_off + cut_lower.0 as u32, ..*n });
+        }
+        for n in &self.nodes[tail_start..] {
+            let parent = if n.parent == NO_PARENT || n.parent <= id { n.parent } else { (n.parent as i64 + node_delta) as u32 };
+            out.nodes.push(Node {
+                parent,
+                name_off: (n.name_off as i64 + names_delta) as u32,
+                lower_off: (n.lower_off as i64 + lower_delta) as u32,
+                ..*n
+            });
+        }
+        out.names.reserve(self.names.len());
+        out.names.push_str(&self.names[..cut_names.0]);
+        out.names.push_str(&rep.names);
+        out.names.push_str(&self.names[cut_names.1..]);
+        out.lower.reserve(self.lower.len());
+        out.lower.extend_from_slice(&self.lower[..cut_lower.0]);
+        out.lower.extend_from_slice(&rep.lower);
+        out.lower.extend_from_slice(&self.lower[cut_lower.1..]);
+        out.roots = self.roots.iter().map(|&r| if r > id { (r as i64 + node_delta) as u32 } else { r }).collect();
+        Some(out)
+    }
+
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -410,6 +526,148 @@ pub(crate) mod tests {
         assert_eq!(idx.node(id).size, 5000);
         assert_eq!(idx.path_of(id), d.path().join("docs/reports/q2-report.pdf"));
         assert!(idx.find_path(&d.path().join("nope")).is_none());
+    }
+
+    /// The refreshed index must be indistinguishable from scanning again.
+    fn same_as_fresh_scan(refreshed: &Index, root: &Path) {
+        let fresh = Index::scan(&[root.to_path_buf()], &ScanOptions { threads: 1, ..Default::default() });
+        let listing = |i: &Index| {
+            let mut v: Vec<(String, u64, bool)> = (0..i.len() as u32).map(|id| (i.path_of(id).to_string_lossy().into_owned(), i.node(id).size, i.node(id).is_dir())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(listing(refreshed), listing(&fresh));
+        for (i, n) in refreshed.nodes.iter().enumerate() {
+            assert!(n.parent == NO_PARENT || (n.parent as usize) < i, "parents come first");
+        }
+        // The arenas must stay in node order for search to map matches back.
+        let offs: Vec<u32> = refreshed.nodes.iter().map(|n| n.lower_off).collect();
+        assert!(offs.windows(2).all(|w| w[0] < w[1]));
+        // And lookups by lower-case offset must land on the right node.
+        for id in 0..refreshed.len() as u32 {
+            let off = refreshed.node(id).lower_off as usize;
+            assert_eq!(refreshed.node_at_lower_offset(off), id);
+            assert_eq!(refreshed.lower_name(id), refreshed.name(id).to_lowercase().as_bytes());
+        }
+    }
+
+    #[test]
+    fn refreshing_a_folder_matches_a_fresh_scan() {
+        let d = sample_tree();
+        let p = d.path();
+        let idx = Index::scan(&[p.to_path_buf()], &ScanOptions { threads: 1, ..Default::default() });
+
+        // New file, new folder with content, a removed file and a removed folder.
+        fs::write(p.join("docs/new-file.txt"), b"12345").unwrap();
+        fs::create_dir_all(p.join("docs/Fresh/inner")).unwrap();
+        fs::write(p.join("docs/Fresh/inner/deep.txt"), b"x").unwrap();
+        fs::remove_file(p.join("docs/readme.md")).unwrap();
+        let once = idx.refreshed_dir(&p.join("docs"), &[]).unwrap();
+        same_as_fresh_scan(&once, p);
+        assert!(once.find_path(&p.join("docs/Fresh/inner/deep.txt")).is_some());
+        assert!(once.find_path(&p.join("docs/readme.md")).is_none());
+        // The subfolder that did not change was kept, with its files.
+        assert!(once.find_path(&p.join("docs/reports/q2-report.pdf")).is_some());
+
+        fs::remove_dir_all(p.join("docs/reports")).unwrap();
+        let twice = once.refreshed_dir(&p.join("docs"), &[]).unwrap();
+        same_as_fresh_scan(&twice, p);
+        assert!(twice.find_path(&p.join("docs/reports")).is_none());
+    }
+
+    #[test]
+    fn refreshing_the_root_the_last_folder_and_an_empty_folder_work() {
+        let d = sample_tree();
+        let p = d.path();
+        let idx = Index::scan(&[p.to_path_buf()], &ScanOptions { threads: 1, ..Default::default() });
+        fs::write(p.join("zzz.txt"), b"z").unwrap();
+        let a = idx.refreshed_dir(p, &[]).unwrap();
+        same_as_fresh_scan(&a, p);
+        // `photos` sorts after `docs`, so changes there shift nothing after it but the tail.
+        fs::write(p.join("photos/more.jpg"), b"jj").unwrap();
+        let b = a.refreshed_dir(&p.join("photos"), &[]).unwrap();
+        same_as_fresh_scan(&b, p);
+        fs::create_dir(p.join("emptydir")).unwrap();
+        let c = b.refreshed_dir(p, &[]).unwrap();
+        fs::write(p.join("emptydir/now-full.txt"), b"1").unwrap();
+        let d2 = c.refreshed_dir(&p.join("emptydir"), &[]).unwrap();
+        same_as_fresh_scan(&d2, p);
+    }
+
+    #[test]
+    fn many_random_changes_always_match_a_fresh_scan() {
+        // A small deterministic generator, so a failure can be reproduced.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        let d = sample_tree();
+        let p = d.path();
+        let mut idx = Index::scan(&[p.to_path_buf()], &ScanOptions { threads: 1, ..Default::default() });
+        let mut dirs: Vec<PathBuf> = vec![p.to_path_buf(), p.join("docs"), p.join("docs/reports"), p.join("photos")];
+        for step in 0..120 {
+            let dir = dirs[next(dirs.len())].clone();
+            if !dir.is_dir() {
+                dirs.retain(|d| d != &dir);
+                continue;
+            }
+            match next(5) {
+                0 | 1 => {
+                    let _ = fs::write(dir.join(format!("f{step}-{}.txt", next(9))), vec![1u8; next(500)]);
+                }
+                2 => {
+                    let sub = dir.join(format!("d{step}"));
+                    if fs::create_dir_all(sub.join("x")).is_ok() {
+                        let _ = fs::write(sub.join("x/y.bin"), b"y");
+                        dirs.push(sub);
+                    }
+                }
+                3 => {
+                    if let Some(e) = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.path().is_file()).nth(0) {
+                        let _ = fs::remove_file(e.path());
+                    }
+                }
+                _ => {
+                    if let Some(e) = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).nth(next(2)) {
+                        let gone = e.path();
+                        let _ = fs::remove_dir_all(&gone);
+                        dirs.retain(|d| !d.starts_with(&gone));
+                    }
+                }
+            }
+            idx = idx.refreshed_dir(&dir, &[]).expect("the folder is indexed and exists");
+            same_as_fresh_scan(&idx, p);
+        }
+    }
+
+    #[test]
+    fn refreshing_unknown_or_missing_folders_gives_nothing() {
+        let d = sample_tree();
+        let p = d.path();
+        let idx = Index::scan(&[p.to_path_buf()], &ScanOptions::default());
+        assert!(idx.refreshed_dir(&p.join("nope"), &[]).is_none());
+        assert!(idx.refreshed_dir(&p.join("notes.txt"), &[]).is_none(), "a file is not a folder");
+        fs::remove_dir_all(p.join("photos")).unwrap();
+        assert!(idx.refreshed_dir(&p.join("photos"), &[]).is_none(), "gone from disk");
+    }
+
+    #[test]
+    fn search_finds_files_added_by_a_refresh() {
+        use crate::search::Query;
+        let d = sample_tree();
+        let p = d.path();
+        let idx = Index::scan(&[p.to_path_buf()], &ScanOptions::default());
+        fs::write(p.join("photos/Sunset-Photo.png"), b"p").unwrap();
+        let idx = idx.refreshed_dir(&p.join("photos"), &[]).unwrap();
+        let hits = idx.search(&Query::parse("sunset"), None, true, 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(std::path::Path::new(&hits[0].path), p.join("photos/Sunset-Photo.png"));
+        // Older entries are still found, and by the right path.
+        let hits = idx.search(&Query::parse("q2-report"), None, true, 10);
+        assert_eq!(std::path::Path::new(&hits[0].path), p.join("docs/reports/q2-report.pdf"));
     }
 
     #[test]

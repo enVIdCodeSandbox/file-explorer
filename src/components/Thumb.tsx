@@ -10,6 +10,7 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { adv } from "../settings/advanced";
 import { extensionOf, kindOf } from "../util/format";
+import { isArchiveLoc, isRemote } from "../util/path";
 import { FileIcon } from "./Icons";
 
 const MAX_CACHED = 600;
@@ -104,7 +105,7 @@ export function Thumb({
   const types = useStore((s) => s.info?.thumbnailTypes);
   const threads = useStore((s) => s.budget?.thumbThreads ?? 1);
   setThumbParallelism(threads + 1);
-  const supported = enabled && !isDir && !!types?.includes(extensionOf(name));
+  const supported = enabled && !isDir && !isRemote(path) && !isArchiveLoc(path) && !!types?.includes(extensionOf(name));
   const key = `${path}|${modified}|${size}`;
   const [url, setUrl] = useState<string | undefined>(() => cache.get(key));
 

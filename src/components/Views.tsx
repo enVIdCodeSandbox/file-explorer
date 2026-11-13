@@ -4,12 +4,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mergeHits } from "../util/searchHits";
 import { api, on, type Drive, type Hit, type SearchResponse } from "../api";
-import { ask, deletePaths, thisPcLabel, useStore } from "../store";
+import { ask, deletePaths, openFile, thisPcLabel, useStore } from "../store";
 import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
-import { applyFilter } from "../util/filter";
+import { applyFilter, isFiltering } from "../util/filter";
+import { adv } from "../settings/advanced";
+import { beginDrag, type DragPayload } from "../dnd";
+import type { FileEntry } from "../api";
+import { extensionOf, typeLabel } from "../util/format";
+import { rankHits } from "../util/searchHits";
+import type { SortKey } from "../store";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
-import { analyzeLocation, baseName, parentPath } from "../util/path";
-import { ContextMenu, type MenuState } from "./ContextMenu";
+import { baseName, maskAddresses, parentPath } from "../util/path";
+import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
+import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
 
 // ---------------------------------------------------------------------------
@@ -19,13 +26,13 @@ import { FileIcon, Icon } from "./Icons";
 export function HomeView() {
   const pins = useStore((s) => s.pins);
   const recent = useStore((s) => s.recent);
-  const { navigate, addRecent, clearRecent, showToast } = useStore.getState();
+  const { navigate, addRecent, clearRecent } = useStore.getState();
 
   const openPath = (path: string, isDir: boolean) => {
     if (isDir) navigate(path);
     else {
       addRecent(path, false);
-      api.openItem(path).catch((e) => showToast(String(e)));
+      void openFile(path);
     }
   };
 
@@ -33,7 +40,7 @@ export function HomeView() {
     <div className="page home-view">
       <h2>Pinned</h2>
       {pins.length === 0 ? (
-        <p className="muted">Nothing pinned yet. Right-click any file or folder and choose "Pin to sidebar".</p>
+        <p className="muted">Nothing pinned yet. Drag a folder onto Pinned in the sidebar, or right-click it and choose "Pin to sidebar".</p>
       ) : (
         <div className="card-grid">
           {pins.map((p) => (
@@ -151,7 +158,13 @@ export function DrivesView() {
   ];
 
   return (
-    <div className="page drives-view">
+    <div
+      className="page drives-view"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY, items: networkMenuItems(drives, os, appearance) });
+      }}
+    >
       <div className="section-head">
         <h2>{thisPcLabel(os)}</h2>
         <label className="inline-toggle" title="Show how much space each drive has">
@@ -216,22 +229,20 @@ export function DrivesView() {
                       onKeyDown={(e) => e.key === "F2" && void renameDrive(d)}
                       onContextMenu={(e) => {
                         e.preventDefault();
+                        e.stopPropagation();
                         const alias = appearance.driveNames?.[d.mount];
                         setMenu({
                           x: e.clientX,
                           y: e.clientY,
                           items: [
                             { id: "open", label: "Open", run: () => navigate(d.mount) },
-                            { id: "analyze", label: "Analyze disk usage", run: () => navigate(analyzeLocation(d.mount)) },
+                            ...driveMenuItems(d, { os, drives, appearance }),
                             { id: "rename", label: "Rename in this app…", icon: "rename", shortcut: "F2", separatorBefore: true, run: () => void renameDrive(d) },
                             ...(alias?.name && alias.base === d.name ? [{ id: "resetName", label: "Use the system's name", run: () => setAlias(d, { name: "" }) }] : []),
-                            ...(d.media === "network"
-                              ? [{ id: "address", label: hidesAddress(d, appearance) ? "Show server address" : "Hide server address", run: () => setAlias(d, { hideAddress: !hidesAddress(d, appearance) }) }]
-                              : []),
                           ],
                         });
                       }}
-                      title={`${d.mount}\nDouble-click to open`}
+                      title={`${hidesAddress(d, appearance) ? maskAddresses(d.mount, true) : d.mount}\nDouble-click to open`}
                     >
                       {showSpace && appearance.driveChart === "donut" && d.online ? (
                         <Donut fraction={shown} />
@@ -246,7 +257,7 @@ export function DrivesView() {
                           </div>
                         )}
                         {showSpace && <span className="muted drive-space">{text}</span>}
-                        {driveRemote(d, appearance) && <span className="muted path" title={d.remote ?? ""}>{d.remote}</span>}
+                        {driveRemote(d, appearance) && <span className="muted path">{d.remote}</span>}
                         <span className="muted">
                           {MEDIA_LABEL[d.media]}
                           {d.fs ? ` · ${d.fs.toUpperCase()}` : ""}
@@ -272,16 +283,54 @@ export function DrivesView() {
 
 let searchSeq = 0;
 
+type HitSortKey = "relevance" | SortKey;
+
+const HIT_SORTS: [HitSortKey, string][] = [
+  ["relevance", "Best match"],
+  ["name", "Name"],
+  ["modified", "Date modified"],
+  ["size", "Size"],
+  ["type", "Type"],
+  ["extension", "Extension"],
+];
+
+/** A hit as the folder filter and sorter understand an entry. */
+function asEntry(h: Hit): FileEntry {
+  return { name: h.name, isDir: h.isDir, isSymlink: false, isHidden: false, size: h.size, modified: h.modified, created: null };
+}
+
+const collate = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function sortHits(list: Hit[], key: HitSortKey, asc: boolean, foldersFirst: boolean): Hit[] {
+  if (key === "relevance") return asc ? list : [...list].reverse();
+  const dir = asc ? 1 : -1;
+  return [...list].sort((a, b) => {
+    if (foldersFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    let r = 0;
+    if (key === "size") r = a.size - b.size;
+    else if (key === "modified") r = (a.modified ?? 0) - (b.modified ?? 0);
+    else if (key === "type") r = collate.compare(typeLabel(a.name, a.isDir), typeLabel(b.name, b.isDir));
+    else if (key === "extension") r = collate.compare(extensionOf(a.name), extensionOf(b.name));
+    return (r || collate.compare(a.name, b.name) || rankHits(a, b)) * dir;
+  });
+}
+
 export function SearchView({ query, scope }: { query: string; scope: string | null }) {
   const settings = useStore((s) => s.settings)!;
   const indexStatus = useStore((s) => s.indexStatus);
-  const { navigate, newTab, addRecent, showToast } = useStore.getState();
+  const clipboard = useStore((s) => s.clipboard);
+  const filter = useStore((s) => s.filter);
+  const { navigate, newTab, addRecent, showToast, setClipboard, pasteInto, setFilter } = useStore.getState();
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<{ key: HitSortKey; asc: boolean }>({ key: "relevance", asc: true });
   const [menu, setMenu] = useState<MenuState | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const anchor = useRef(0);
+  const cursor = useRef(0);
+  const collapseOnClick = useRef<string | null>(null);
 
   // Results arrive in two parts: what the index knew at once, then batches
   // streamed from folders it does not cover yet. Each search has its own id,
@@ -294,6 +343,7 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
     setBusy(true);
     setError(null);
     setScanned(0);
+    setSelected(new Set());
     const sub = on("search-hits", (b) => {
       if (!alive || b.id !== id) return;
       setResult((cur) => (cur ? { ...cur, hits: mergeHits(cur.hits, b.hits, limit), searching: !b.done } : cur));
@@ -320,15 +370,35 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, scope]);
 
-  const filter = useStore((s) => s.filter);
+  // Filter with the same panel as a folder (Filter in the command bar) or the
+  // strip below, then sort. Entries are matched back to hits by identity, so two
+  // files with the same name in different folders stay separate.
+  const all = result?.hits ?? [];
   const hits = useMemo(() => {
-    const all = result?.hits ?? [];
-    // The search engine has no date syntax, so the date part of the filter is applied here.
-    if (filter.modified === "any") return all;
-    const asEntries = all.map((h) => ({ name: h.name, isDir: h.isDir, isSymlink: false, isHidden: false, size: h.size, modified: h.modified, created: null }));
-    const keep = new Set(applyFilter(asEntries, { ...filter, text: "", kinds: [], extensions: [], size: "any" }).map((e) => e.name));
-    return all.filter((h) => keep.has(h.name));
-  }, [result, filter]);
+    const entries = all.map((h) => ({ h, e: asEntry(h) }));
+    const byEntry = new Map(entries.map((x) => [x.e, x.h]));
+    const kept = applyFilter(entries.map((x) => x.e), filter).map((e) => byEntry.get(e)!);
+    return sortHits(kept, sort.key, sort.asc, sort.key !== "relevance" && settings.general.foldersFirst !== false);
+  }, [all, filter, sort, settings.general]);
+
+  // What can be chosen to narrow by, from what was found.
+  const kindFacets = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const h of all) counts.set(kindOf(h.name, h.isDir), (counts.get(kindOf(h.name, h.isDir)) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  }, [all]);
+  const narrowed = isFiltering(filter);
+
+  // Keep the selection to what is still listed.
+  useEffect(() => {
+    setSelected((cur) => {
+      if (!cur.size) return cur;
+      const live = new Set(hits.map((h) => h.path));
+      const next = new Set([...cur].filter((p) => live.has(p)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [hits]);
+
   const rowHeight = settings.appearance.density === "compact" ? 26 : 34;
   const virtualizer = useVirtualizer({
     count: hits.length,
@@ -344,7 +414,7 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
       else navigate(h.path);
     } else {
       addRecent(h.path, false);
-      api.openItem(h.path).catch((e) => showToast(String(e)));
+      void openFile(h.path);
     }
   };
   const reveal = (h: Hit) => {
@@ -354,8 +424,105 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
     else navigate(dir);
   };
 
+  const chosen = () => hits.filter((h) => selected.has(h.path));
+  const pasteTarget = (): string | null => {
+    const picked = chosen();
+    if (picked.length === 1 && picked[0].isDir) return picked[0].path;
+    return scope;
+  };
+  const paste = () => {
+    const dest = pasteTarget();
+    if (dest) void pasteInto(dest);
+    else showToast("Select a folder in the results to paste into.");
+  };
+
+  // ---- Selection: the same rules as a folder -------------------------------
+  const select = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    const h = hits[i];
+    if (!h) return;
+    cursor.current = i;
+    if (e.shiftKey) {
+      const [lo, hi] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
+      const next = e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>();
+      for (const x of hits.slice(lo, hi + 1)) next.add(x.path);
+      setSelected(next);
+    } else if (e.ctrlKey || e.metaKey) {
+      const next = new Set(selected);
+      next.has(h.path) ? next.delete(h.path) : next.add(h.path);
+      anchor.current = i;
+      setSelected(next);
+    } else {
+      anchor.current = i;
+      setSelected(new Set([h.path]));
+    }
+  };
+  const move = (delta: number, shift: boolean) => {
+    const i = Math.max(0, Math.min(hits.length - 1, cursor.current + delta));
+    select(i, { ctrlKey: false, metaKey: false, shiftKey: shift });
+    virtualizer.scrollToIndex(i);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const picked = chosen();
+    const paths = picked.map((h) => h.path);
+    let handled = true;
+    if (e.key === "ArrowDown") move(1, e.shiftKey);
+    else if (e.key === "ArrowUp") move(-1, e.shiftKey);
+    else if (e.key === "Home") move(-hits.length, e.shiftKey);
+    else if (e.key === "End") move(hits.length, e.shiftKey);
+    else if (e.key === "PageDown") move(15, e.shiftKey);
+    else if (e.key === "PageUp") move(-15, e.shiftKey);
+    else if (e.key === "Enter" && picked.length) picked.forEach(open);
+    else if (e.key === "Delete" && paths.length) void deletePaths(paths, e.shiftKey);
+    else if (e.key === "Escape") setSelected(new Set());
+    else if (mod && e.key.toLowerCase() === "a") setSelected(new Set(hits.map((h) => h.path)));
+    else if (mod && e.key.toLowerCase() === "c" && paths.length) setClipboard({ paths, op: "copy" });
+    else if (mod && e.key.toLowerCase() === "x" && paths.length) setClipboard({ paths, op: "move" });
+    else if (mod && e.key.toLowerCase() === "v") paste();
+    else handled = false;
+    if (handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  // ---- Right-click ----------------------------------------------------------
+  const showMenu = (x: number, y: number, h: Hit) => {
+    let picked = chosen();
+    if (!selected.has(h.path)) {
+      picked = [h];
+      setSelected(new Set([h.path]));
+    }
+    const paths = picked.map((p) => p.path);
+    const one = picked.length === 1 ? picked[0] : null;
+    const dest = one?.isDir ? one.path : scope;
+    const items: MenuItem[] = [
+      ...(one ? [{ id: "open", label: "Open", shortcut: "Enter", run: () => open(one) } as MenuItem] : []),
+      ...(one?.isDir ? [{ id: "openNewTab", label: "Open in new tab", run: () => newTab(one.path, { background: true }) } as MenuItem] : []),
+      ...(one && !one.isDir ? [{ id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(one.path) } as MenuItem] : []),
+      ...(one ? [{ id: "reveal", label: "Open containing folder", run: () => reveal(one) } as MenuItem] : []),
+      { id: "cut", label: "Cut", icon: "cut", shortcut: "Ctrl+X", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
+      { id: "copy", label: "Copy", icon: "copy", shortcut: "Ctrl+C", run: () => setClipboard({ paths, op: "copy" }) },
+      { id: "paste", label: one?.isDir ? "Paste into this folder" : "Paste", icon: "paste", shortcut: "Ctrl+V", disabled: !dest, run: () => dest && void pasteInto(dest) },
+      { id: "copyPath", label: "Copy as path", icon: "copy", separatorBefore: true, run: () => void navigator.clipboard.writeText(paths.join("\n")) },
+      { id: "delete", label: "Delete", icon: "trash", shortcut: "Del", separatorBefore: true, run: () => void deletePaths(paths) },
+      { id: "properties", label: "Properties", separatorBefore: true, run: () => useStore.setState({ properties: paths }) },
+    ];
+    setMenu({ x, y, items });
+  };
+
+  // ---- Dragging: the whole selection travels, like in a folder -----------------
+  const dragPayload = (h: Hit): DragPayload => {
+    const group = selected.has(h.path) ? hits.filter((x) => selected.has(x.path)) : [h];
+    return { paths: group.map((x) => x.path), dirs: group.map((x) => x.isDir), label: group.length === 1 ? group[0].name : `${group.length} items` };
+  };
+
+  const cutPaths = clipboard?.op === "move" ? new Set(clipboard.paths) : null;
   const ms = result ? (result.elapsedMs < 10 ? result.elapsedMs.toFixed(1) : Math.round(result.elapsedMs)) : 0;
-  const count = `${formatCount(hits.length)}${hits.length >= settings.search.limit ? "+" : ""} result${hits.length === 1 ? "" : "s"}`;
+  const count = `${formatCount(hits.length)}${!narrowed && hits.length >= settings.search.limit ? "+" : ""} result${hits.length === 1 ? "" : "s"}${
+    narrowed && all.length !== hits.length ? ` of ${formatCount(all.length)}` : ""
+  }`;
   const summary = error
     ? error
     : !result
@@ -365,6 +532,15 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
         : `${count} in ${ms} ms · ${formatCount(result.searchedEntries)} items searched ${
             result.source === "index" ? "from the index" : "by reading the folder"
           }${result.complete ? "" : " (partial)"}`;
+  const selectedBytes = chosen().reduce((n, h) => n + (h.isDir ? 0 : h.size), 0);
+
+  const headerCell = (key: HitSortKey, label: string, cls: string) => (
+    <div className={`cell ${cls} header-cell`} role="columnheader" aria-sort={sort.key === key ? (sort.asc ? "ascending" : "descending") : undefined}
+      onClick={() => setSort({ key, asc: sort.key === key ? !sort.asc : true })}>
+      {label}
+      {sort.key === key && <span className="sort-arrow">{sort.asc ? "▲" : "▼"}</span>}
+    </div>
+  );
 
   return (
     <div className="file-view search-view">
@@ -372,60 +548,176 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
         <span>{summary}</span>
         <span className="muted">
           {scope ? `in ${scope}` : "everywhere indexed"}
-          {indexStatus?.state === "scanning"
-            ? ` · indexing drives (${indexStatus.drivesReady} of ${indexStatus.drivesTotal} ready)`
-            : ""}
+          {indexStatus?.state === "scanning" ? ` · indexing drives (${indexStatus.drivesReady} of ${indexStatus.drivesTotal} ready)` : ""}
         </span>
       </div>
+      <div className="search-controls">
+        <label>
+          Sort
+          <select value={sort.key} onChange={(e) => setSort({ key: e.target.value as HitSortKey, asc: true })}>
+            {HIT_SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </label>
+        <button className="icon-button" aria-label={sort.asc ? "Ascending" : "Descending"} title={sort.asc ? "Ascending (click for descending)" : "Descending (click for ascending)"} onClick={() => setSort({ ...sort, asc: !sort.asc })}>
+          {sort.asc ? "▲" : "▼"}
+        </button>
+        <label>
+          Type
+          <select
+            value={filter.notKinds[0] ? `!${filter.notKinds[0]}` : filter.kinds[0] ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v.startsWith("!")) setFilter({ kinds: [], notKinds: [v.slice(1)] });
+              else setFilter({ kinds: v ? [v] : [], notKinds: [] });
+            }}
+          >
+            <option value="">All</option>
+            <optgroup label="Is">
+              {kindFacets.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
+            </optgroup>
+            <optgroup label="Is not">
+              {kindFacets.map(([k, n]) => <option key={`!${k}`} value={`!${k}`}>not {k} ({all.length - n})</option>)}
+            </optgroup>
+          </select>
+        </label>
+        <label>
+          Size
+          <select
+            value={filter.notSize !== "any" ? `!${filter.notSize}` : filter.size}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v.startsWith("!")) setFilter({ size: "any", notSize: v.slice(1) });
+              else setFilter({ size: v, notSize: "any" });
+            }}
+          >
+            <option value="any">Any</option>
+            <optgroup label="Is">
+              <option value="empty">Empty</option>
+              <option value="small">Under 1 MB</option>
+              <option value="medium">1 – 100 MB</option>
+              <option value="large">Over 100 MB</option>
+            </optgroup>
+            <optgroup label="Is not">
+              <option value="!empty">Not empty</option>
+              <option value="!small">Not under 1 MB</option>
+              <option value="!medium">Not 1 – 100 MB</option>
+              <option value="!large">Not over 100 MB</option>
+            </optgroup>
+          </select>
+        </label>
+        <label>
+          Modified
+          <select
+            value={filter.notModified !== "any" ? `!${filter.notModified}` : filter.modified}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v.startsWith("!")) setFilter({ modified: "any", notModified: v.slice(1) });
+              else setFilter({ modified: v, notModified: "any" });
+            }}
+          >
+            <option value="any">Any time</option>
+            <optgroup label="Is">
+              <option value="today">Today</option>
+              <option value="week">Past week</option>
+              <option value="month">Past month</option>
+              <option value="year">Past year</option>
+              <option value="older">Older than a year</option>
+            </optgroup>
+            <optgroup label="Is not">
+              <option value="!today">Not today</option>
+              <option value="!week">Not in the past week</option>
+              <option value="!month">Not in the past month</option>
+              <option value="!year">Not in the past year</option>
+              <option value="!older">Not older than a year</option>
+            </optgroup>
+          </select>
+        </label>
+        <label>
+          Name is not
+          <input className="text-input" value={filter.notText} placeholder="doesn't contain" onChange={(e) => setFilter({ notText: e.target.value })} />
+        </label>
+        {narrowed && <button className="link-button" onClick={() => setFilter(null)}>Clear filters</button>}
+      </div>
       {busy && <div className="loading-bar" />}
-      <div ref={scroller} className="file-scroller" tabIndex={0}>
+      <div ref={scroller} className="file-scroller" tabIndex={0} onKeyDown={onKeyDown} onMouseDown={() => setSelected(new Set())}>
         {result && hits.length === 0 ? (
           <div className="empty-state">
-            <strong>No matches for "{query}"</strong>
-            <span>Filters: ext:pdf · type:folder · size:&gt;10mb · wildcards like *.txt</span>
+            <strong>{narrowed && all.length ? "Nothing matches the filters" : `No matches for "${query}"`}</strong>
+            <span>{narrowed && all.length ? `${formatCount(all.length)} found before filtering` : "Filters: ext:pdf · type:folder · size:>10mb · wildcards like *.txt"}</span>
           </div>
         ) : (
-          <div className="file-rows" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((row) => {
-              const h = hits[row.index];
-              return (
-                <div
-                  key={h.path}
-                  className="file-row search-row"
-                  style={{ transform: `translateY(${row.start}px)`, height: rowHeight }}
-                  data-selected={selected === h.path || undefined}
-                  onMouseDown={() => setSelected(h.path)}
-                  onDoubleClick={() => open(h)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setSelected(h.path);
-                    setMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      items: [
-                        { id: "open", label: "Open", run: () => open(h) },
-                        { id: "reveal", label: "Open containing folder", run: () => reveal(h) },
-                        { id: "copyPath", label: "Copy as path", separatorBefore: true, run: () => void navigator.clipboard.writeText(h.path) },
-                        { id: "delete", label: "Delete", separatorBefore: true, run: () => void deletePaths([h.path]) },
-                      ],
-                    });
-                  }}
-                >
-                  <div className="cell cell-name">
-                    <FileIcon kind={kindOf(h.name, h.isDir)} name={h.name} />
-                    <span className="file-name">{h.name}</span>
+          <>
+            <div className="file-header search-header" role="row" onMouseDown={(e) => e.stopPropagation()}>
+              {headerCell("name", "Name", "cell-name")}
+              <div className="cell cell-path header-cell">Folder</div>
+              {headerCell("modified", "Date modified", "cell-date")}
+              {headerCell("size", "Size", "cell-size")}
+            </div>
+            <div className="file-rows" style={{ height: virtualizer.getTotalSize() }}>
+              {virtualizer.getVirtualItems().map((row) => {
+                const h = hits[row.index];
+                const i = row.index;
+                return (
+                  <div
+                    key={h.path}
+                    className="file-row search-row"
+                    style={{ transform: `translateY(${row.start}px)`, height: rowHeight }}
+                    data-selected={selected.has(h.path) || undefined}
+                    data-cut={cutPaths?.has(h.path) || undefined}
+                    data-drop={h.isDir ? "folder" : undefined}
+                    data-drop-path={h.isDir ? h.path : undefined}
+                    onPointerDown={(ev) => {
+                      if (ev.ctrlKey || ev.shiftKey || ev.metaKey) return;
+                      beginDrag(ev, () => {
+                        if (!selected.has(h.path)) setSelected(new Set([h.path]));
+                        return dragPayload(h);
+                      });
+                    }}
+                    onMouseDown={(ev) => {
+                      ev.stopPropagation();
+                      collapseOnClick.current = null;
+                      if (ev.button !== 0) return;
+                      const plain = !ev.ctrlKey && !ev.shiftKey && !ev.metaKey;
+                      if (plain && selected.size > 1 && selected.has(h.path) && adv<boolean>(settings, "files.keepSelectionOnDrag")) {
+                        collapseOnClick.current = h.path;
+                        cursor.current = i;
+                      } else select(i, ev);
+                      scroller.current?.focus({ preventScroll: true });
+                    }}
+                    onClick={() => {
+                      if (collapseOnClick.current === h.path) {
+                        collapseOnClick.current = null;
+                        select(i, { ctrlKey: false, metaKey: false, shiftKey: false });
+                      }
+                    }}
+                    onDoubleClick={() => open(h)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      showMenu(e.clientX, e.clientY, h);
+                    }}
+                  >
+                    <div className="cell cell-name">
+                      <FileIcon kind={kindOf(h.name, h.isDir)} name={h.name} />
+                      <span className="file-name">{h.name}</span>
+                    </div>
+                    <div className="cell cell-path" title={h.path}>
+                      {parentPath(h.path)}
+                    </div>
+                    <div className="cell cell-date">{formatDate(h.modified)}</div>
+                    <div className="cell cell-size">{h.isDir ? "" : formatSize(h.size)}</div>
                   </div>
-                  <div className="cell cell-path" title={h.path}>
-                    {parentPath(h.path)}
-                  </div>
-                  <div className="cell cell-date">{formatDate(h.modified)}</div>
-                  <div className="cell cell-size">{h.isDir ? "" : formatSize(h.size)}</div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
+      {selected.size > 0 && (
+        <div className="search-selection">
+          {selected.size} selected{selectedBytes ? ` · ${formatSize(selectedBytes)}` : ""}
+        </div>
+      )}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

@@ -44,7 +44,7 @@ const TYPES: Record<string, FileType> = {
   mp3: t("audio", "#f59e0b", "MP3"), flac: t("audio", "#fbbf24", "FLAC"), wav: t("audio", "#facc15", "WAV"), ogg: AUDIO, m4a: AUDIO, aac: AUDIO,
   opus: AUDIO, wma: AUDIO, aiff: AUDIO, mid: t("audio", "#fde047", "MID"), midi: t("audio", "#fde047", "MID"),
   // Archives and installers
-  zip: ZIP, "7z": t("archive", "#f59e0b", "7Z"), rar: t("archive", "#be185d", "RAR"), tar: ZIP, gz: ZIP, tgz: ZIP, bz2: ZIP, xz: ZIP, zst: ZIP, lz4: ZIP, cab: ZIP,
+  zip: ZIP, "7z": t("archive", "#f59e0b", "7Z"), rar: t("archive", "#be185d", "RAR"), tar: ZIP, gz: ZIP, tgz: ZIP, bz2: ZIP, xz: ZIP, zst: ZIP, lz4: ZIP, cab: ZIP, wim: ZIP, arj: ZIP, lzh: ZIP, lha: ZIP, tbz2: ZIP, tbz: ZIP, txz: ZIP, cpio: ZIP,
   iso: t("disk", "#94a3b8", "ISO"), img: t("disk", "#94a3b8", "IMG"), dmg: t("disk", "#94a3b8", "DMG"), vhd: t("disk", "#94a3b8", "VHD"), vhdx: t("disk", "#94a3b8", "VHDX"), vmdk: t("disk", "#94a3b8", "VMDK"),
   exe: t("exe", "#64748b", "EXE"), msi: t("package", "#0ea5e9", "MSI"), app: t("exe", "#64748b", "APP"), apk: t("package", "#3ddc84", "APK"),
   deb: t("package", "#d70a53", "DEB"), rpm: t("package", "#ee0000", "RPM"), appimage: t("package", "#64748b", "APP"), pkg: t("package", "#64748b", "PKG"),

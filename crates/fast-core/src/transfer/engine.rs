@@ -188,6 +188,9 @@ fn default_costs(src: crate::drives::Media, dst: crate::drives::Media) -> EtaPar
     }
 }
 
+/// Jobs expected to take less than this (by the default costs) do not measure the devices first.
+const PROBE_WORTH_SECS: f64 = 10.0;
+
 const MAX_REPORTED_ERRORS: usize = 50;
 
 const ST_RUN: u8 = 0;
@@ -577,9 +580,13 @@ fn run(
         Some(_) => 0.3,
         None => 0.0,
     };
-    // With little to go on, test the real devices for a moment. Small jobs are
-    // over before it would pay off, so they skip it.
-    let worth_probing = files_total > 0 && (bytes_total >= 48 << 20 || files_total >= 300);
+    // With little to go on, test the real devices for a moment. A job that
+    // should be over within seconds is over before the test would pay off (it
+    // took about half a second here, which was a third of a 1 GB copy), so it
+    // skips the test and the estimate stays a rough guess.
+    let guess = default_costs(profile.src, profile.dst);
+    let guessed_secs = files_total as f64 * guess.per_file_secs + bytes_total as f64 / (1024.0 * 1024.0) * guess.per_mb_secs;
+    let worth_probing = files_total > 0 && (bytes_total >= 48 << 20 || files_total >= 300) && guessed_secs >= PROBE_WORTH_SECS;
     let well_known = matches!(&prediction, Some(p) if p.same_route && p.samples >= 3);
     if worth_probing && !well_known && !shared.cancelled() && plan.strategy != Strategy::Rename {
         *shared.current.lock() = "Measuring speed…".into();
@@ -699,7 +706,13 @@ fn run(
         let (mut bps, mut fps) = (0f64, 0f64);
         let mut tracker = EtaTracker::with_head_start(head_start);
         loop {
-            std::thread::sleep(Duration::from_millis(budget.progress_ms.clamp(50, 2000)));
+            // Report every `progress_ms`, but notice at once when the workers are done:
+            // sleeping the whole interval made every job end up to that much late.
+            let tick = Duration::from_millis(budget.progress_ms.clamp(50, 2000));
+            let waited = Instant::now();
+            while waited.elapsed() < tick && workers.load(Ordering::Relaxed) > 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
             let alive = workers.load(Ordering::Relaxed);
             let now = Instant::now();
             let dt = now.duration_since(last).as_secs_f64();
@@ -1029,14 +1042,39 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         //    cancel stay responsive within one file.
         let mut input = fs::File::open(src)?;
         let mut output = fs::File::create(dst)?;
-        // Reserve the space up front: fails fast when the disk is full and
-        // reduces fragmentation.
+        // Reserve the space up front where that really allocates (Windows). On
+        // Unix, extending the length only makes a sparse file, which measured
+        // slower to fill, so it is left out there.
+        #[cfg(not(unix))]
         let _ = output.set_len(size);
-        let mut buf = vec![0u8; plan.buffer_bytes];
+        let mut buf: Vec<u8> = Vec::new();
         let mut chunk_start = Instant::now();
+        // Linux: let the kernel move each chunk without bringing it into this
+        // program (measured about 1.6x faster than read and write here).
+        #[cfg(target_os = "linux")]
+        let mut kernel = true;
         loop {
             if !shared.checkpoint() {
                 return Ok(false);
+            }
+            #[cfg(target_os = "linux")]
+            if kernel {
+                match kernel_copy_chunk(&input, &output, plan.buffer_bytes) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        shared.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
+                        let now = Instant::now();
+                        shared.model.lock().observe_chunk(n as u64, now.duration_since(chunk_start).as_secs_f64());
+                        chunk_start = now;
+                        continue;
+                    }
+                    // Not possible between these two files (another filesystem,
+                    // an old kernel): carry on from here with plain reads.
+                    Err(_) => kernel = false,
+                }
+            }
+            if buf.is_empty() {
+                buf = vec![0u8; plan.buffer_bytes];
             }
             let n = input.read(&mut buf)?;
             if n == 0 {
@@ -1061,6 +1099,25 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         let _ = filetime::set_file_times(dst, atime, mtime);
     }
     Ok(true)
+}
+
+/// Copy up to `len` bytes from where `input` is to where `output` is, inside the kernel.
+/// Returns 0 at the end of the input.
+#[cfg(target_os = "linux")]
+fn kernel_copy_chunk(input: &fs::File, output: &fs::File, len: usize) -> io::Result<usize> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: both descriptors are open for the duration of the call, and null offsets
+        // make the kernel use and advance the files' own positions.
+        let n = unsafe { libc::copy_file_range(input.as_raw_fd(), std::ptr::null_mut(), output.as_raw_fd(), std::ptr::null_mut(), len, 0) };
+        if n >= 0 {
+            return Ok(n as usize);
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
 }
 
 trait StreamPos {

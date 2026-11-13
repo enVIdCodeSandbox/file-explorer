@@ -121,12 +121,16 @@ export interface ListFilter {
   text: string;
   minBytes: number;
   exts: ReadonlySet<string>;
+  /** Names that must not contain this text. */
+  notText?: string;
 }
 
 export function matchesFilter(name: string, size: number, f: ListFilter): boolean {
   if (f.minBytes > 0 && size < f.minBytes) return false;
   if (f.exts.size > 0 && !f.exts.has(extOf(name))) return false;
-  return !f.text.trim() || name.toLowerCase().includes(f.text.trim().toLowerCase());
+  const lower = name.toLowerCase();
+  if (f.notText?.trim() && lower.includes(f.notText.trim().toLowerCase())) return false;
+  return !f.text.trim() || lower.includes(f.text.trim().toLowerCase());
 }
 
 export type LargeFile = Analysis["largest"][number];

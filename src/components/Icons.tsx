@@ -2,13 +2,16 @@
 // `currentColor`, so themes can recolour them with CSS alone.
 
 import type { CSSProperties, ReactNode } from "react";
+import { useStore } from "../store";
 import { fileTypeOf } from "../util/fileTypes";
+import { FLUENT } from "./fluentIcons";
 
 const PATHS: Record<string, string> = {
   back: "M10 3 5 8l5 5M5 8h9",
   forward: "M6 3l5 5-5 5M11 8H2",
   up: "M3 8l5-5 5 5M8 3v11",
   refresh: "M13 8a5 5 0 1 1-1.5-3.5M13 2v3h-3",
+  clock: "M8 13A5 5 0 1 0 8 3a5 5 0 0 0 0 10zM8 5.5V8l1.8 1.2",
   search: "M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zm3.5-1.5L14 14",
   settings:
     "M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM13 8l1.4-1-1.2-2.2-1.7.5-1-.8L10.2 3H7.8l-.3 1.5-1 .8-1.7-.5L3.6 7 5 8l-1.4 1 1.2 2.2 1.7-.5 1 .8.3 1.5h2.4l.3-1.5 1-.8 1.7.5L14.4 9z",
@@ -39,6 +42,8 @@ const PATHS: Record<string, string> = {
   filter: "M2 3h12l-4.5 5.5V13l-3 1V8.5z",
   more: "M3.5 8h.01M8 8h.01M12.5 8h.01",
   undo: "M4 6h6a3 3 0 0 1 0 6H6M4 6l2.5-2.5M4 6l2.5 2.5",
+  archive: "M2.5 3h11v3h-11zM3.5 6v7h9V6M6.5 9h3",
+  redo: "M12 6H6a3 3 0 0 0 0 6h4M12 6L9.5 3.5M12 6L9.5 8.5",
   check: "M3 8.5l3.2 3L13 4.5",
   sidebar: "M2 3h12v10H2zM6 3v10",
   star: "M8 2l1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.3 4.3 13.5l.8-4.2L2 6.4l4.2-.5z",
@@ -51,9 +56,27 @@ const PATHS: Record<string, string> = {
   collapse: "M3 7l5-4 5 4M3 12l5-4 5 4",
   info: "M8 13A5 5 0 1 0 8 3a5 5 0 0 0 0 10zM8 7.5v3M8 5.6v.01",
   folderOpen: "M2 12V3h4l1.5 1.5H14V6M2 12l2-5h11l-2 5z",
+  shield: "M8 2l5 1.8v4c0 3-2.2 5-5 6.2C5.2 12.8 3 10.8 3 7.8v-4z",
+  lock: "M4 7h8v6.5H4zM5.5 7V5a2.5 2.5 0 0 1 5 0v2",
+  cpu: "M4.5 4.5h7v7h-7zM6.5 6.5h3v3h-3zM6 2v2.5M10 2v2.5M6 11.5V14M10 11.5V14M2 6h2.5M2 10h2.5M11.5 6H14M11.5 10H14",
+  profile: "M8 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 14c0-2.5 2.2-4 5-4s5 1.5 5 4",
+  preset: "M2 4.5h12M2 8h12M2 11.5h12M10 3v3M5 6.5v3M11 10v3",
+  memory: "M2 5h12v6H2zM4.5 11v2M8 11v2M11.5 11v2M5 7.5h.01M8 7.5h.01M11 7.5h.01",
+  eject: "M8 3l5 6H3zM3 12h10",
 };
 
 export function Icon({ name, size = 16, style }: { name: string; size?: number; style?: CSSProperties }) {
+  const fluent = useStore((s) => s.settings?.appearance.style.icons === "fluent");
+  const f = fluent ? FLUENT[name] : undefined;
+  if (f) {
+    return (
+      <svg className="icon" data-set="fluent" width={size} height={size} viewBox={`0 0 ${f.s} ${f.s}`} fill="currentColor" style={style} aria-hidden="true">
+        {f.d.map((d, i) => (
+          <path key={i} d={d} />
+        ))}
+      </svg>
+    );
+  }
   return (
     <svg
       className="icon"

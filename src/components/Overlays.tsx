@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDragView } from "../dnd";
-import { useStore } from "../store";
+import { api, type OpenApp, type OpenChoices } from "../api";
+import { promptText, useStore } from "../store";
+import { baseName } from "../util/path";
 import { DetailsPane } from "./DetailsPane";
 import { Icon } from "./Icons";
 
@@ -115,6 +117,102 @@ export function DragOverlay() {
       <span className="drag-ghost-name">{view.label}</span>
       {view.count > 1 && <span className="drag-ghost-count">{view.count}</span>}
       {view.text && <span className="drag-ghost-text">{view.text}</span>}
+    </div>
+  );
+}
+
+/**
+ * "Select an app to open this .zip file": the default, suggested and other
+ * programs, with Always (make it the default) and Just once.
+ */
+export function OpenWithDialog() {
+  const request = useStore((s) => s.openWith);
+  const [choices, setChoices] = useState<OpenChoices | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const path = request?.path;
+
+  useEffect(() => {
+    setChoices(null);
+    setPicked(null);
+    setError(null);
+    if (!path) return;
+    let alive = true;
+    api.openChoices(path).then((c) => {
+      if (!alive) return;
+      setChoices(c);
+      setPicked(c.default?.id ?? null);
+    }).catch((e) => alive && setError(String(e)));
+    return () => { alive = false; };
+  }, [path]);
+
+  if (!request || !path) return null;
+  const close = () => useStore.getState().closeChooser();
+  const name = baseName(path);
+  const label = choices?.extension ? `${choices.extension} file` : "file";
+
+  const run = async (always: boolean) => {
+    if (!picked) return;
+    setBusy(true);
+    try {
+      await api.openWithApp(path, picked, always);
+      close();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const browse = async () => {
+    const typed = await promptText("Program to open it with", "");
+    if (typed?.trim()) {
+      setPicked(typed.trim());
+      setBusy(true);
+      try { await api.openWithApp(path, typed.trim(), false); close(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    }
+  };
+
+  const row = (a: OpenApp) => (
+    <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(false)}>
+      {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon"><Icon name="newItem" size={18} /></span>}
+      <span className="openwith-name">{a.name}</span>
+    </button>
+  );
+  const group = (title: string, list: OpenApp[]) => list.length > 0 && (
+    <section key={title}>
+      <h4>{title}</h4>
+      {list.map(row)}
+    </section>
+  );
+
+  return (
+    <div className="modal-backdrop" onMouseDown={close}>
+      <div className="dialog openwith-dialog" role="dialog" aria-modal="true" aria-label="Open with" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => (e.key === "Escape" && close(), e.stopPropagation())}>
+        <h3>Select an app to open this {label}</h3>
+        <p className="openwith-why">
+          <strong title={path}>{name}</strong>
+          {request.reason ? ` — ${request.reason}` : ""}
+        </p>
+        <div className="openwith-list">
+          {!choices && !error && <div className="muted" style={{ padding: 12 }}>Looking for apps…</div>}
+          {choices && (
+            <>
+              {group("Default app", choices.default ? [choices.default] : [])}
+              {group("Suggested apps", choices.suggested)}
+              {group("More options", choices.others)}
+              {!choices.default && !choices.suggested.length && !choices.others.length && <div className="muted" style={{ padding: 12 }}>No apps were found on this computer.</div>}
+            </>
+          )}
+        </div>
+        {error && <div className="openwith-error" role="alert">{error}</div>}
+        <div className="openwith-footer">
+          <button className="secondary" onClick={() => void browse()} disabled={busy}>Choose a program by path…</button>
+          <span className="grow" />
+          <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>
+          <button className="primary" disabled={!picked || busy} onClick={() => void run(false)}>Just once</button>
+        </div>
+      </div>
     </div>
   );
 }

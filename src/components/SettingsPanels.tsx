@@ -356,7 +356,7 @@ export function StoragePanel() {
       </table>
       {history && history.records > 0 && (
         <p className="muted">
-          Transfer history: {formatCount(history.records)} transfers across {formatCount(history.routes)} routes in {formatSize(history.bytes)}.
+          Transfer history: {formatCount(history.records)} {history.records === 1 ? "transfer" : "transfers"} across {formatCount(history.routes)} {history.routes === 1 ? "route" : "routes"} in {formatSize(history.bytes)}.
         </p>
       )}
       <div className="button-row">

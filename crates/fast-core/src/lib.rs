@@ -4,6 +4,8 @@
 //! the webview. The desktop/mobile shell (`src-tauri`) is a thin layer that
 //! exposes these functions as commands. See `docs/ARCHITECTURE.md`.
 
+pub mod archive;
+pub mod browse;
 pub mod details;
 pub mod drives;
 pub mod entry;
@@ -11,12 +13,17 @@ pub mod error;
 pub mod history;
 pub mod index;
 pub mod indexset;
+pub mod locks;
+pub mod media;
+pub mod openwith;
 pub mod ops;
 pub mod platform;
 pub mod predict;
+pub mod remote;
 pub mod resources;
 pub mod search;
 pub mod session;
+pub mod sizecache;
 pub mod shellmenu;
 pub mod sysreport;
 pub mod settings;
@@ -25,6 +32,7 @@ pub mod thumbs;
 pub mod transfer;
 pub mod treemap;
 pub mod usage;
+pub mod watch;
 
 pub use error::{CoreError, Result};
 

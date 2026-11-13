@@ -5,12 +5,12 @@
 | Check | Result |
 |---|---|
 | Engine unit tests (`cargo test -p fast-core`) | All pass on Linux (`cargo test --workspace`) |
-| Engine type-check for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` | Passes (compile check only, not run) |
+| Engine type-check for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` | Passed before the remote protocols were added (compile check only, not run). **Not re-checked since:** `ring` (TLS and SSH) compiles C code, which needs that OS's toolchain; this Linux machine has none, so the check fails at `ring`, not in our code. The CI matrix builds all three, so the first CI run answers it |
 | Frontend type-check, unit tests, production build | Pass |
 | App launched on Linux (WebKitGTK) | Browsing, thumbnails, tabs and groups, search, disk usage, This PC, settings, right-click menu, copy and paste of a 303-file folder all exercised |
 | Linux `.deb` bundle | Built |
 | Windows, macOS | **Never run.** Expect issues in `platform.rs` (terminal and elevation commands) and in webview differences first |
-| Transfer speed against Explorer, Finder or `cp` | **Not measured.** The strategy logic is reasoned and unit-tested, not benchmarked |
+| Transfer speed against `cp` and `rsync` | Measured on one Linux VM (2 vCPU, virtual disk, files mostly cached): the engine matches or beats `cp` on small and mixed folders and trails it by about 20% on four large files. See TRANSFERS.md, Benchmarks. **Not measured:** Explorer, Finder, SSD vs HDD, SMB, Windows, macOS |
 
 ## Next, in order
 
@@ -25,25 +25,38 @@
 4. **Incremental index updates.** Today the index is rebuilt by a full rescan.
    Windows: optional elevated helper reading the NTFS MFT and USN journal for
    near-instant builds and live updates. macOS: FSEvents. Linux: fanotify.
-5. **Remote protocols.** Port SFTP, FTP and WebDAV from the Electron
-   version behind a `Source`/`Sink` trait in the transfer engine. (rsync, rclone,
+5. **Remote protocols:** FTP, SFTP and WebDAV exist (browse, copy, move,
+   delete, rename, open). Remaining: FTPS, SSH agent login, resume, keep
+   modification times, and run-testing on Windows and macOS. (rsync, rclone,
    SMB-tuned and NFS-tuned copies already exist as copy methods; see TRANSFERS.md.)
-6. **Transfer benchmarks** against the native tools on SSD, HDD and SMB, then
-   tune thresholds and worker counts from data. The method chooser already
-   learns per machine; benchmarks would tune its starting point. Add unbuffered I/O for very
-   large files on Windows if the numbers support it.
-7. **Undo**, **archives** (zip browse/extract/create), **"Open with"**,
-   batch rename.
-8. **Tabs:** drag to reorder within the strip.
+6. **Transfer benchmarks** on real hardware: the benchmark program exists
+   (`transfer_bench`) and has run on a Linux VM, where it found and fixed two
+   engine problems. Remaining: SSD, HDD and SMB numbers, Windows and macOS, and
+   Explorer/Finder as the comparison. The method chooser already learns per
+   machine; benchmarks would tune its starting point. Add unbuffered I/O for
+   very large files on Windows if the numbers support it.
+7. **Archives:** (done: browse zip, tar, 7z, gz/bz2/xz like folders, rar and
+   others through 7-Zip) still to do: add files to an archive in place, passwords, nested archives, rar without 7-Zip. (Create zip,
+   extract zip/tar/tar.gz, undo, redo, batch rename, "Open with" and live
+   folder watching exist.)
+8. **Tabs:** done. Tabs reorder by dragging, and a group moves as one block when its chip is dragged.
 9. **Details:** EXIF, audio/video metadata, owner names, Windows ACL summary.
 10. **Drive health** (SMART). Needs elevated access on every OS; show it only
     when available.
 11. **Mobile shell.** Android via the Storage Access Framework; iOS via the
     document picker and the app's own container. Whole-device indexing is not
     possible on either; the mobile build will be a reduced-feature app.
-12. **Signing and auto-update** for installers.
+12. **Signing and auto-update** for installers. Signing is wired into the release workflow and switches on when the certificate secrets exist (see RELEASING.md); it has never run with a real certificate. Auto-update is not built.
 
 ## Known limits in this build
+
+* **In-app locks are a privacy screen, not encryption.** Argon2 hashes protect the passcodes, but the files themselves are untouched and every other program can read them. Deleting a folder that *contains* a locked folder is not blocked.
+* **Written but never run on Windows or macOS:** drive eject, map/disconnect network drive, the registry-based "Open with" list and Windows' own chooser, `pkexec`/UAC/`osascript` elevation (including the per-drive "Run as administrator" SMART read), and the `smartctl` fallback. Linux paths were exercised.
+* **Drive health** needs `smartmontools`. Without it the About page shows what the OS reports and says so.
+* **Cross-window tab outline** relies on window positions from the OS; it was written against Tauri's window API and checked only with two windows on Linux (X11).
+* **Window buttons on the left** are drawn by the app on Windows and Linux. On macOS the system's own buttons stay where the OS puts them.
+* **Fluent icons** replace the toolbar and menu glyphs; file-type icons stay the app's own drawings.
+* **Performance presets** are starting points chosen by reasoning about memory and cores, not tuned from measurements on each class of hardware.
 
 * Cut and paste into another program arrives as a copy (operating systems do not let the sender mark "cut").
 * SMB-tuned copies on Windows need Robocopy `/COMPRESS` (Windows 11 / Server 2022 or later); otherwise Robocopy or the built-in engine is used.
