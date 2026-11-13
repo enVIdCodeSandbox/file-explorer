@@ -1,6 +1,6 @@
 name: Build
 
-# Tests on every push and pull request, installers for every supported
+# Tests on every push and pull request, builds for every supported
 # platform, and a draft GitHub release when a version tag is pushed:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -30,7 +30,7 @@ jobs:
         os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     # Linux gates the build. Windows and macOS results are reported but do not
-    # block installers, so one platform-specific test cannot stop a release.
+    # block the builds, so one platform-specific test cannot stop a release.
     continue-on-error: ${{ matrix.os != 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
       - run: npm test
 
   bundle:
-    name: Installers (${{ matrix.name }})
+    name: Build (${{ matrix.name }})
     needs: test
     strategy:
       fail-fast: false
@@ -99,7 +99,7 @@ jobs:
       # AppImage tooling runs without FUSE on CI machines.
       APPIMAGE_EXTRACT_AND_RUN: 1
       # Signing. Every one of these is optional: without the secrets the
-      # installers are built unsigned, exactly as before. See docs/RELEASING.md.
+      # builds are made unsigned, exactly as before. See docs/RELEASING.md.
       # macOS: signs the app and, with the Apple ID values, notarizes it.
       # Windows: a code signing certificate as a base64 .pfx.
       WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -177,18 +177,18 @@ jobs:
           $cert = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password $password
           Remove-Item $path
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
-      - name: Build installers (signed)
+      - name: Build packages (signed)
         if: steps.wincert.outputs.thumbprint != ''
         shell: pwsh
         run: |
           $config = '{"bundle":{"windows":{"certificateThumbprint":"${{ steps.wincert.outputs.thumbprint }}","digestAlgorithm":"sha256","timestampUrl":"http://timestamp.digicert.com"}}}'
           npx tauri build ${{ matrix.args }} --config $config
-      - name: Build installers
+      - name: Build packages
         if: steps.wincert.outputs.thumbprint == ''
         run: npx tauri build ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ matrix.artifact }}
+          name: fast-file-explorer-build-${{ matrix.artifact }}
           path: |
             target/release/bundle/**/*.deb
             target/release/bundle/**/*.rpm
@@ -214,12 +214,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: installers
+          path: build-files
           merge-multiple: true
       - name: List what will be attached
-        run: find installers -type f | sort
+        run: find build-files -type f | sort
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          files: installers/**
+          files: build-files/**

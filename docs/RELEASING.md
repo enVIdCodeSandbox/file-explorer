@@ -6,6 +6,9 @@ Installers are built by `.github/workflows/build.yml` for Windows (x64, ARM64), 
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
+Each build is uploaded as an artifact named `fast-file-explorer-build-<os>` (for example `fast-file-explorer-build-windows-x64`). The word "installer" is left out of the name on purpose: Chrome blocks downloads whose names contain it.
+
+
 ## Signing
 
 Unsigned installers work, but Windows SmartScreen and macOS Gatekeeper warn about them. Signing needs certificates that only you can obtain, so the workflow is prepared but **has not been run with real certificates**. Add these as repository secrets (Settings → Secrets and variables → Actions); anything missing simply leaves that platform unsigned.
