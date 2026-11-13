@@ -4,6 +4,7 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ScanActivity } from "./ScanActivity";
 import { api, on, type Analysis, type AnalysisProgress, type SizeNode } from "../api";
 import { deletePaths, openFile, showProperties, useStore } from "../store";
 import {
@@ -333,6 +334,7 @@ export function AnalyzerView({ path }: { path: string }) {
           </span>
         )}
       </span>
+      {progress?.activity && <ScanActivity path={path} progress={progress} />}
     </div>
   ) : partial ? (
     <div className="analysis-banner" data-state="partial" role="status">

@@ -255,7 +255,6 @@ impl Index {
             return None;
         }
         let read = fs::read_dir(dir).ok()?;
-        let end = self.subtree_end(id);
         // What the index knew about each child folder, to reuse its subtree.
         let old_dirs: std::collections::HashMap<&str, u32> = self.children_scan(id).filter(|&c| self.nodes[c as usize].is_dir()).map(|c| (self.name(c), c)).collect();
 
@@ -296,8 +295,15 @@ impl Index {
             }
         }
 
-        // Splice: [0..=id] + replacement + [end..], offsets and parents adjusted.
-        let first = id as usize + 1;
+        Some(self.spliced(id, dir, &rep))
+    }
+
+    /// This index with what is inside folder `id` (at `dir`) replaced by `rep`:
+    /// [0..=id] + replacement + [end..], offsets and parents adjusted.
+    fn spliced(&self, id: u32, dir: &Path, rep: &Index) -> Index {
+        const TOP: u32 = u32::MAX - 1;
+        let end = self.subtree_end(id);
+                let first = id as usize + 1;
         let tail_start = end as usize;
         let cut_names = (
             self.nodes.get(first).map(|n| n.name_off as usize).unwrap_or(self.names.len()),
@@ -339,7 +345,18 @@ impl Index {
         out.lower.extend_from_slice(&rep.lower);
         out.lower.extend_from_slice(&self.lower[cut_lower.1..]);
         out.roots = self.roots.iter().map(|&r| if r > id { (r as i64 + node_delta) as u32 } else { r }).collect();
-        Some(out)
+        out
+    }
+
+    /// A copy in which folder `dir` is still listed but nothing inside it is:
+    /// used to forget a folder's contents without scanning anything. `None`
+    /// when `dir` is not in the index or is not a folder.
+    pub fn without_contents(&self, dir: &Path) -> Option<Index> {
+        let id = self.find_path(dir)?;
+        if !self.node(id).is_dir() {
+            return None;
+        }
+        Some(self.spliced(id, dir, &Index::default()))
     }
 
     pub fn len(&self) -> usize {
@@ -641,6 +658,30 @@ pub(crate) mod tests {
             idx = idx.refreshed_dir(&dir, &[]).expect("the folder is indexed and exists");
             same_as_fresh_scan(&idx, p);
         }
+    }
+
+    #[test]
+    fn forgetting_a_folders_contents_matches_scanning_without_them() {
+        let d = sample_tree();
+        let p = d.path();
+        let idx = Index::scan(&[p.to_path_buf()], &ScanOptions::default());
+        let cut = idx.without_contents(&p.join("docs")).unwrap();
+        let mut opts = ScanOptions { threads: 1, ..Default::default() };
+        opts.skip.push(p.join("docs"));
+        let expect = Index::scan(&[p.to_path_buf()], &opts);
+        let listing = |i: &Index| {
+            let mut v: Vec<(String, u64, bool)> = (0..i.len() as u32).map(|id| (i.path_of(id).to_string_lossy().into_owned(), i.node(id).size, i.node(id).is_dir())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(listing(&cut), listing(&expect));
+        assert!(cut.find_path(&p.join("docs")).is_some(), "the folder itself stays listed");
+        assert!(cut.find_path(&p.join("docs/readme.md")).is_none());
+        assert!(cut.find_path(&p.join("photos/Beach.JPG")).is_some(), "other folders are untouched");
+        for (i, n) in cut.nodes.iter().enumerate() {
+            assert!(n.parent == NO_PARENT || (n.parent as usize) < i, "parents come first");
+        }
+        assert!(idx.without_contents(&p.join("notes.txt")).is_none(), "a file has no contents");
     }
 
     #[test]

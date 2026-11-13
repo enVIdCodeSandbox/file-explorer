@@ -223,8 +223,14 @@ pub struct Performance {
     pub priority: String,
     /// 0 = one per logical CPU.
     pub max_threads: usize,
-    /// Upper bound for index and listing caches.
+    /// Upper bound for index and listing caches. 0 = no limit.
     pub max_cache_mb: usize,
+    /// The most of the machine's processing power the app's worker threads
+    /// may use, as a percentage of all logical CPUs. 0 = no cap.
+    pub max_cpu_percent: u8,
+    /// The most of the machine's memory the app's caches may hold, as a
+    /// percentage of installed RAM. 0 = no cap.
+    pub max_memory_percent: u8,
     pub background_indexing: bool,
     /// Index every mounted local drive instead of only the home folder.
     /// Index every local drive (the default) instead of only the home folder.
@@ -243,6 +249,8 @@ impl Default for Performance {
             priority: "dynamic".into(),
             max_threads: 0,
             max_cache_mb: 256,
+            max_cpu_percent: 0,
+            max_memory_percent: 0,
             background_indexing: true,
             index_drives: true,
             lazy_loading: true,
@@ -329,11 +337,36 @@ pub struct Terminal {
     pub linux_terminal: String,
     /// Terminal app on macOS.
     pub mac_terminal: String,
+    /// A command to run as soon as the terminal opens, e.g. `git status`.
+    pub startup_command: String,
+    /// Replaces the choices above: the whole command to run, `{path}` standing for the folder.
+    pub custom_command: String,
+    /// Windows Terminal: the profile to open, by name. Empty = its default.
+    pub windows_profile: String,
+    /// The shell to run inside the terminal on Linux and macOS (bash, zsh, fish…). Empty = the login shell.
+    pub shell_program: String,
+    /// Open a tab in the terminal window that is already open, where the terminal can.
+    pub new_tab: bool,
+    /// When one folder is selected, open the terminal in it instead of in the folder being viewed.
+    pub use_selected_folder: bool,
+    /// Which folder the plain "Open terminal" button opens: "here" or "home".
+    pub default_folder: String,
 }
 
 impl Default for Terminal {
     fn default() -> Self {
-        Terminal { windows_shell: "cmd".into(), linux_terminal: String::new(), mac_terminal: "Terminal".into() }
+        Terminal {
+            windows_shell: "cmd".into(),
+            linux_terminal: String::new(),
+            mac_terminal: "Terminal".into(),
+            startup_command: String::new(),
+            custom_command: String::new(),
+            windows_profile: String::new(),
+            shell_program: String::new(),
+            new_tab: false,
+            use_selected_folder: true,
+            default_folder: "here".into(),
+        }
     }
 }
 

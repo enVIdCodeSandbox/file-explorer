@@ -28,11 +28,12 @@ const sel = (def: string, key: string, group: string, label: string, options: [s
   key, group, label, description, control: { type: "select", options: options.map(([value, l]) => ({ value, label: l })) }, default: def,
 });
 
-export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory"] as const;
+export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails"] as const;
 
 export const ADVANCED: AdvDef[] = [
   // ---- Interface ----
   sel("auto", "ui.language", "Interface", "Language", [["auto", "Automatic (system language)"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["pt", "Português"], ["it", "Italiano"], ["ru", "Русский"], ["zh", "简体中文"], ["ja", "日本語"], ["ko", "한국어"]], "Used by the setup wizard and the labels that are translated so far; anything else stays in English."),
+  sel("windows", "ui.chrome", "Interface", "Window arrangement", [["windows", "Windows (File Explorer)"], ["macos", "macOS (Finder)"], ["linux", "Linux (GNOME Files)"]], "How the same tabs, address bar, commands and navigation pane are arranged. The interface style sets this for you."),
   yn(true, "ui.animations", "Interface", "Animations", "Turn off for instant, motion-free changes."),
   num(100, "ui.scale", "Interface", "Interface zoom", 60, 200, "%", "Makes everything larger or smaller.", 5),
   num(0, "ui.rowHeight", "Interface", "Row height", 0, 60, "px", "0 follows the density setting."),
@@ -119,6 +120,26 @@ export const ADVANCED: AdvDef[] = [
 
   // ---- Search ----
   num(140, "search.debounceMs", "Search", "Wait after typing before searching", 0, 1500, "ms"),
+
+  // ---- Thumbnails ----
+  yn(true, "thumbs.images", "Thumbnails", "Pictures", "Show the picture itself instead of a type icon: JPEG, PNG, GIF, WebP and BMP."),
+  yn(true, "thumbs.documents", "Thumbnails", "Documents", "Show the first page of PDFs and Office documents. Windows and macOS use their own previews; on Linux this needs pdftoppm (PDF only)."),
+  yn(true, "thumbs.videos", "Thumbnails", "Videos", "Show a frame from the video. Windows and macOS use their own previews; on Linux this needs ffmpegthumbnailer or ffmpeg."),
+  yn(false, "thumbs.inDetails", "Thumbnails", "Show in the Details view", "Replaces the small type icon at the start of each row."),
+  yn(false, "thumbs.inList", "Thumbnails", "Show in the List view"),
+  yn(false, "thumbs.inSmall", "Thumbnails", "Show in the Small icons view"),
+  yn(true, "thumbs.inMedium", "Thumbnails", "Show in the Medium icons view"),
+  yn(true, "thumbs.inLarge", "Thumbnails", "Show in the Large icons view"),
+  yn(true, "thumbs.inXl", "Thumbnails", "Show in the Extra large icons view"),
+  yn(true, "thumbs.inPane", "Thumbnails", "Show in the details pane", "The preview at the top of the details pane for the selected file."),
+  sel("normal", "thumbs.quality", "Thumbnails", "Sharpness", [["draft", "Draft (smaller, fastest)"], ["normal", "Normal"], ["sharp", "Sharp (twice the pixels, for high-resolution screens)"]], "Sharper thumbnails take longer to make and more space to keep."),
+  num(0, "thumbs.parallel", "Thumbnails", "Made at the same time", 0, 8, undefined, "How many thumbnails are made at once. 0 lets the performance level decide."),
+  yn(false, "thumbs.networkDrives", "Thumbnails", "On network drives", "Off: files on network drives keep their icons, which avoids reading many files over the network."),
+  num(64, "thumbs.maxImageMb", "Thumbnails", "Largest picture to preview", 0, 2048, "MB", "Bigger pictures keep their icon. 0 means no limit."),
+  num(10, "thumbs.videoPercent", "Thumbnails", "Video frame to show", 0, 95, "%", "How far into the video the frame is taken. With ffmpeg alone (no ffmpegthumbnailer) the frame at two seconds is used."),
+
+  // ---- Disk usage ----
+  sel("auto", "usage.liveActivity", "Files and lists", "Live drive activity in Disk usage", [["auto", "Automatic (only on computers with power to spare)"], ["on", "Always"], ["off", "Never"]], "While a scan runs, draws how busy the drive is and how many files per second it is finding. Automatic needs 8 or more cores, 8 GB of memory and mains power."),
 
   // ---- Speed and memory ----
   num(70, "perf.prefetchDelayMs", "Speed and memory", "Pointer rest before preloading a folder", 0, 1000, "ms"),

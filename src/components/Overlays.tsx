@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useDragView } from "../dnd";
 import { api, type OpenApp, type OpenChoices } from "../api";
-import { promptText, useStore } from "../store";
+import { useStore } from "../store";
 import { baseName } from "../util/path";
+import { pickFile } from "../util/pickFile";
 import { DetailsPane } from "./DetailsPane";
 import { Icon } from "./Icons";
 
@@ -125,13 +126,20 @@ export function DragOverlay() {
  * "Select an app to open this .zip file": the default, suggested and other
  * programs, with Always (make it the default) and Just once.
  */
+/** Where programs usually live, so "Find a program" starts somewhere useful. */
+function programsFolder(os: string | undefined): string | undefined {
+  return os === "windows" ? "C:\\Program Files" : os === "macos" ? "/Applications" : "/usr/bin";
+}
+
 export function OpenWithDialog() {
   const request = useStore((s) => s.openWith);
   const [choices, setChoices] = useState<OpenChoices | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const info = useStore((st) => st.info);
   const path = request?.path;
+  const picking = useStore((st) => !!st.picker);
 
   useEffect(() => {
     setChoices(null);
@@ -147,7 +155,8 @@ export function OpenWithDialog() {
     return () => { alive = false; };
   }, [path]);
 
-  if (!request || !path) return null;
+  // While a program is being chosen in the file view, the dialog steps aside.
+  if (!request || !path || picking) return null;
   const close = () => useStore.getState().closeChooser();
   const name = baseName(path);
   const label = choices?.extension ? `${choices.extension} file` : "file";
@@ -165,17 +174,17 @@ export function OpenWithDialog() {
     }
   };
   const browse = async () => {
-    const typed = await promptText("Program to open it with", "");
-    if (typed?.trim()) {
-      setPicked(typed.trim());
+    const chosen = await pickFile("Choose the program to open it with", programsFolder(info?.os));
+    if (chosen) {
+      setPicked(chosen);
       setBusy(true);
-      try { await api.openWithApp(path, typed.trim(), false); close(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
+      try { await api.openWithApp(path, chosen, false); close(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
     }
   };
 
   const row = (a: OpenApp) => (
     <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(false)}>
-      {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon"><Icon name="newItem" size={18} /></span>}
+      {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon"><Icon name="newItem" size={22} /></span>}
       <span className="openwith-name">{a.name}</span>
     </button>
   );
@@ -189,7 +198,7 @@ export function OpenWithDialog() {
   return (
     <div className="modal-backdrop" onMouseDown={close}>
       <div className="dialog openwith-dialog" role="dialog" aria-modal="true" aria-label="Open with" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => (e.key === "Escape" && close(), e.stopPropagation())}>
-        <h3>Select an app to open this {label}</h3>
+        <h3>Choose an app to open this {label}</h3>
         <p className="openwith-why">
           <strong title={path}>{name}</strong>
           {request.reason ? ` — ${request.reason}` : ""}
@@ -207,7 +216,7 @@ export function OpenWithDialog() {
         </div>
         {error && <div className="openwith-error" role="alert">{error}</div>}
         <div className="openwith-footer">
-          <button className="secondary" onClick={() => void browse()} disabled={busy}>Choose a program by path…</button>
+          <button className="secondary" onClick={() => void browse()} disabled={busy}>Find a program…</button>
           <span className="grow" />
           <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>
           <button className="primary" disabled={!picked || busy} onClick={() => void run(false)}>Just once</button>

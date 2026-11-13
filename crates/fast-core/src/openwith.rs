@@ -45,6 +45,90 @@ pub enum Check {
     Missing(String),
 }
 
+/// Programs people usually open each kind of file with, best first. Names are
+/// matched against the installed programs' display names and program names
+/// (`code` matches "Code" and "Visual Studio Code" but not "Barcode Scanner").
+/// Extensions without ".".
+const LIKELY: &[(&[&str], &[&str])] = &[
+    (
+        &["png", "jpg", "jpeg", "jfif", "gif", "bmp", "webp", "tif", "tiff", "ico", "heic", "heif", "avif", "raw", "cr2", "nef", "dng"],
+        &["photos", "irfanview", "i_view64", "i_view32", "xnview", "xnviewmp", "paint.net", "paintdotnet", "mspaint", "gimp", "krita", "eog", "eye of gnome", "loupe", "gwenview", "ristretto", "shotwell", "nomacs", "geeqie", "feh", "imv", "preview", "photoshop", "affinity", "chrome", "firefox", "msedge", "edge"],
+    ),
+    (&["svg"], &["inkscape", "illustrator", "affinity", "gimp", "krita", "chrome", "firefox", "msedge", "edge"]),
+    (&["psd", "xcf", "kra"], &["photoshop", "gimp", "krita", "affinity", "paint.net"]),
+    (&["ai", "eps"], &["illustrator", "inkscape", "affinity"]),
+    (
+        &["mp4", "mkv", "avi", "mov", "wmv", "webm", "flv", "m4v", "mpg", "mpeg", "ts", "3gp", "ogv", "vob"],
+        &["vlc", "mpv", "mpc-hc", "mpc-be", "potplayer", "movies", "media player", "wmplayer", "totem", "celluloid", "haruna", "smplayer", "parole", "dragon", "quicktime", "iina", "kodi"],
+    ),
+    (
+        &["mp3", "wav", "flac", "ogg", "oga", "m4a", "aac", "wma", "opus", "aiff", "aif", "mid", "midi"],
+        &["vlc", "foobar2000", "musicbee", "aimp", "winamp", "groove", "rhythmbox", "audacious", "clementine", "strawberry", "elisa", "amarok", "lollypop", "itunes", "music", "mpv", "wmplayer", "media player"],
+    ),
+    (&["srt", "vtt", "ass", "sub"], &["code", "sublime", "notepad++", "notepad", "gedit", "kate", "text editor", "mousepad", "textedit"]),
+    (&["pdf"], &["acrobat", "acrord32", "sumatrapdf", "sumatra", "foxit", "foxitreader", "evince", "okular", "zathura", "atril", "xreader", "mupdf", "masterpdf", "chrome", "firefox", "msedge", "edge", "preview"]),
+    (&["epub", "mobi", "azw3", "djvu", "cbz", "cbr"], &["calibre", "ebook", "foliate", "okular", "sumatrapdf", "sumatra", "evince", "koreader"]),
+    (&["doc", "docx", "docm", "dot", "dotx", "odt", "rtf"], &["winword", "word", "libreoffice writer", "lowriter", "writer", "wps", "onlyoffice", "abiword", "wordpad", "textedit", "pages"]),
+    (&["xls", "xlsx", "xlsm", "xlsb", "ods", "csv", "tsv"], &["excel", "libreoffice calc", "localc", "calc", "wps", "onlyoffice", "gnumeric", "numbers"]),
+    (&["ppt", "pptx", "pptm", "pps", "ppsx", "odp"], &["powerpnt", "powerpoint", "libreoffice impress", "loimpress", "impress", "wps", "onlyoffice", "keynote"]),
+    (
+        &["txt", "md", "markdown", "log", "ini", "cfg", "conf", "config", "json", "jsonc", "xml", "yaml", "yml", "toml", "env", "gitignore", "properties", "sql", "sh", "bash", "bat", "cmd", "ps1", "py", "js", "mjs", "ts", "tsx", "jsx", "css", "scss", "html", "htm", "c", "h", "cpp", "hpp", "cs", "java", "kt", "go", "rs", "rb", "php", "swift", "lua", "pl", "r", "tex", "diff", "patch"],
+        &["code", "visual studio code", "vscodium", "sublime", "notepad++", "notepad", "gedit", "text editor", "kate", "kwrite", "mousepad", "xed", "pluma", "featherpad", "textedit", "atom", "geany", "wordpad"],
+    ),
+    (&["html", "htm", "xhtml", "mhtml", "url"], &["chrome", "firefox", "msedge", "edge", "brave", "chromium", "vivaldi", "opera", "safari", "epiphany", "falkon"]),
+    (
+        &["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "cab", "iso", "img"],
+        &["7zfm", "7-zip", "winrar", "peazip", "bandizip", "file-roller", "archive manager", "ark", "xarchiver", "engrampa", "keka", "unarchiver", "archive utility"],
+    ),
+    (&["ttf", "otf", "woff", "woff2", "ttc"], &["font viewer", "gnome-font-viewer", "font book", "fontforge", "fontview"]),
+    (&["torrent"], &["qbittorrent", "transmission", "deluge", "utorrent", "bittorrent", "ktorrent"]),
+    (&["stl", "obj", "3mf", "fbx", "blend", "gltf", "glb"], &["blender", "meshlab", "cura", "prusaslicer", "3d viewer", "freecad"]),
+    (&["sqlite", "sqlite3", "db"], &["db browser", "sqlitebrowser", "dbeaver", "datagrip", "tableplus"]),
+    (&["ics", "ical", "vcf"], &["outlook", "thunderbird", "evolution", "calendar", "contacts", "kontact"]),
+    (&["eml", "msg", "mbox"], &["outlook", "thunderbird", "evolution", "mail", "kmail", "claws"]),
+    (&["pem", "key", "pub", "ppk", "crt", "cer"], &["code", "notepad++", "notepad", "gedit", "kate", "text editor", "mousepad", "textedit"]),
+    (&["exe", "msi"], &[]),
+];
+
+/// Does a program called `name` (display name or program name) fit the wanted `keyword`?
+fn name_matches(name: &str, keyword: &str) -> bool {
+    let name = name.to_lowercase();
+    let name = name.trim_end_matches(".exe").trim_end_matches(".desktop");
+    if keyword.contains([' ', '-', '.', '+', '_']) {
+        return name.contains(keyword);
+    }
+    // One plain word: it has to be a whole word of the name ("code" in "Visual Studio Code"),
+    // or the start of a longer one when it is long enough to be specific ("libreoffice" in "libreoffice-writer").
+    name.split(|c: char| !c.is_alphanumeric() && c != '+').any(|w| w == keyword || (keyword.len() >= 5 && w.starts_with(keyword)))
+}
+
+/// The installed program that most likely suits this kind of file: the best
+/// match from the list of usual programs among `programs` (suggested ones
+/// first, since the system itself says those handle the file type), else the
+/// first program the system suggests for it. `None` leaves the choice to the person.
+pub fn likely_app(choices: &Choices) -> Option<App> {
+    let ext = choices.extension.trim_start_matches('.').to_lowercase();
+    if ext.is_empty() {
+        return None;
+    }
+    let wanted: Vec<&str> = LIKELY.iter().filter(|(exts, _)| exts.contains(&ext.as_str())).flat_map(|(_, names)| names.iter().copied()).collect();
+    let pools: [&[App]; 2] = [&choices.suggested, &choices.others];
+    for pool in pools {
+        for keyword in &wanted {
+            if let Some(app) = pool.iter().find(|a| name_matches(&a.name, keyword) || name_matches(&a.id.rsplit(['/', '\\']).next().unwrap_or(&a.id), keyword)) {
+                return Some(app.clone());
+            }
+        }
+        // Programs the system lists as made for this type are a good answer even if not in the table.
+        if std::ptr::eq(pool, &choices.suggested[..]) {
+            if let Some(first) = pool.first() {
+                return Some(first.clone());
+            }
+        }
+    }
+    None
+}
+
 pub fn extension_of(path: &Path) -> String {
     path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default()
 }
@@ -614,6 +698,43 @@ mod tests {
     fn extension_is_lowercase_with_dot() {
         assert_eq!(extension_of(Path::new("/x/Photo.JPG")), ".jpg");
         assert_eq!(extension_of(Path::new("/x/Makefile")), "");
+    }
+
+    fn app(id: &str, name: &str) -> App {
+        App { id: id.into(), name: name.into(), icon_url: None }
+    }
+
+    #[test]
+    fn picks_the_usual_program_for_a_file_type() {
+        let choices = Choices {
+            extension: ".png".into(),
+            default: None,
+            suggested: vec![],
+            others: vec![app("C:\\Tools\\7zFM.exe", "7zFM"), app("C:\\Adobe\\Acrobat.exe", "Acrobat"), app("C:\\g\\chrome.exe", "chrome"), app("C:\\x\\i_view64.exe", "i_view64")],
+        };
+        // An image viewer beats the browser, and archivers and PDF readers are not offered.
+        assert_eq!(likely_app(&choices).map(|a| a.name), Some("i_view64".into()));
+        let only_junk = Choices { extension: ".png".into(), default: None, suggested: vec![], others: vec![app("a", "7zFM"), app("b", "Acrobat")] };
+        assert_eq!(likely_app(&only_junk), None);
+    }
+
+    #[test]
+    fn keywords_match_whole_words() {
+        assert!(name_matches("Visual Studio Code", "code"));
+        assert!(name_matches("code.exe", "code"));
+        assert!(!name_matches("Barcode Scanner", "code"));
+        assert!(name_matches("libreoffice-writer", "libreoffice"));
+        assert!(name_matches("Notepad++", "notepad++"));
+        assert!(!name_matches("Notepad++", "notepad") || name_matches("Notepad", "notepad"));
+        assert!(name_matches("Eye of GNOME", "eye of gnome"));
+    }
+
+    #[test]
+    fn the_system_suggestion_is_used_when_the_table_has_no_opinion() {
+        let c = Choices { extension: ".weird".into(), default: None, suggested: vec![app("x.desktop", "Weird Viewer")], others: vec![app("y.desktop", "Other")] };
+        assert_eq!(likely_app(&c).map(|a| a.name), Some("Weird Viewer".into()));
+        let none = Choices { extension: "".into(), default: None, suggested: vec![app("x", "X")], others: vec![] };
+        assert_eq!(likely_app(&none), None);
     }
 
     #[test]

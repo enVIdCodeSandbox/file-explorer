@@ -124,6 +124,8 @@ Type in the search box. Results come from an index that is built in the backgrou
 
 Right-click a folder or drive → Analyze disk usage. Folders are drawn as frames containing their contents; colors are file types. Click to zoom, hover for sizes. The list beside it shows the largest files, which can be deleted from there.
 
+On a computer with power to spare (8 or more cores, 8 GB of memory, on mains power), the banner shown during a scan also draws two small graphs: how busy the drive is (bytes per second, against the busiest it has been during this scan) and how many files per second are being found, with the pace expected for that kind of drive. When the whole drive is being scanned it also estimates how many items there are in all and how long is left. This is an estimate from used space and the average size of what has been found so far, so it can jump around early on. Turn it on or off in Settings > Advanced > *Live drive activity in Disk usage* (Automatic, Always, Never).
+
 ## Servers (FTP, SFTP, WebDAV)
 
 Click **Connect to server…** at the bottom of the sidebar. Choose SFTP (SSH), FTP or WebDAV, type the server, your user name and password, and optionally a folder to start in. The server opens as a folder you can browse in a tab.
@@ -132,7 +134,7 @@ Click **Connect to server…** at the bottom of the sidebar. Choose SFTP (SSH), 
 * **Opening a file** downloads it to a temporary place and opens it with your usual program. Changes you make there are not sent back; copy the file to the server again.
 * **Deleting from a server cannot be undone** (servers have no Recycle Bin), so you are always asked first. Undo and Redo do not cover servers.
 * **Passwords are never saved.** "Keep this address in the sidebar" saves only the server, user name and folder; you type the password once per session. Each address also keeps its own login in memory, so several tabs share one.
-* **SFTP asks you to trust a server the first time.** The dialog shows the server's fingerprint; compare it with the one your server's owner gave you. If the key later changes, the app warns you and does not connect until you confirm. You can also log in with a private key file (the password box then holds its passphrase).
+* **SFTP asks you to trust a server the first time.** The dialog shows the server's fingerprint; compare it with the one your server's owner gave you. If the key later changes, the app warns you and does not connect until you confirm. You can also log in with a private key file (the password box then holds its passphrase). Next to *Private key file*, **Browse…** hides the form, shows your files in the window (starting in `~/.ssh` when it exists) and asks you to open or select the key and press Choose, or to type its full path; the form comes back with the path filled in. The same picker is used wherever the app asks for a local file.
 * **FTP and plain-HTTP WebDAV are not encrypted**: the dialog warns you. Prefer SFTP, or WebDAV with HTTPS.
 * Not available on server folders: thumbnails, folder sizes, checksums, "Compress", "Share", terminal, disk usage, Properties, new empty files. WebDAV needs a server that allows PROPFIND, MKCOL and MOVE (Nextcloud, ownCloud, Synology, Apache and nginx with DAV do).
 
@@ -154,21 +156,31 @@ The app follows the system language when it is one of English, Spanish, French, 
 
 ## Presets and profiles
 
-* **Interface style** (Settings > Presets and profiles) sets the window layout, colors, icons, corner shapes, the side of the window buttons and the keyboard shortcuts to match Windows 11 File Explorer, macOS Finder or a GNOME/KDE file manager. Colors and icons are open-source (Fluent System Icons, MIT); no Windows or Apple files are used.
+* **Interface style** (Settings > Presets and profiles) rearranges the window the way that system's file manager is arranged, using the same parts: for macOS a Finder-style toolbar with the window buttons, back and forward, the folder name, view, sort and share buttons and search along the top, a Favorites and Locations sidebar, no tab strip until there are two tabs, and a path bar at the bottom; for Linux a header bar with joined back and forward buttons, a pill-shaped path bar, view and menu buttons and search, and a Places sidebar. It also sets the layout, colors, icons, corner shapes, the side of the window buttons and the keyboard shortcuts to match Windows 11 File Explorer, macOS Finder or a GNOME/KDE file manager. Colors and icons are open-source (Fluent System Icons, MIT); no Windows or Apple files are used.
 * **Performance presets**, from Barebones to God-like, set threads, cache size, indexing, thumbnails, folder sizes and what is saved. Each one lists the kind of device it suits, and the one recommended for this computer is marked.
 * **Profiles** are saved copies of all your settings, as many as you like. While one is in use, your changes are saved into it automatically.
 
 ## What the app uses
 
-Settings > Performance > *What the app is using* shows live processor, memory and disk use, and what is kept for later (caches on disk, caches in memory). *Give back memory now*, *Clear caches that rebuild themselves* and *Smallest footprint* shrink what the app keeps. They do not compress your files. Settings > Storage lists each cache with its own Clear button and an on/off switch (thumbnails, folder sizes, disk-usage results, folder learning, hardware details, search history).
+Settings > Performance > *What the app is using* shows live processor, memory and disk use, and what is kept for later (caches on disk, caches in memory). *Give back memory now*, *Clear caches that rebuild themselves* and *Smallest footprint* shrink what the app keeps. They do not compress your files. Settings > Storage lists each cache with its own Clear button and an on/off switch (thumbnails, folder sizes, disk-usage results, folder learning, hardware details, search history). Below the table, **Folders and drives** clears what is saved about one folder or drive, and can switch saving off for it: pick a drive, choose a folder, or type a path, then *Clear what is saved here* or *Stop saving for this place*. A folder covers everything inside it. Nothing is then kept about those places (listings, folder sizes, thumbnails, disk-usage results, folder learning, search entries), and what was kept is cleared at once. Search still works there, but reads the folder each time. *Save again* removes the rule.
+
+Each performance level also sets a **processor limit** and a **memory limit** (Settings > Performance), as a share of all cores and of installed memory. The processor limit caps how many worker threads run at once, and the memory limit caps the caches. Both can be changed by hand, and 0 means no limit. God-like sets no limit at all. These are caps on the app's threads and caches, not a hard limit on processor time: a single thread can still use a full core.
 
 ## Locking folders and drives
 
 Right-click a folder or a drive and choose **Lock with passcode…** (the last item). A locked folder cannot be opened, listed, searched, previewed, copied from or deleted inside this app until the passcode is entered; it relocks after the time set in Advanced. Locks are managed under Settings > Privacy and locks, and removing one needs the main password. **This is a privacy screen, not encryption:** other programs and other file managers can still read the files. Use disk or file encryption for that.
 
+## Thumbnails
+
+In the larger icon views (Medium, Large, Extra large) files show a preview of their contents: pictures, the first page of PDFs and Office documents, and a frame from videos. Details, List and Small icons keep the plain icon, and the details pane always shows a preview of the selected file. All of that is in Settings > Thumbnails: each kind of file, each view, sharpness, how many are made at once, network drives (off by default), the largest picture to preview and which frame of a video to show. Windows uses the same preview handlers as Explorer and macOS uses Quick Look. On Linux, PDFs need `pdftoppm` (poppler-utils) and videos need `ffmpegthumbnailer` or `ffmpeg`; without them those files keep their icons. Office documents are previewed only on Windows and macOS. Documents and videos are switched on from the Average and Decent performance levels upward, because they cost more to make.
+
+## Terminal
+
+Settings > Terminal chooses the terminal (on Windows Command Prompt, PowerShell, PowerShell 7, Windows Terminal, WSL or Git Bash), the Windows Terminal profile, a command to run when it opens (for example `git status`), whether to open a tab in the window that is already open, which folder the Open terminal button uses (the one being viewed or your home folder), whether a single selected folder is used, the shell to run on Linux and macOS, and a custom command with `{path}` for the folder. A custom command replaces the other choices. The startup command is not used for administrator terminals. On macOS the startup command works with Terminal and iTerm only.
+
 ## Opening files with no app
 
-If a file type has no program, the app shows a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
+If a file type has no program, the app first picks the most likely installed app for the file type (an image viewer for a picture, a media player for a video, and so on for the common types). Only when none is found does it show a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
 
 ## Settings
 

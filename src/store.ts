@@ -106,6 +106,14 @@ export interface DialogRequest {
 }
 
 /** Asks for the Connect to server dialog, optionally with fields filled in. */
+/** A request to choose a local file, answered with its path or null when cancelled. */
+export interface PickRequest {
+  title: string;
+  /** A file (default) or a folder. */
+  kind?: "file" | "folder";
+  done: (path: string | null) => void;
+}
+
 export interface ConnectRequest {
   /** A server address to log in to (the saved login was lost, say). */
   url?: string;
@@ -169,6 +177,8 @@ interface State {
   servers: SavedServer[];
   /** The "Connect to server" dialog, with what to fill in. */
   connect: ConnectRequest | null;
+  /** While set, the window is choosing a file for a form (see util/pickFile.ts): opening a file picks it. */
+  picker: PickRequest | null;
   openConnect: (request?: ConnectRequest) => void;
   closeConnect: () => void;
   setServers: (servers: SavedServer[]) => void;
@@ -339,6 +349,7 @@ export const useStore = create<State>((set, get) => ({
   batchRename: null,
   servers: [],
   connect: null,
+  picker: null,
   openConnect: (request = {}) => set({ connect: request }),
   closeConnect: () => set({ connect: null }),
   setServers: (servers) => set({ servers }),
@@ -1090,9 +1101,14 @@ export async function retryTransferAsAdmin(spec: TransferSpec): Promise<void> {
  * the system's (Windows), or just a message.
  */
 export async function openFile(path: string): Promise<void> {
+  // Choosing a file for a form: opening it picks it instead.
+  const picking = useStore.getState().picker;
+  if (picking) return picking.done(path);
   const { showToast, chooseApp } = useStore.getState();
   try {
-    await api.openItem(path);
+    const used = await api.openItem(path);
+    if (used) showToast(`No app was set for this file, so it was opened with ${used}. Right-click and choose Open with to pick another.`);
+    return;
   } catch (e) {
     const text = String(e);
     if (!text.startsWith("no-handler:")) return showToast(text);

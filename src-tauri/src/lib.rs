@@ -218,6 +218,7 @@ pub fn run() {
             commands::compact_memory,
             commands::disk_smart_admin,
             commands::clear_cache,
+            commands::clear_cache_for,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FAST File Explorer")

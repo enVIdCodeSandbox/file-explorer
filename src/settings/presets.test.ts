@@ -13,6 +13,7 @@ import {
   newProfile,
   platformFor,
   recommendPerf,
+  capsText,
   snapshotOf,
 } from "./presets";
 import { THEMES } from "../util/themes";
@@ -22,7 +23,7 @@ const blank = (): Settings =>
   ({
     general: { showHidden: false },
     appearance: { theme: "dark", accent: "#4cc2ff", density: "compact", hideNetworkAddress: true, layout: {}, style: { icons: "outline", radius: 8, menu: "glass", folderColor: "classic", font: "system" }, showDetailsPane: true },
-    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true },
+    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, maxCpuPercent: 0, maxMemoryPercent: 0, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true },
     transfer: {},
     search: {},
     contextMenu: { hidden: [] },
@@ -55,10 +56,26 @@ describe("performance presets", () => {
     }
   });
   it("grows the cache and thread limit step by step", () => {
-    const caches = PERF_PRESETS.map((p) => p.patch["performance.maxCacheMb"] as number);
+    const caches = PERF_PRESETS.slice(0, -1).map((p) => p.patch["performance.maxCacheMb"] as number);
     expect([...caches].sort((a, b) => a - b)).toEqual(caches);
     const threads = PERF_PRESETS.slice(0, -1).map((p) => p.patch["performance.maxThreads"] as number);
     expect([...threads].sort((a, b) => a - b)).toEqual(threads);
+  });
+  it("caps what each step may use, growing step by step, and God-like has no cap", () => {
+    const capped = PERF_PRESETS.slice(0, -1);
+    for (const key of ["performance.maxCpuPercent", "performance.maxMemoryPercent"]) {
+      const v = capped.map((p) => p.patch[key] as number);
+      expect(v.every((x) => x > 0 && x <= 100), key).toBe(true);
+      expect([...v].sort((a, b) => a - b), key).toEqual(v);
+    }
+    const god = PERF_PRESETS[PERF_PRESETS.length - 1];
+    expect(god.id).toBe("godlike");
+    expect(god.patch["performance.maxCpuPercent"]).toBe(0);
+    expect(god.patch["performance.maxMemoryPercent"]).toBe(0);
+    expect(god.patch["performance.maxCacheMb"]).toBe(0);
+    expect(god.patch["performance.maxThreads"]).toBe(0);
+    expect(capsText(god)).toMatch(/No cap/);
+    expect(capsText(PERF_PRESETS[4])).toMatch(/50%.*10%/);
   });
   it("recommends by memory and cores, and a step lower for laptops", () => {
     expect(recommendPerf(1024, 1, false).id).toBe("barebones");

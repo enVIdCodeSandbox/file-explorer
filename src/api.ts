@@ -30,6 +30,17 @@ export interface DriveName {
   hideAddress: boolean | null;
 }
 
+/** What forgetting one folder or drive removed. */
+export interface ForgetReport {
+  listings: number;
+  sizes: number;
+  thumbnails: number;
+  snapshots: number;
+  predictions: number;
+  indexEntries: number;
+  bytes: number;
+}
+
 export interface Drive {
   name: string;
   mount: string;
@@ -164,6 +175,8 @@ export interface AnalysisProgress {
   entries: number;
   bytes: number;
   elapsedSecs: number;
+  /** How busy the drive is; absent when the live graph is off. */
+  activity?: { readBps: number; writeBps: number } | null;
 }
 
 export type TransferOp = "copy" | "move";
@@ -409,6 +422,8 @@ export interface Settings {
     priority: "dynamic" | "manual";
     maxThreads: number;
     maxCacheMb: number;
+    maxCpuPercent: number;
+    maxMemoryPercent: number;
     backgroundIndexing: boolean;
     indexDrives: boolean;
     lazyLoading: boolean;
@@ -431,7 +446,18 @@ export interface Settings {
   };
   search: { limit: number; includeHidden: boolean; scopeToCurrentFolder: boolean };
   contextMenu: { hidden: string[] };
-  terminal: { windowsShell: string; linuxTerminal: string; macTerminal: string };
+  terminal: {
+    windowsShell: string;
+    linuxTerminal: string;
+    macTerminal: string;
+    startupCommand: string;
+    customCommand: string;
+    windowsProfile: string;
+    shellProgram: string;
+    newTab: boolean;
+    useSelectedFolder: boolean;
+    defaultFolder: string;
+  };
   /** Only options that differ from their defaults (see settings/advanced.ts). */
   advanced: Record<string, unknown>;
   /** Shortcuts that differ from the defaults, by command id. */
@@ -610,7 +636,8 @@ export const api = {
   renameItem: (path: string, newName: string) => invoke<string>("rename_item", { path, newName }),
   createItem: (dir: string, name: string, folder: boolean) =>
     invoke<string>("create_item", { dir, name, folder }),
-  openItem: (path: string) => invoke<void>("open_item", { path }),
+  /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */
+  openItem: (path: string) => invoke<string | null>("open_item", { path }),
   openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
   openWithApp: (path: string, app: string, always: boolean) => invoke<void>("open_with_app", { path, app, always }),
   openSystemChooser: (path: string) => invoke<void>("open_system_chooser", { path }),
@@ -655,6 +682,7 @@ export const api = {
   folderSizesStart: (dir: string, names: string[], refresh: boolean, policy: SizePolicy) => invoke<void>("folder_sizes_start", { dir, names, refresh, policy }),
   cacheUsage: () => invoke<CacheEntry[]>("cache_usage"),
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
+  clearCacheFor: (path: string) => invoke<ForgetReport>("clear_cache_for", { path }),
 };
 
 /** How remembered folder sizes are used. */

@@ -134,18 +134,181 @@ fn spawn(mut cmd: Command, what: &str) -> Result<()> {
     cmd.spawn().map(|_| ()).map_err(|e| CoreError::Invalid(format!("could not start {what}: {e}")))
 }
 
-/// Open a terminal. `shell` is the user's choice from settings; empty means
-/// the platform default.
+/// How to open a terminal (Settings > Terminal). Every field may be empty.
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct TerminalOptions {
+    /// Windows: "cmd", "powershell", "pwsh", "wt", "wsl" or "gitbash". Linux: the terminal program. macOS: the app.
+    pub shell: String,
+    /// A command to run as soon as the terminal opens; the terminal stays open afterwards.
+    pub startup: String,
+    /// Replaces everything: the command to run, with `{path}` standing for the folder.
+    pub custom: String,
+    /// Windows Terminal: the profile to open (by name).
+    pub profile: String,
+    /// Linux and macOS: the shell to run inside the terminal (bash, zsh, fish or a full path).
+    pub login_shell: String,
+    /// Windows Terminal, GNOME Terminal, Ptyxis and Konsole: open a tab in the existing window.
+    pub new_tab: bool,
+}
+
+/// Split a command line into words, honoring single and double quotes, and
+/// put `dir` where `{path}` appears (after splitting, so a path with spaces
+/// stays one word).
+pub fn command_words(template: &str, dir: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let (mut cur, mut quote, mut started) = (String::new(), None::<char>, false);
+    for ch in template.chars() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(ch);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started || !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    if started || !cur.is_empty() {
+        words.push(cur);
+    }
+    words.into_iter().map(|w| w.replace("{path}", dir)).collect()
+}
+
+/// What `sh -c` runs on Linux and macOS: the startup command, then a shell that keeps the window open.
+pub fn unix_script(startup: &str, shell: &str) -> String {
+    let shell = if shell.trim().is_empty() { "\"${SHELL:-sh}\"".to_string() } else { format!("'{}'", shell.replace('\'', r"'\''")) };
+    if startup.trim().is_empty() {
+        format!("exec {shell}")
+    } else {
+        format!("{startup}\nexec {shell}")
+    }
+}
+
+/// The program and arguments that open a terminal on Windows (not administrator).
+pub fn windows_plan(dir: &str, o: &TerminalOptions) -> (String, Vec<String>) {
+    let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let start = |exe: &str, tail: Vec<String>| {
+        let mut a = v(&["/C", "start", "", "/D", dir, exe]);
+        a.extend(tail);
+        ("cmd.exe".to_string(), a)
+    };
+    let ps_tail = |startup: &str| if startup.trim().is_empty() { v(&["-NoExit"]) } else { vec!["-NoExit".into(), "-Command".into(), startup.to_string()] };
+    match o.shell.as_str() {
+        "powershell" => start("powershell.exe", ps_tail(&o.startup)),
+        "pwsh" => start("pwsh.exe", ps_tail(&o.startup)),
+        "wt" => {
+            let mut a = Vec::new();
+            if o.new_tab {
+                a.extend(v(&["-w", "0", "new-tab"]));
+            }
+            if !o.profile.trim().is_empty() {
+                a.extend(v(&["-p"]));
+                a.push(o.profile.trim().to_string());
+            }
+            a.extend(v(&["-d", dir]));
+            if !o.startup.trim().is_empty() {
+                a.push("powershell.exe".into());
+                a.extend(ps_tail(&o.startup));
+            }
+            ("wt.exe".to_string(), a)
+        }
+        "wsl" => {
+            let mut tail = v(&["--cd", dir]);
+            if !o.startup.trim().is_empty() {
+                tail.extend(["--".into(), "bash".into(), "-lc".into(), unix_script(&o.startup, "bash")]);
+            }
+            start("wsl.exe", tail)
+        }
+        "gitbash" => {
+            let exe = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
+                .iter()
+                .filter_map(|k| std::env::var(k).ok())
+                .flat_map(|base| [format!("{base}\\Git\\git-bash.exe"), format!("{base}\\Programs\\Git\\git-bash.exe")])
+                .find(|p| Path::new(p).is_file())
+                .unwrap_or_else(|| "git-bash.exe".to_string());
+            start(&exe, vec![format!("--cd={dir}")])
+        }
+        _ => {
+            let tail = if o.startup.trim().is_empty() { Vec::new() } else { vec!["/K".into(), o.startup.clone()] };
+            start("cmd.exe", tail)
+        }
+    }
+}
+
+/// Arguments after the program name for a Linux terminal.
+/// `wd_flag` and `exec_flag` are what the program uses for "start in this
+/// folder" and "run this command" (either may be empty).
+pub fn unix_terminal_args(prog: &str, wd_flag: &str, exec_flag: &str, dir: &str, o: &TerminalOptions, admin: bool) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    if !wd_flag.is_empty() {
+        a.push(wd_flag.into());
+        a.push(dir.into());
+    }
+    if o.new_tab {
+        match prog {
+            "gnome-terminal" | "ptyxis" => a.push("--tab".into()),
+            "konsole" => a.push("--new-tab".into()),
+            _ => {}
+        }
+    }
+    let command: Option<Vec<String>> = if admin {
+        Some(vec!["sudo".into(), "-s".into()])
+    } else if !o.startup.trim().is_empty() || !o.login_shell.trim().is_empty() {
+        Some(vec!["sh".into(), "-c".into(), unix_script(&o.startup, &o.login_shell)])
+    } else {
+        None
+    };
+    if let Some(c) = command {
+        if !exec_flag.is_empty() {
+            a.push(exec_flag.into());
+        }
+        a.extend(c);
+    }
+    a
+}
+
+/// The shell line the macOS terminals are given.
+pub fn mac_line(dir: &str, startup: &str, shell: &str) -> String {
+    let q = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
+    let mut line = format!("cd {}", q(dir));
+    if !startup.trim().is_empty() {
+        line.push_str(&format!(" && {startup}"));
+    }
+    if !shell.trim().is_empty() {
+        line.push_str(&format!(" && exec {}", q(shell)));
+    }
+    line
+}
+
+/// Run the user's own command (Settings > Terminal > Custom command).
+#[allow(dead_code)]
+fn open_custom(dir: &Path, custom: &str) -> Result<()> {
+    let words = command_words(custom, &dir.to_string_lossy());
+    let Some((prog, rest)) = words.split_first() else { return Err(CoreError::Invalid("the custom terminal command is empty".into())) };
+    let mut cmd = Command::new(prog);
+    cmd.args(rest).current_dir(dir);
+    spawn(cmd, "the custom terminal command")
+}
+
+/// Open a terminal. `o` holds the person's choices from settings; empty
+/// fields mean the platform default.
 #[cfg(windows)]
-pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()> {
+pub fn open_terminal(path: &Path, mode: TerminalMode, o: &TerminalOptions) -> Result<()> {
     let dir = resolve_terminal_dir(path, mode);
     let dir_s = dir.to_string_lossy().into_owned();
+    let shell = o.shell.as_str();
     let ps_quote = |s: &str| format!("'{}'", s.replace('\'', "''"));
     if mode == TerminalMode::Admin {
         // Start-Process -Verb RunAs raises the standard UAC prompt.
         let (exe, args) = match shell {
-            "powershell" => (
-                "powershell.exe",
+            "powershell" | "pwsh" => (
+                if shell == "pwsh" { "pwsh.exe" } else { "powershell.exe" },
                 format!("'-NoExit','-Command',{}", ps_quote(&format!("Set-Location -LiteralPath {}", ps_quote(&dir_s)))),
             ),
             "wt" => ("wt.exe", format!("'-d',{}", ps_quote(&dir_s))),
@@ -156,31 +319,20 @@ pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()>
             .arg(format!("Start-Process {exe} -Verb RunAs -ArgumentList {args}"));
         return spawn(cmd, "an elevated terminal");
     }
-    let mut cmd = match shell {
-        "powershell" => {
-            let mut c = Command::new("cmd.exe");
-            c.args(["/C", "start", "", "/D"]).arg(&dir).arg("powershell.exe");
-            c
-        }
-        "wt" => {
-            let mut c = Command::new("wt.exe");
-            c.arg("-d").arg(&dir);
-            c
-        }
-        _ => {
-            let mut c = Command::new("cmd.exe");
-            c.args(["/C", "start", "", "/D"]).arg(&dir).arg("cmd.exe");
-            c
-        }
-    };
-    cmd.current_dir(&dir);
+    if !o.custom.trim().is_empty() {
+        return open_custom(&dir, &o.custom);
+    }
+    let (prog, args) = windows_plan(&dir_s, o);
+    let mut cmd = Command::new(prog);
+    cmd.args(args).current_dir(&dir);
     spawn(cmd, "a terminal")
 }
 
 #[cfg(target_os = "macos")]
-pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()> {
+pub fn open_terminal(path: &Path, mode: TerminalMode, o: &TerminalOptions) -> Result<()> {
     let dir = resolve_terminal_dir(path, mode);
-    let app = if shell.is_empty() { "Terminal" } else { shell };
+    let dir_s = dir.to_string_lossy().into_owned();
+    let app = if o.shell.is_empty() { "Terminal" } else { o.shell.as_str() };
     if mode == TerminalMode::Admin {
         // AppleScript string escaping, then shell single-quote escaping.
         let sh_dir = dir.to_string_lossy().replace('\'', r"'\''");
@@ -192,14 +344,35 @@ pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()>
             .arg("tell application \"Terminal\" to activate");
         return spawn(cmd, "an elevated terminal");
     }
+    if !o.custom.trim().is_empty() {
+        return open_custom(&dir, &o.custom);
+    }
+    let wants_line = !o.startup.trim().is_empty() || !o.login_shell.trim().is_empty();
+    if wants_line && (app == "Terminal" || app.starts_with("iTerm")) {
+        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+        let line = esc(&mac_line(&dir_s, &o.startup, &o.login_shell));
+        let mut cmd = Command::new("osascript");
+        if app == "Terminal" {
+            cmd.arg("-e").arg(format!("tell application \"Terminal\" to do script \"{line}\"")).arg("-e").arg("tell application \"Terminal\" to activate");
+        } else {
+            cmd.args(["-e", "tell application \"iTerm\"", "-e", "activate", "-e", "set w to (create window with default profile)", "-e"])
+                .arg(format!("tell current session of w to write text \"{line}\""))
+                .args(["-e", "end tell"]);
+        }
+        return spawn(cmd, "a terminal");
+    }
     let mut cmd = Command::new("open");
     cmd.arg("-a").arg(app).arg(&dir);
     spawn(cmd, "a terminal")
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
-pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()> {
+pub fn open_terminal(path: &Path, mode: TerminalMode, o: &TerminalOptions) -> Result<()> {
     let dir = resolve_terminal_dir(path, mode);
+    if mode != TerminalMode::Admin && !o.custom.trim().is_empty() {
+        return open_custom(&dir, &o.custom);
+    }
+    let dir_s = dir.to_string_lossy().into_owned();
     // (program, working-directory flag, flag that precedes a command to run)
     const TERMINALS: &[(&str, &str, &str)] = &[
         ("x-terminal-emulator", "", "-e"),
@@ -216,7 +389,7 @@ pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()>
         ("xterm", "", "-e"),
     ];
     let env_term = std::env::var("TERMINAL").unwrap_or_default();
-    let preferred = [shell, env_term.as_str()];
+    let preferred = [o.shell.as_str(), env_term.as_str()];
     let candidates = preferred
         .iter()
         .filter(|s| !s.is_empty())
@@ -228,15 +401,7 @@ pub fn open_terminal(path: &Path, mode: TerminalMode, shell: &str) -> Result<()>
     for (prog, wd_flag, exec_flag) in candidates {
         let mut cmd = Command::new(prog);
         cmd.current_dir(&dir);
-        if !wd_flag.is_empty() {
-            cmd.arg(wd_flag).arg(&dir);
-        }
-        if mode == TerminalMode::Admin {
-            if !exec_flag.is_empty() {
-                cmd.arg(exec_flag);
-            }
-            cmd.args(["sudo", "-s"]);
-        }
+        cmd.args(unix_terminal_args(prog, wd_flag, exec_flag, &dir_s, o, mode == TerminalMode::Admin));
         if cmd.spawn().is_ok() {
             return Ok(());
         }
@@ -472,7 +637,7 @@ pub fn trash(_paths: &[std::path::PathBuf]) -> Result<()> {
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn open_terminal(path: &Path, mode: TerminalMode, _shell: &str) -> Result<()> {
+pub fn open_terminal(path: &Path, mode: TerminalMode, _o: &TerminalOptions) -> Result<()> {
     let _ = (resolve_terminal_dir(path, mode), spawn as fn(Command, &str) -> Result<()>);
     Err(CoreError::Unsupported("terminal"))
 }
@@ -489,6 +654,62 @@ pub fn show_properties(_paths: &[std::path::PathBuf]) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use super::TerminalOptions;
+    fn opts() -> TerminalOptions {
+        TerminalOptions::default()
+    }
+
+    #[test]
+    fn command_words_honor_quotes_and_fill_in_the_path() {
+        let w = super::command_words(r#"alacritty --working-directory {path} -e "my shell" --flag='a b'"#, "/home/me/My Files");
+        assert_eq!(w, ["alacritty", "--working-directory", "/home/me/My Files", "-e", "my shell", "--flag=a b"]);
+        assert_eq!(super::command_words("  ", "/x"), Vec::<String>::new());
+        assert_eq!(super::command_words("run ''", "/x"), ["run", ""]);
+    }
+
+    #[test]
+    fn unix_script_runs_the_startup_then_keeps_a_shell_open() {
+        assert_eq!(super::unix_script("", ""), "exec \"${SHELL:-sh}\"");
+        assert_eq!(super::unix_script("git status", "zsh"), "git status\nexec 'zsh'");
+        assert_eq!(super::unix_script("", "/opt/it's/fish"), "exec '/opt/it'\\''s/fish'");
+    }
+
+    #[test]
+    fn linux_terminal_arguments() {
+        let plain = super::unix_terminal_args("gnome-terminal", "--working-directory", "--", "/d", &opts(), false);
+        assert_eq!(plain, ["--working-directory", "/d"], "nothing extra when nothing is set");
+        let o = TerminalOptions { startup: "ls".into(), new_tab: true, ..opts() };
+        let a = super::unix_terminal_args("gnome-terminal", "--working-directory", "--", "/d", &o, false);
+        assert_eq!(a, ["--working-directory", "/d", "--tab", "--", "sh", "-c", "ls\nexec \"${SHELL:-sh}\""]);
+        // A terminal without a command flag takes the command directly.
+        let a = super::unix_terminal_args("kitty", "--directory", "", "/d", &o, false);
+        assert_eq!(a[..3], ["--directory", "/d", "sh"]);
+        let admin = super::unix_terminal_args("xterm", "", "-e", "/d", &o, true);
+        assert_eq!(admin, ["-e", "sudo", "-s"], "an administrator terminal ignores the startup command");
+    }
+
+    #[test]
+    fn windows_terminal_plans() {
+        let (p, a) = super::windows_plan(r"C:\Work", &opts());
+        assert_eq!((p.as_str(), a.join(" ")), ("cmd.exe", r"/C start  /D C:\Work cmd.exe".to_string()));
+        let o = TerminalOptions { shell: "cmd".into(), startup: "dir".into(), ..opts() };
+        assert!(super::windows_plan("C:\\W", &o).1.ends_with(&["/K".to_string(), "dir".to_string()]));
+        let o = TerminalOptions { shell: "pwsh".into(), startup: "git status".into(), ..opts() };
+        let (p, a) = super::windows_plan("C:\\W", &o);
+        assert_eq!(p, "cmd.exe");
+        assert!(a.contains(&"pwsh.exe".to_string()) && a.ends_with(&["-NoExit".to_string(), "-Command".to_string(), "git status".to_string()]));
+        let o = TerminalOptions { shell: "wt".into(), profile: "Ubuntu".into(), new_tab: true, ..opts() };
+        let (p, a) = super::windows_plan("C:\\W", &o);
+        assert_eq!((p.as_str(), a.join(" ")), ("wt.exe", "-w 0 new-tab -p Ubuntu -d C:\\W".to_string()));
+        let o = TerminalOptions { shell: "wsl".into(), ..opts() };
+        assert!(super::windows_plan("C:\\W", &o).1.ends_with(&["wsl.exe".to_string(), "--cd".to_string(), "C:\\W".to_string()]));
+    }
+
+    #[test]
+    fn macos_line() {
+        assert_eq!(super::mac_line("/a b", "", ""), "cd '/a b'");
+        assert_eq!(super::mac_line("/a", "make", "zsh"), "cd '/a' && make && exec 'zsh'");
+    }
     use super::*;
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

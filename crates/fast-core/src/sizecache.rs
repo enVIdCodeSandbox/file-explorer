@@ -69,6 +69,18 @@ impl SizeCache {
         self.map.keys().map(|k| k.len() + 64).sum()
     }
 
+    /// Forget everything remembered for `root` and the folders below it; how many entries went.
+    pub fn remove_under(&mut self, root: &Path) -> usize {
+        let rule = root.to_string_lossy().into_owned();
+        let before = self.map.len();
+        self.map.retain(|k, _| !crate::cachepolicy::is_under(Path::new(k), &rule));
+        let gone = before - self.map.len();
+        if gone > 0 {
+            self.dirty = true;
+        }
+        gone
+    }
+
     pub fn clear(&mut self) {
         if !self.map.is_empty() {
             self.dirty = true;
@@ -108,6 +120,18 @@ impl SizeCache {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn forgets_one_location_only() {
+        let mut c = super::SizeCache::default();
+        for p in ["/d/a", "/d/a/b", "/d/ab", "/e/x"] {
+            c.put(std::path::Path::new(p), 1, 1, 1);
+        }
+        assert_eq!(c.remove_under(std::path::Path::new("/d/a")), 2);
+        assert!(c.get(std::path::Path::new("/d/ab")).is_some(), "a sibling stays");
+        assert!(c.get(std::path::Path::new("/e/x")).is_some());
+        assert_eq!(c.len(), 2);
+    }
+
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {

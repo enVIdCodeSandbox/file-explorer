@@ -66,6 +66,20 @@ impl Predictor {
         }
     }
 
+    /// Forget every folder under `root` (visits and transitions in or out of it); how many were visited folders.
+    pub fn remove_under(&mut self, root: &std::path::Path) -> usize {
+        let rule = root.to_string_lossy().into_owned();
+        let inside = |k: &str| crate::cachepolicy::is_under(std::path::Path::new(k), &rule);
+        let before = self.visits.len();
+        self.visits.retain(|k, _| !inside(k));
+        self.transitions.retain(|k, _| !inside(k));
+        for row in self.transitions.values_mut() {
+            row.retain(|k, _| !inside(k));
+        }
+        self.transitions.retain(|_, row| !row.is_empty());
+        before - self.visits.len()
+    }
+
     /// The `n` folders most likely to be opened next from `dir`.
     pub fn predict(&self, dir: &str, n: usize, now: i64) -> Vec<String> {
         let mut scored: HashMap<&str, f64> = HashMap::new();

@@ -5,6 +5,7 @@ import { api, type ResourceUsage } from "../api";
 import { adv } from "../settings/advanced";
 import {
   PERF_PRESETS,
+  capsText,
   UI_PRESETS,
   applyPatch,
   applyProfile,
@@ -63,6 +64,9 @@ export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?:
               {(!compact || roomy) && <span className="muted">{p.description}</span>}
               <span className="preset-for">
                 <b>Suits:</b> {p.recommendedFor}
+              </span>
+              <span className="preset-for">
+                <b>Limit:</b> {capsText(p)}
               </span>
               {!compact && !roomy && (
                 <button className="link-button" aria-expanded={open === p.id} onClick={(e) => { e.stopPropagation(); setOpen(open === p.id ? null : p.id); }}>

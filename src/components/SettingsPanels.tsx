@@ -3,10 +3,12 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { api, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
+import { api, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
 import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
+import { pickFolder } from "../util/pickFile";
+import { RULES_KEY, cacheRules } from "../util/cacheRules";
 import { DOCK_LABEL, PANELS, PRESETS, moveTo, nudge, panelsAt, type Dock } from "../util/layout";
 import { THEMES } from "../util/themes";
 import { FONTS } from "../useAppearance";
@@ -364,8 +366,128 @@ export function StoragePanel() {
           Refresh sizes
         </button>
       </div>
+      <CacheLocations onChanged={reload} />
     </div>
   );
+}
+
+function describeForget(r: ForgetReport): string {
+  const parts: string[] = [];
+  const add = (n: number, one: string, many: string) => n > 0 && parts.push(`${formatCount(n)} ${n === 1 ? one : many}`);
+  add(r.listings, "folder listing", "folder listings");
+  add(r.sizes, "folder size", "folder sizes");
+  add(r.thumbnails, "thumbnail", "thumbnails");
+  add(r.snapshots, "disk usage snapshot", "disk usage snapshots");
+  add(r.predictions, "prediction", "predictions");
+  add(r.indexEntries, "search entry", "search entries");
+  return parts.length ? `Cleared ${parts.join(", ")}.` : "Nothing was saved for that place.";
+}
+
+/** Clear what is saved for one folder or drive, or switch saving off for it. */
+function CacheLocations({ onChanged }: { onChanged: () => void }) {
+  const settings = useStore((s) => s.settings)!;
+  const drives = useStore((s) => s.drives);
+  const { updateSettings, showToast } = useStore.getState();
+  const [target, setTarget] = useState("");
+  const rules = cacheRules(settings);
+  const detached = (window as unknown as { __VIEW__?: string }).__VIEW__ === "settings";
+  const place = target.trim();
+  const covered = !!place && rules.some((r) => samePlace(r, place));
+
+  const setRules = (next: string[]) =>
+    updateSettings((s) => {
+      if (next.length) s.advanced[RULES_KEY] = next;
+      else delete s.advanced[RULES_KEY];
+    });
+  const forget = async (path: string, quiet = false) => {
+    try {
+      const r = await api.clearCacheFor(path);
+      if (!quiet) showToast(describeForget(r));
+      onChanged();
+    } catch (e) {
+      showToast(String(e));
+    }
+  };
+  const browse = async () => {
+    if (detached) {
+      const r = await openDialog({ directory: true, multiple: false, title: "Choose a folder or drive" });
+      if (typeof r === "string") setTarget(r);
+      return;
+    }
+    const r = await pickFolder("Choose a folder or drive", place || undefined);
+    if (r) setTarget(r);
+  };
+  const turnOff = async () => {
+    if (!place || covered) return;
+    setRules([...rules, place]);
+    await forget(place, true);
+    showToast(`Nothing will be saved for ${place} from now on. What was saved has been cleared.`);
+    setTarget("");
+  };
+
+  return (
+    <section className="cache-locations" aria-label="Caching for specific folders and drives">
+      <h3>Folders and drives</h3>
+      <p className="muted">
+        Clear what is saved about one place, or stop saving anything about it (listings, folder sizes, thumbnails, disk usage, predictions and search entries). A folder covers everything inside it. Searching still works there; it just reads the folder each time.
+      </p>
+      <div className="loc-pick">
+        <select
+          aria-label="Pick a drive"
+          value=""
+          onChange={(e) => e.target.value && setTarget(e.target.value)}
+        >
+          <option value="">Pick a drive…</option>
+          {drives.map((d) => (
+            <option key={d.mount} value={d.mount}>
+              {d.name && d.name !== d.mount ? `${d.name} (${d.mount})` : d.mount}
+            </option>
+          ))}
+        </select>
+        <button className="secondary" onClick={() => void browse()}>
+          Choose folder…
+        </button>
+        <input
+          className="text-input"
+          value={target}
+          placeholder="…or type a full path"
+          spellCheck={false}
+          onChange={(e) => setTarget(e.target.value)}
+          aria-label="Folder or drive"
+        />
+      </div>
+      <div className="button-row">
+        <button className="secondary" disabled={!place} onClick={() => void forget(place)}>
+          Clear what is saved here
+        </button>
+        <button className="secondary" disabled={!place || covered} onClick={() => void turnOff()}>
+          {covered ? "Saving is already off here" : "Stop saving for this place"}
+        </button>
+      </div>
+      {rules.length > 0 && (
+        <ul className="loc-rules" aria-label="Places where nothing is saved">
+          {rules.map((r) => (
+            <li key={r}>
+              <code title={r}>{r}</code>
+              <span className="muted">not saved</span>
+              <button className="secondary" onClick={() => void forget(r)}>
+                Clear
+              </button>
+              <button className="secondary" onClick={() => setRules(rules.filter((x) => x !== r))}>
+                Save again
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rules.length === 0 && <p className="muted">Saving is on everywhere.</p>}
+    </section>
+  );
+}
+
+function samePlace(a: string, b: string): boolean {
+  const n = (x: string) => x.replace(/[\\/]+$/, "").toLowerCase();
+  return n(a) === n(b);
 }
 
 // ---------------------------------------------------------------------------

@@ -28,13 +28,12 @@ import { commandFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
-import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
 import { useShellItems } from "./shellMenu";
 
 /** Pixel widths of the Details columns. The list is only as wide as these,
  *  so there is always empty space on the right to right-click. */
-const DEFAULT_COLUMNS = { name: 340, modified: 170, type: 140, size: 100 };
+const DEFAULT_COLUMNS = { name: 420, modified: 170, type: 140, size: 100 };
 type Columns = typeof DEFAULT_COLUMNS;
 const MIN_COLUMN = { name: 140, modified: 110, type: 80, size: 70 };
 
@@ -239,9 +238,10 @@ export function FileView({ path }: { path: string }) {
   const customRow = adv<number>(settings, "ui.rowHeight");
   const rowHeight = details ? (customRow > 0 ? customRow : compact ? 26 : 34) : tileLayout.h;
   const headerHeight = details ? 28 : 0;
-  // Name takes whatever width the other columns leave, so the list fits its pane
-  // (no sideways scrollbar) unless the other columns are made wider than the pane.
-  const cols = { ...columns, name: Math.max(MIN_COLUMN.name, width - 14 - columns.modified - columns.type - columns.size) };
+  // Name keeps its own width and the list does not stretch to the pane's edge (the free
+  // space on the right stays free). In a pane too narrow for that, Name gives way first,
+  // so there is no sideways scrollbar unless the other columns alone are wider than the pane.
+  const cols = { ...columns, name: Math.max(MIN_COLUMN.name, Math.min(columns.name, width - 14 - columns.modified - columns.type - columns.size)) };
   const rowsWidth = cols.name + cols.modified + cols.type + cols.size;
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -661,10 +661,10 @@ export function FileView({ path }: { path: string }) {
     const target = ev.currentTarget;
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
-    // Name fills what the others leave, so its edge moves the Date column the other way.
-    const real: keyof Columns = key === "name" ? "modified" : key;
-    const sign = key === "name" ? -1 : 1;
-    const start = columns[real];
+    const real: keyof Columns = key;
+    const sign = 1;
+    // Start from the width the column has now (Name may be narrower than it is set to).
+    const start = cols[real];
     let latest = columns;
     const move = (m: PointerEvent) => {
       latest = { ...columns, [real]: Math.max(MIN_COLUMN[real], Math.round(start + sign * (m.clientX - startX))) };
@@ -693,7 +693,7 @@ export function FileView({ path }: { path: string }) {
       >
         {label}
       </button>
-      <div className="column-grip" role="separator" aria-label={`Resize ${label}`} onPointerDown={(e) => resize(col, e)} onDoubleClick={() => setColumns({ ...columns, [col === "name" ? "modified" : col]: DEFAULT_COLUMNS[col === "name" ? "modified" : col] })} />
+      <div className="column-grip" role="separator" aria-label={`Resize ${label}`} onPointerDown={(e) => resize(col, e)} onDoubleClick={() => setColumns({ ...columns, [col]: DEFAULT_COLUMNS[col] })} />
     </div>
   );
 
@@ -756,7 +756,7 @@ export function FileView({ path }: { path: string }) {
                       {...itemProps(e, row.index)}
                     >
                       <div className="cell cell-name" style={{ width: cols.name }}>
-                        <FileIcon kind={kindOf(e.name, e.isDir)} name={e.name} />
+                        <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={18} iconSize={16} view="details" />
                         {nameCell(e)}
                       </div>
                       <div className="cell cell-date" style={{ width: columns.modified }}>{formatDate(e.modified)}</div>
@@ -776,7 +776,7 @@ export function FileView({ path }: { path: string }) {
                       title={e.name}
                       {...itemProps(e, row.index * columnsPerRow + k)}
                     >
-                      <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={tileLayout.icon} />
+                      <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={tileLayout.icon} view={level} />
                       {nameCell(e)}
                     </div>
                   ))}

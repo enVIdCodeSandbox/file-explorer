@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import { adv } from "../settings/advanced";
+import { QUALITY, VIEW_SETTING, thumbKind, type ThumbView } from "../util/thumbKinds";
 import { extensionOf, kindOf } from "../util/format";
 import { isArchiveLoc, isRemote } from "../util/path";
 import { FileIcon } from "./Icons";
@@ -49,7 +50,7 @@ let pumping = false;
 let limit = 2;
 
 export function setThumbParallelism(n: number) {
-  limit = Math.max(1, Math.min(4, n));
+  limit = Math.max(1, Math.min(8, n));
 }
 
 function pump() {
@@ -81,6 +82,13 @@ function enqueue(job: Job): () => void {
   };
 }
 
+/** Is this file on a network drive or share? */
+function onNetwork(path: string, drives: { mount: string; media: string }[]): boolean {
+  if (path.startsWith("\\\\")) return true;
+  const p = path.toLowerCase();
+  return drives.some((d) => d.media === "network" && p.startsWith(d.mount.toLowerCase().replace(/[\\/]+$/, "")));
+}
+
 /** How long a row must stay mounted before its thumbnail is requested. */
 const SETTLE_MS = 90;
 
@@ -91,6 +99,7 @@ export function Thumb({
   modified,
   size,
   iconSize,
+  view,
 }: {
   path: string;
   name: string;
@@ -99,14 +108,24 @@ export function Thumb({
   size: number;
   /** Size of the fallback type icon when there is no thumbnail. */
   iconSize?: number;
+  /** Which view this is shown in; each view can be switched on or off in Settings > Thumbnails. */
+  view: ThumbView;
 }) {
   const enabled = useStore((s) => s.budget?.thumbnails ?? false);
-  const settle = useStore((s) => adv<number>(s.settings, "perf.thumbDelayMs"));
+  const settings = useStore((s) => s.settings);
+  const drives = useStore((s) => s.drives);
+  const settle = adv<number>(settings, "perf.thumbDelayMs");
   const types = useStore((s) => s.info?.thumbnailTypes);
   const threads = useStore((s) => s.budget?.thumbThreads ?? 1);
-  setThumbParallelism(threads + 1);
-  const supported = enabled && !isDir && !isRemote(path) && !isArchiveLoc(path) && !!types?.includes(extensionOf(name));
-  const key = `${path}|${modified}|${size}`;
+  setThumbParallelism(adv<number>(settings, "thumbs.parallel") || threads + 1);
+  const ext = extensionOf(name);
+  const kind = thumbKind(ext);
+  const wanted =
+    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (adv<boolean>(settings, "thumbs.networkDrives") || !onNetwork(path, drives));
+  const supported = enabled && wanted && !isDir && !isRemote(path) && !isArchiveLoc(path) && !!types?.includes(ext);
+  // Ask for more or fewer pixels than are shown, depending on the sharpness setting.
+  const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));
+  const key = `${path}|${modified}|${px}|${adv<number>(settings, "thumbs.videoPercent")}`;
   const [url, setUrl] = useState<string | undefined>(() => cache.get(key));
 
   useEffect(() => {
@@ -128,7 +147,7 @@ export function Thumb({
         run: async () => {
           if (cache.has(key)) return;
           try {
-            const bytes = await api.thumbnail(path, size);
+            const bytes = await api.thumbnail(path, px);
             const made = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
             remember(key, made);
             if (alive) setUrl(made);
@@ -143,7 +162,7 @@ export function Thumb({
       clearTimeout(timer);
       dequeue?.();
     };
-  }, [key, path, size, supported, settle]);
+  }, [key, path, px, supported, settle]);
 
   if (supported && url) {
     return <img className="thumb" src={url} width={size} height={size} alt="" draggable={false} decoding="async" loading="lazy" />;

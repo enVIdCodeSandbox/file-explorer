@@ -129,6 +129,14 @@ impl ListingCache {
         self.map.remove(path);
     }
 
+    /// Forget the folder `root` and everything below it; how many listings went.
+    pub fn remove_under(&mut self, root: &Path) -> usize {
+        let rule = root.to_string_lossy().into_owned();
+        let before = self.map.len();
+        self.map.retain(|p, _| !fast_core::cachepolicy::is_under(p, &rule));
+        before - self.map.len()
+    }
+
     pub fn clear(&mut self) {
         self.map.clear();
     }

@@ -465,22 +465,24 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .sidebar[data-scrollbar="hover"]:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 40%, transparent); }
 
 /* ---- Open with… chooser ---- */
-.openwith-dialog { width: 460px; max-width: calc(100vw - 32px); padding: 18px 0 0; display: flex; flex-direction: column; }
-.openwith-dialog h3 { margin: 0 24px 6px; font-size: 16px; font-weight: 600; }
-.openwith-why { margin: 0 24px 10px; color: var(--text-muted); font-size: var(--font-size-small); overflow: hidden; text-overflow: ellipsis; }
+.openwith-dialog { width: clamp(520px, 58vw, 860px); max-width: calc(100vw - 32px); padding: 24px 0 0; display: flex; flex-direction: column; }
+.openwith-dialog h3 { margin: 0 32px 8px; font-size: 20px; font-weight: 600; }
+.openwith-why { margin: 0 32px 14px; color: var(--text-muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; }
 .openwith-why strong { color: var(--text); font-weight: 600; }
-.openwith-list { max-height: 420px; min-height: 120px; overflow-y: auto; padding: 0 12px 8px; }
-.openwith-list h4 { margin: 12px 12px 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
-.openwith-row { display: flex; align-items: center; gap: 14px; width: 100%; height: 48px; padding: 0 12px; border-radius: var(--radius-small); text-align: left; position: relative; }
+.openwith-list { height: min(60vh, 600px); min-height: 220px; overflow-y: auto; padding: 0 20px 10px; }
+.openwith-list section { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); column-gap: 8px; }
+.openwith-list h4 { grid-column: 1 / -1; margin: 14px 12px 6px; font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+.openwith-row { display: flex; align-items: center; gap: 14px; width: 100%; height: 56px; padding: 0 14px; border-radius: var(--radius-small); text-align: left; position: relative; font-size: 14px; }
 .openwith-row:hover { background: var(--surface-hover); }
 .openwith-row[data-picked] { background: var(--surface-active); }
-.openwith-row[data-picked]::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 2px; background: var(--accent); }
-.openwith-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: var(--surface-hover); color: var(--text-muted); flex: none; }
+.openwith-row[data-picked]::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 2px; background: var(--accent); }
+.openwith-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: var(--surface-hover); color: var(--text-muted); flex: none; }
+.openwith-row img { width: 40px; height: 40px; flex: none; }
 .openwith-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.openwith-error { margin: 0 24px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
-.openwith-footer { display: flex; align-items: center; gap: 8px; padding: 14px 24px; background: color-mix(in srgb, var(--text) 4%, var(--surface)); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
-.openwith-footer button { min-width: 110px; height: 32px; }
-.openwith-footer button.secondary { min-width: 0; padding: 0 12px; }
+.openwith-error { margin: 0 32px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
+.openwith-footer { display: flex; align-items: center; gap: 10px; padding: 16px 32px; background: color-mix(in srgb, var(--text) 4%, var(--surface)); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
+.openwith-footer button { min-width: 120px; height: 38px; white-space: nowrap; font-size: 14px; }
+.openwith-footer button.secondary { min-width: 0; padding: 0 18px; }
 
 /* ---- Presets, profiles, resources, locks, setup (added with the 21-item batch) ---- */
 .pill { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); vertical-align: middle; }
@@ -697,3 +699,89 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .setup-tile-note strong { font-size: 20px; } .setup-tile-note .muted { font-size: 15px; line-height: 1.4; }
 .setup-lang { display: inline-flex; align-items: center; gap: 12px; margin-top: 14px; font-size: 15px; color: var(--text-muted); }
 .setup-lang select { min-width: 220px; height: 40px; padding: 0 12px; border-radius: 10px; font-size: 15px; }
+
+/* ======================================================================
+ * Window arrangements. The same parts, rearranged like another system's
+ * file manager: data-chrome on the page is "windows", "macos" or "linux".
+ * ====================================================================== */
+.toolbar .header-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 38%; }
+.toolbar .header-drag { flex: 1; min-width: 12px; align-self: stretch; }
+.toolbar .header-actions { display: flex; align-items: center; flex: none; }
+.toolbar .header-actions .command-bar { width: auto; min-height: 0; padding: 0; gap: 2px; flex-wrap: nowrap; background: none; border: 0; box-shadow: none; }
+.toolbar .header-actions .cmd { height: 30px; min-width: 32px; padding: 0 7px; justify-content: center; }
+:root[data-chrome="macos"] .side-toggle, :root[data-chrome="linux"] .side-toggle { display: none; }
+:root[data-chrome="macos"] .nav-buttons [data-nav], :root[data-chrome="linux"] .nav-buttons [data-nav] { display: none; }
+
+/* ---- macOS: Finder ---- */
+:root[data-chrome="macos"] .toolbar:not([data-parts="address"]) { min-height: 52px; padding: 0 12px 0 0; gap: 8px; background: color-mix(in srgb, var(--surface) 70%, transparent); backdrop-filter: blur(22px); border-bottom: 1px solid var(--border); }
+:root[data-chrome="macos"] .toolbar .window-controls[data-side="left"] { padding-left: 14px; margin-right: 10px; }
+:root[data-chrome="macos"] .toolbar .traffic-light-space { width: 78px; align-self: stretch; flex: none; }
+:root[data-chrome="macos"] .toolbar .nav-buttons { gap: 0; }
+:root[data-chrome="macos"] .toolbar .nav-buttons button { height: 30px; min-width: 30px; }
+:root[data-chrome="macos"] .toolbar .header-title { font-size: 15px; margin-left: 6px; }
+:root[data-chrome="macos"] .toolbar .header-actions { padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--surface-hover) 70%, transparent); }
+:root[data-chrome="macos"] .toolbar .header-actions .cmd { height: 26px; min-width: 30px; border-radius: 6px; }
+:root[data-chrome="macos"] .toolbar:not([data-parts="address"]) .search-box { width: 190px; height: 28px; border-radius: 8px; background: color-mix(in srgb, var(--surface-hover) 70%, transparent); border-color: transparent; transition: width 0.15s; }
+:root[data-chrome="macos"] .toolbar:not([data-parts="address"]) .search-box:focus-within { width: 280px; border-color: var(--accent); }
+/* The path along the bottom */
+:root[data-chrome="macos"] .toolbar[data-parts="address"] { min-height: 28px; padding: 0 12px; border-top: 1px solid var(--border); background: var(--surface); }
+:root[data-chrome="macos"] .toolbar[data-parts="address"] .address-bar { height: 24px; background: transparent; border-color: transparent; padding: 0; }
+:root[data-chrome="macos"] .toolbar[data-parts="address"] .address-bar:focus-within { border-color: var(--accent); background: var(--bg); padding: 0 6px; }
+:root[data-chrome="macos"] .toolbar[data-parts="address"] .crumb { font-size: 12px; color: var(--text-muted); height: 22px; }
+:root[data-chrome="macos"] .toolbar[data-parts="address"] .crumb:hover { color: var(--text); }
+:root[data-chrome="macos"] .status-bar { justify-content: center; border-top: 0; height: 22px; font-size: 12px; }
+:root[data-chrome="macos"] .status-bar .status-clipboard { margin-left: 0; }
+/* Sidebar: translucent, small gray headings */
+:root[data-chrome="macos"] .sidebar-wrap { background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(26px); }
+:root[data-chrome="macos"] .side-heading { text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 12px 10px 3px; }
+:root[data-chrome="macos"] .sidebar .side-item { height: 28px; border-radius: 6px; font-size: 13px; }
+:root[data-chrome="macos"] .title-bar:not(.caption-strip) { justify-content: center; }
+:root[data-chrome="macos"] .title-bar .tab-bar { flex: 1 1 auto; justify-content: center; }
+
+/* ---- Linux: GNOME Files ---- */
+:root[data-chrome="linux"] .toolbar { min-height: 50px; padding: 0 8px 0 10px; gap: 8px; background: var(--surface); border-bottom: 1px solid var(--border); }
+:root[data-chrome="linux"] .toolbar .nav-buttons { gap: 0; padding: 2px; border-radius: 9px; background: var(--surface-hover); }
+:root[data-chrome="linux"] .toolbar .nav-buttons button { height: 28px; min-width: 32px; border-radius: 7px; }
+:root[data-chrome="linux"] .toolbar .address-bar { flex: 100 1 200px; max-width: 640px; height: 34px; padding: 0 4px; border: 0; border-radius: 9px; background: var(--surface-hover); }
+:root[data-chrome="linux"] .toolbar .address-bar:focus-within { box-shadow: 0 0 0 2px var(--accent); background: var(--bg); }
+:root[data-chrome="linux"] .toolbar .crumb { height: 28px; border-radius: 6px; padding: 0 9px; }
+:root[data-chrome="linux"] .toolbar .crumb:hover { background: var(--surface-active); }
+:root[data-chrome="linux"] .toolbar .search-box { width: 180px; height: 34px; border: 0; border-radius: 9px; background: var(--surface-hover); }
+:root[data-chrome="linux"] .toolbar .search-box:focus-within { box-shadow: 0 0 0 2px var(--accent); }
+:root[data-chrome="linux"] .toolbar .header-actions .cmd { height: 34px; min-width: 36px; border-radius: 9px; }
+:root[data-chrome="linux"] .toolbar .header-drag { min-width: 8px; flex: 1; }
+:root[data-chrome="linux"] .toolbar .window-controls { align-self: center; margin-left: 4px; gap: 6px; }
+:root[data-chrome="linux"] .toolbar .window-controls button { width: 26px; height: 26px; border-radius: 50%; background: var(--surface-hover); }
+:root[data-chrome="linux"] .toolbar .window-controls button:hover { background: var(--surface-active); }
+:root[data-chrome="linux"] .toolbar .window-controls .close:hover { background: #e01b24; color: #fff; }
+/* Places sidebar: rounded rows, quiet headings */
+:root[data-chrome="linux"] .sidebar-wrap { background: color-mix(in srgb, var(--surface) 82%, transparent); }
+:root[data-chrome="linux"] .side-heading { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 700; color: var(--text-muted); padding: 12px 10px 4px; }
+:root[data-chrome="linux"] .sidebar .side-item { height: 34px; border-radius: 9px; font-size: 13.5px; }
+:root[data-chrome="linux"] .title-bar:not(.caption-strip) { justify-content: center; }
+:root[data-chrome="linux"] .title-bar .tab-bar { flex: 1 1 auto; justify-content: center; }
+.toolbar .window-controls button { min-width: 0; padding: 0; }
+.toolbar .window-controls[data-look="round"] button { width: 14px; height: 14px; }
+.toolbar .window-controls[data-look="round"] { align-self: center; }
+/* The pop-out tray floats at the top right; keep the header's last button clear of it. */
+:root[data-chrome="macos"] .shell:has(.popout-tray) .toolbar:not([data-parts="address"]),
+:root[data-chrome="linux"] .shell:has(.popout-tray) .toolbar { padding-right: 58px; }
+
+/* Choosing a file for a form (SSH key): the bar under the window buttons. */
+.pick-bar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 14px; background: color-mix(in srgb, var(--accent) 22%, var(--surface)); border-bottom: 1px solid var(--accent); }
+.pick-text { display: flex; flex-direction: column; min-width: 220px; line-height: 1.3; }
+.pick-text span { color: var(--text-muted); font-size: 12.5px; }
+.pick-path { flex: 1; min-width: 220px; max-width: 520px; }
+.pick-error { flex-basis: 100%; color: var(--danger, #e5484d); font-size: 12.5px; }
+.key-row { display: flex; gap: 8px; align-items: center; }
+.key-row .text-input { flex: 1; }
+
+/* Per-folder and per-drive caching */
+.cache-locations { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.cache-locations h3 { margin: 0; font-size: 1.05em; }
+.cache-locations p { margin: 0; }
+.loc-pick { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.loc-pick .text-input { flex: 1; min-width: 220px; }
+.loc-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.loc-rules li { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.loc-rules code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

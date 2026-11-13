@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type SavedServer, type Server, type ServerProtocol } from "../api";
 import { useStore } from "../store";
+import { pickFile, sshFolder } from "../util/pickFile";
 import { rawRemoteLabel, splitRemote } from "../util/path";
 
 const PROTOCOLS: { id: ServerProtocol; label: string }[] = [
@@ -55,6 +56,8 @@ function fieldsFromSaved(s: SavedServer): Partial<Fields> {
 /** Log in to an FTP, SFTP or WebDAV server and open it as a folder. */
 export function ConnectServer() {
   const request = useStore((s) => s.connect);
+  const picking = useStore((s) => !!s.picker);
+  const home = useStore((s) => s.info?.home);
   const [f, setF] = useState<Fields>(EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +76,8 @@ export function ConnectServer() {
     setTimeout(() => (base.host ? passRef.current : hostRef.current)?.focus(), 0);
   }, [request]);
 
-  if (!request) return null;
+  // While a file is being chosen the form steps aside (keeping what was typed).
+  if (!request || picking) return null;
 
   const set = <K extends keyof Fields>(key: K, value: Fields[K]) => setF((x) => ({ ...x, [key]: value }));
   const close = () => useStore.getState().closeConnect();
@@ -173,7 +177,16 @@ export function ConnectServer() {
         {f.protocol === "sftp" && (
           <label className="batch-field">
             <span>Private key file (optional)</span>
-            <input className="text-input" value={f.keyFile} placeholder="~/.ssh/id_ed25519" spellCheck={false} onChange={(e) => set("keyFile", e.target.value)} />
+            <div className="key-row">
+              <input className="text-input" value={f.keyFile} placeholder="~/.ssh/id_ed25519" spellCheck={false} onChange={(e) => set("keyFile", e.target.value)} />
+              <button className="secondary"
+                type="button"
+                title="Hide this form, browse to the key file in the window, and come back"
+                onClick={() => void pickFile("Choose your private key file", sshFolder(home)).then((p) => p && set("keyFile", p))}
+              >
+                Browse…
+              </button>
+            </div>
           </label>
         )}
         {f.protocol === "dav" && (

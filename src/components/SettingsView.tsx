@@ -157,6 +157,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
   const [section, setSection] = useState<string>(SECTIONS[0]);
   const pos = useStore((s) => s.settingsPos);
   const panel = useRef<HTMLDivElement>(null);
+  const picking = useStore((s) => !detached && !!s.picker);
   const close = () => (detached ? void getCurrentWindow().close() : useStore.setState({ settingsOpen: false }));
 
   // Drag the panel by its title. Where it was left is kept for next time.
@@ -297,8 +298,9 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
         </div>
       </div>
   );
+  // Out of the way while a folder is chosen, but still mounted so what was typed and the scroll position are kept.
   return detached ? dialog : (
-    <div className="modal-backdrop" onMouseDown={close}>
+    <div className="modal-backdrop" onMouseDown={close} hidden={picking} style={picking ? { display: "none" } : undefined}>
       {dialog}
     </div>
   );

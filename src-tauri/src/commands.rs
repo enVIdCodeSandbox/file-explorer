@@ -100,7 +100,8 @@ pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String) ->
         }
         let p = PathBuf::from(&path);
         let show_hidden = st.settings.read().general.show_hidden;
-        let hit = st.listings.lock().get(&p, show_hidden);
+        let remember = !cache_off(&st, &p);
+        let hit = if remember { st.listings.lock().get(&p, show_hidden) } else { None };
         if let Some(entries) = hit {
             // Stale-while-revalidate: answer now, verify in the background.
             let (st2, p2, shown) = (st.clone(), p.clone(), entries.clone());
@@ -118,7 +119,9 @@ pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String) ->
             return Ok(listing(&p, entries, true));
         }
         let entries = Arc::new(entry::list_dir(&p, show_hidden).map_err(err)?);
-        st.listings.lock().put(p.clone(), entries.clone(), show_hidden);
+        if remember {
+            st.listings.lock().put(p.clone(), entries.clone(), show_hidden);
+        }
         Ok(listing(&p, entries, false))
     })
     .await
@@ -142,7 +145,7 @@ fn prefetch_now(st: &Shared, paths: Vec<String>) {
     let show_hidden = st.settings.read().general.show_hidden;
     for path in paths.into_iter().take(8) {
         let p = PathBuf::from(path);
-        if st.listings.lock().contains(&p) {
+        if st.listings.lock().contains(&p) || cache_off(st, &p) {
             continue;
         }
         if let Ok(entries) = entry::list_dir(&p, show_hidden) {
@@ -163,6 +166,10 @@ pub async fn record_visit(state: State<'_, Shared>, from: Option<String>, to: St
         if !advanced_bool(&st, "cache.predictions", true) {
             return Ok(Vec::new());
         }
+        if cache_off(&st, Path::new(&to)) {
+            return Ok(Vec::new());
+        }
+        let from = from.filter(|f| !cache_off(&st, Path::new(f)));
         let now = now_secs();
         let predictions = {
             let mut p = st.predictor.lock();
@@ -277,7 +284,8 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
             if is_locked(&st, &path.to_string_lossy()) {
                 continue;
             }
-            let remembered = if policy.remember { st.folder_sizes.lock().get(&path) } else { None };
+            let remember = policy.remember && !cache_off(&st, &path);
+            let remembered = if remember { st.folder_sizes.lock().get(&path) } else { None };
             if let Some(e) = remembered {
                 let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name: name.clone(), bytes: e.bytes, files: e.files, complete: true, cached: true });
                 if !refresh && (now_secs().max(0) as u64).saturating_sub(e.at) < policy.fresh_secs {
@@ -289,7 +297,7 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
                 save(&st);
                 return;
             }
-            if stats.complete && policy.remember {
+            if stats.complete && remember {
                 st.folder_sizes.lock().put(&path, stats.total_bytes, stats.files, now_secs().max(0) as u64);
             }
             let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name, bytes: stats.total_bytes, files: stats.files, complete: stats.complete, cached: false });
@@ -320,7 +328,25 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
     guard(&st, &path)?;
     // Bounded concurrency: decoding is CPU-heavy and must not starve listing.
     let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
-    let bytes = blocking(move || thumbs::thumbnail_cached(Path::new(&path), size, advanced_bool(&st, "cache.thumbnails", true).then_some(st.paths.thumbs.as_path())).map_err(err)).await?;
+    let bytes = blocking(move || {
+        let keep = advanced_bool(&st, "cache.thumbnails", true) && !cache_off(&st, Path::new(&path));
+        // Each kind of file can be switched off on its own (Settings > Thumbnails).
+        let allowed = match thumbs::kind_of(Path::new(&path)) {
+            Some(thumbs::Kind::Image) => advanced_bool(&st, "thumbs.images", true),
+            Some(thumbs::Kind::Document) => advanced_bool(&st, "thumbs.documents", true),
+            Some(thumbs::Kind::Video) => advanced_bool(&st, "thumbs.videos", true),
+            None => false,
+        };
+        if !allowed {
+            return Err("thumbnails for this kind of file are switched off".to_string());
+        }
+        let opts = thumbs::Options {
+            max_image_bytes: advanced_u64(&st, "thumbs.maxImageMb", 64) * 1024 * 1024,
+            video_percent: advanced_u64(&st, "thumbs.videoPercent", 10).min(95) as u8,
+        };
+        thumbs::thumbnail_with(Path::new(&path), size, keep.then_some(st.paths.thumbs.as_path()), &opts).map_err(err)
+    })
+    .await?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -361,7 +387,24 @@ pub fn known_folders() -> Vec<Place> {
 // Index and search
 // ---------------------------------------------------------------------------
 
+/// Everything the index leaves out: the built-in skips plus the folders and drives with caching off.
+fn index_skip(st: &Shared) -> Vec<PathBuf> {
+    let mut skip = fast_core::index::default_skip_list();
+    skip.extend(cache_rules(st).into_iter().map(|r| {
+        let t = r.trim_end_matches(['/', '\\']);
+        PathBuf::from(if t.is_empty() { r.as_str() } else { t })
+    }));
+    skip
+}
+
 fn index_roots(st: &Shared) -> Vec<PathBuf> {
+    let rules = cache_rules(st);
+    let all = index_roots_all(st);
+    all.into_iter().filter(|r| !fast_core::cachepolicy::excluded(&rules, r)).collect()
+}
+
+/// The places search would index, before caching rules are applied.
+fn index_roots_all(st: &Shared) -> Vec<PathBuf> {
     if st.settings.read().performance.index_drives {
         let mounts: Vec<PathBuf> = st
             .drives
@@ -440,7 +483,7 @@ pub fn rebuild_index(app: &AppHandle, st: &Shared) {
                 let Some(root) = roots.get(i) else { break };
                 let idx = Index::scan(
                     std::slice::from_ref(root),
-                    &ScanOptions { threads: per_root_threads, max_entries: per_root_cap, ..Default::default() },
+                    &ScanOptions { threads: per_root_threads, max_entries: per_root_cap, skip: index_skip(st), ..Default::default() },
                 );
                 let _ = idx.save(&part_file(st, root));
                 {
@@ -515,12 +558,15 @@ fn run_index_updates(app: AppHandle, st: Shared) {
         };
 
         if !dirs.is_empty() && dirs.len() <= INDEX_MAX_FOLDERS {
-            let skip = fast_core::index::default_skip_list();
+            let skip = index_skip(&st);
             let mut changed = false;
             // Parents first, so a refreshed parent does not undo work on a child's entry.
             let mut dirs = dirs;
             dirs.sort();
             for dir in dirs {
+                if cache_off(&st, &dir) {
+                    continue;
+                }
                 let set = st.index.read().clone();
                 let Some(part) = set.parts().iter().find(|p| p.covers(&dir) && p.find_path(&dir).is_some()).cloned() else { continue };
                 let Some(updated) = part.refreshed_dir(&dir, &skip) else { continue };
@@ -663,6 +709,19 @@ pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, sco
                 (set.search(&q, None, include_hidden, limit), pending)
             }
         };
+        // Folders with caching off are not in the index, so they are searched live.
+        let mut live_roots = live_roots;
+        for r in cache_rules(&st) {
+            let rp = PathBuf::from(&r);
+            let wanted = match &scope_path {
+                None => true,
+                Some(sp) => fast_core::cachepolicy::is_under(&rp, &sp.to_string_lossy()),
+            };
+            let nested = live_roots.iter().any(|l| fast_core::cachepolicy::is_under(&rp, &l.to_string_lossy()));
+            if wanted && !nested && rp.is_dir() {
+                live_roots.push(rp);
+            }
+        }
         let hits: Vec<Hit> = if st.locks.read().is_empty() { hits } else { hits.into_iter().filter(|h| !is_locked(&st, &h.path)).collect() };
         let mut response = SearchResponse {
             hits,
@@ -730,6 +789,25 @@ struct AnalysisProgress {
     entries: u64,
     bytes: u64,
     elapsed_secs: f64,
+    /// How busy the drive is right now. Only sent while the live graph is on.
+    activity: Option<DriveActivity>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DriveActivity {
+    read_bps: f64,
+    write_bps: f64,
+}
+
+/// Should the disk-usage view draw live drive activity? "on" and "off" are the
+/// person's choice; "auto" means only on a computer with power to spare.
+fn live_activity_wanted(st: &crate::state::AppState) -> bool {
+    match st.settings.read().advanced.get("usage.liveActivity").and_then(|v| v.as_str()).unwrap_or("auto") {
+        "on" => true,
+        "off" => false,
+        _ => resources::has_spare_power(&st.budget.read(), &resources::snapshot()),
+    }
 }
 
 /// The last saved result for a folder, if any: tiny to read, so the view
@@ -738,7 +816,7 @@ struct AnalysisProgress {
 pub async fn analysis_snapshot(state: State<'_, Shared>, path: String) -> CmdResult<Option<AnalysisResult>> {
     let st = state.inner().clone();
     blocking(move || {
-        if !advanced_bool(&st, "cache.usageSnapshots", true) {
+        if !advanced_bool(&st, "cache.usageSnapshots", true) || fast_core::cachepolicy::touches(&cache_rules(&st), Path::new(&path)) {
             return Ok(None);
         }
         Ok(usage::load_snapshot(&st.paths.usage, Path::new(&path))
@@ -769,7 +847,7 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
             // A finished snapshot is kept while the scan runs; only without
             // one are the partial results saved as checkpoints, so closing
             // the app mid-scan still leaves something to show next time.
-            let keep = advanced_bool(&st, "cache.usageSnapshots", true);
+            let keep = advanced_bool(&st, "cache.usageSnapshots", true) && !fast_core::cachepolicy::touches(&cache_rules(&st), &root);
             let has_complete = !keep || usage::load_snapshot(&st.paths.usage, &root).is_some_and(|(a, _)| a.complete);
             let on_partial = |analysis: Analysis| {
                 let taken_at = now_secs();
@@ -778,6 +856,7 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
                 }
                 let _ = app.emit("analysis-partial", AnalysisResult { path: path.clone(), analysis, taken_at });
             };
+            let mut sampler = if live_activity_wanted(&st) { fast_core::driveio::Sampler::new(&root) } else { None };
             let result = std::thread::scope(|scope| {
                 scope.spawn(|| {
                     while !finished.load(Ordering::Relaxed) {
@@ -788,6 +867,10 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
                                 entries: progress.entries.load(Ordering::Relaxed),
                                 bytes: progress.bytes.load(Ordering::Relaxed),
                                 elapsed_secs: started.elapsed().as_secs_f64(),
+                                activity: sampler.as_mut().map(|s| {
+                                    let io = s.sample();
+                                    DriveActivity { read_bps: io.read_bps, write_bps: io.write_bps }
+                                }),
                             },
                         );
                         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -1324,17 +1407,25 @@ pub async fn create_item(
 }
 
 #[tauri::command]
-pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<()> {
+pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Option<String>> {
     let st = state.inner().clone();
     blocking(move || {
         guard(&st, &path)?;
-        // Nothing to open it with: say so in a form the interface turns into an app chooser.
+        // Nothing set to open it: use the program most likely to suit it, and only
+        // when there is none say so in a form the interface turns into an app chooser.
         if !path.contains("://") && Path::new(&path).exists() {
             if let fast_core::openwith::Check::Missing(why) = fast_core::openwith::check(Path::new(&path)) {
+                let choices = fast_core::openwith::choices(Path::new(&path));
+                if let Some(app) = fast_core::openwith::likely_app(&choices) {
+                    if fast_core::openwith::open_with(Path::new(&path), &app.id, false).is_ok() {
+                        return Ok(Some(app.name));
+                    }
+                }
                 return Err(format!("no-handler:{why}"));
             }
         }
-        platform::open_path(Path::new(&path)).map_err(err)
+        platform::open_path(Path::new(&path)).map_err(err)?;
+        Ok(None)
     })
     .await
 }
@@ -1366,15 +1457,23 @@ pub async fn open_system_chooser(path: String) -> CmdResult<()> {
 pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: TerminalMode) -> CmdResult<()> {
     let st = state.inner().clone();
     blocking(move || {
-        let shell = {
+        let opts = {
             let s = st.settings.read();
-            match platform::os_name() {
-                "windows" => s.terminal.windows_shell.clone(),
-                "macos" => s.terminal.mac_terminal.clone(),
-                _ => s.terminal.linux_terminal.clone(),
+            let t = &s.terminal;
+            platform::TerminalOptions {
+                shell: match platform::os_name() {
+                    "windows" => t.windows_shell.clone(),
+                    "macos" => t.mac_terminal.clone(),
+                    _ => t.linux_terminal.clone(),
+                },
+                startup: t.startup_command.clone(),
+                custom: t.custom_command.clone(),
+                profile: t.windows_profile.clone(),
+                login_shell: t.shell_program.clone(),
+                new_tab: t.new_tab,
             }
         };
-        platform::open_terminal(Path::new(&path), mode, &shell).map_err(err)
+        platform::open_terminal(Path::new(&path), mode, &opts).map_err(err)
     })
     .await
 }
@@ -1468,7 +1567,7 @@ pub async fn app_info(state: State<'_, Shared>) -> CmdResult<AppInfo> {
             budget: st.budget.read().clone(),
             system: resources::snapshot(),
             index: st.index_status.lock().clone(),
-            thumbnail_types: thumbs::SUPPORTED,
+            thumbnail_types: thumbs::supported_extensions(),
         })
     })
     .await
@@ -1516,6 +1615,17 @@ fn save_hardware(st: &crate::state::AppState, system: &fast_core::sysreport::Sys
         let _ = fast_core::settings::write_json(&st.paths.hardware, &SavedHardware { system: system.clone(), at });
     }
     at
+}
+
+/// Folders and drives where nothing may be remembered (Settings > Storage > Locations).
+fn cache_rules(st: &crate::state::AppState) -> Vec<String> {
+    fast_core::cachepolicy::rules(&st.settings.read())
+}
+
+/// Is saving things about this path switched off?
+fn cache_off(st: &crate::state::AppState, path: &Path) -> bool {
+    let rules = cache_rules(st);
+    !rules.is_empty() && fast_core::cachepolicy::excluded(&rules, path)
 }
 
 fn advanced_bool(st: &crate::state::AppState, key: &str, default: bool) -> bool {
@@ -1869,7 +1979,7 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
             CacheEntry {
                 id: "thumbnails",
                 label: "Thumbnails",
-                description: "Small previews of images, so folders of pictures open instantly.",
+                description: "Small previews of pictures, documents and videos, so folders open with previews already there.",
                 disk_bytes: thumb_bytes,
                 memory_bytes: 0,
                 items: thumb_items,
@@ -1953,6 +2063,70 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
 }
 
 /// Clear one kind of cache (ids from `cache_usage`), or "all".
+/// What forgetting one place removed.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetReport {
+    listings: usize,
+    sizes: usize,
+    thumbnails: usize,
+    snapshots: usize,
+    predictions: usize,
+    index_entries: usize,
+    bytes: u64,
+}
+
+/// Forget everything saved about one folder or drive (and what is inside it),
+/// leaving the rest of every cache alone.
+#[tauri::command]
+pub async fn clear_cache_for(app: AppHandle, state: State<'_, Shared>, path: String) -> CmdResult<ForgetReport> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let root = PathBuf::from(path.trim());
+        if root.as_os_str().is_empty() {
+            return Err("no folder given".to_string());
+        }
+        let mut r = ForgetReport::default();
+        r.listings = st.listings.lock().remove_under(&root);
+        {
+            let mut c = st.folder_sizes.lock();
+            r.sizes = c.remove_under(&root);
+            let _ = c.save(&st.paths.sizes);
+        }
+        {
+            let mut p = st.predictor.lock();
+            r.predictions = p.remove_under(&root);
+            let _ = p.save(&st.paths.predictor);
+        }
+        let (files, bytes) = thumbs::clear_under(&st.paths.thumbs, &root);
+        r.thumbnails = files;
+        r.bytes += bytes;
+        let (files, bytes) = usage::remove_snapshots_under(&st.paths.usage, &root);
+        r.snapshots = files;
+        r.bytes += bytes;
+        let (set, gone) = st.index.read().without_under(&root);
+        if gone > 0 {
+            *st.index.write() = Arc::new(set.clone());
+            r.index_entries = gone;
+            // Save what is left so the forgotten entries are not loaded again next time.
+            for part in set.parts() {
+                if let Some(&first) = part.roots.first() {
+                    let _ = part.save(&part_file(&st, Path::new(part.name(first))));
+                }
+            }
+            // A drive that went away entirely: its file must go too.
+            for root_path in index_roots_all(&st) {
+                if fast_core::cachepolicy::is_under(&root_path, &root.to_string_lossy()) {
+                    let _ = std::fs::remove_file(part_file(&st, &root_path));
+                }
+            }
+            publish_index_status(&app, &st, "ready");
+        }
+        Ok(r)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -> CmdResult<()> {
     let st = state.inner().clone();

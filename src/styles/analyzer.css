@@ -106,3 +106,13 @@
 .share-options label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .share-options label:last-child { grid-column: 1 / -1; }
 .share-options select { width: 100%; max-width: none; }
+
+/* Live drive activity during a scan */
+.analysis-banner:has(.scan-activity) { flex-wrap: wrap; }
+.scan-activity { display: flex; gap: 22px; flex-wrap: wrap; flex-basis: 100%; padding-top: 4px; }
+.scan-metric { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scan-metric > div { display: flex; flex-direction: column; line-height: 1.25; }
+.spark { flex: none; display: block; }
+.spark-base { stroke: var(--border); stroke-width: 1; }
+.spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
+.spark-fill { fill: var(--accent); opacity: .15; stroke: none; }

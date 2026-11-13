@@ -139,6 +139,7 @@ export function useAppearance() {
     if (!settings) return;
     const root = document.documentElement;
     const flag = (name: string, on: boolean) => (on ? root.setAttribute(name, "") : root.removeAttribute(name));
+    root.dataset.chrome = adv<string>(settings, "ui.chrome");
     root.dataset.motion = adv<boolean>(settings, "ui.animations") ? "on" : "off";
     flag("data-zebra", adv<boolean>(settings, "ui.zebra"));
     flag("data-gridlines", adv<boolean>(settings, "ui.gridLines"));

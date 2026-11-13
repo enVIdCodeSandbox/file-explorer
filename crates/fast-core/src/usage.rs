@@ -553,6 +553,45 @@ pub fn load_snapshot(dir: &Path, root: &Path) -> Option<(Analysis, i64)> {
     ))
 }
 
+/// The root a snapshot file was taken of, read from its header alone (the
+/// version number, then the root as a length-prefixed string).
+fn snapshot_root(file: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = fs::File::open(file).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    let len = u64::from_le_bytes(head[4..12].try_into().ok()?) as usize;
+    if len > 4096 {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    f.read_exact(&mut buf).ok()?;
+    String::from_utf8(buf).ok()
+}
+
+/// Delete the saved analyses of `root` and of every folder or drive below it.
+/// Returns how many files and bytes went.
+pub fn remove_snapshots_under(dir: &Path, root: &Path) -> (usize, u64) {
+    let rule = root.to_string_lossy().into_owned();
+    let Ok(rd) = fs::read_dir(dir) else { return (0, 0) };
+    let (mut files, mut bytes) = (0, 0);
+    for e in rd.filter_map(|e| e.ok()) {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "bin") {
+            continue;
+        }
+        let Some(r) = snapshot_root(&path) else { continue };
+        if crate::cachepolicy::is_under(Path::new(&r), &rule) {
+            let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+            if fs::remove_file(&path).is_ok() {
+                files += 1;
+                bytes += len;
+            }
+        }
+    }
+    (files, bytes)
+}
+
 /// Keep the snapshot folder small: drop the oldest files beyond `max_files`
 /// or `max_bytes` in total.
 pub fn prune_snapshots(dir: &Path, max_files: usize, max_bytes: u64) {
@@ -775,6 +814,22 @@ mod tests {
         let other = d.path().join("photos");
         fs::copy(snapshot_file(store.path(), d.path()), snapshot_file(store.path(), &other)).unwrap();
         assert!(load_snapshot(store.path(), &other).is_none());
+    }
+
+    #[test]
+    fn snapshots_of_one_place_can_be_removed() {
+        let (a, b) = (sample(), sample());
+        let store = tempfile::tempdir().unwrap();
+        for d in [&a, &b] {
+            let an = scan(d.path(), &full()).unwrap();
+            save_snapshot(store.path(), d.path(), &an, 1).unwrap();
+        }
+        assert_eq!(snapshot_root(&snapshot_file(store.path(), a.path())).as_deref(), Some(a.path().to_str().unwrap()));
+        let (files, bytes) = remove_snapshots_under(store.path(), a.path());
+        assert_eq!((files, bytes > 0), (1, true));
+        assert!(load_snapshot(store.path(), a.path()).is_none());
+        assert!(load_snapshot(store.path(), b.path()).is_some());
+        assert_eq!(remove_snapshots_under(store.path(), Path::new("/nowhere")).0, 0);
     }
 
     #[test]

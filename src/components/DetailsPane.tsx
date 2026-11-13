@@ -200,7 +200,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   return (
     <aside className="details-pane" data-embedded={embedded || undefined}>
       <div className="details-preview">
-        <Thumb path={d.path} name={d.name} isDir={isDir} modified={d.modified} size={160} iconSize={72} />
+        <Thumb path={d.path} name={d.name} isDir={isDir} modified={d.modified} size={160} iconSize={72} view="pane" />
       </div>
       <div className="details-title">
         <strong>{d.name}</strong>

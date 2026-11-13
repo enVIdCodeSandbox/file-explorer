@@ -11,6 +11,7 @@ import type { Settings } from "../api";
 import { adv } from "../settings/advanced";
 import {
   PERF_PRESETS,
+  capsText,
   UI_PRESETS,
   applyPatch,
   applyUiPreset,
@@ -335,6 +336,7 @@ export function Setup() {
                     <p className="muted">
                       <b>{t("Suits:")}</b> {perf.recommendedFor}
                     </p>
+                    <p className="muted perf-caps">{capsText(perf)}</p>
                   </div>
                 </div>
               </>

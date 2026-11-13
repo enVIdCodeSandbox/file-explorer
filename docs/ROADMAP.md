@@ -56,6 +56,11 @@
 * **Cross-window tab outline** relies on window positions from the OS; it was written against Tauri's window API and checked only with two windows on Linux (X11).
 * **Window buttons on the left** are drawn by the app on Windows and Linux. On macOS the system's own buttons stay where the OS puts them.
 * **Fluent icons** replace the toolbar and menu glyphs; file-type icons stay the app's own drawings.
+* **Thumbnails for documents and videos** use the Windows shell's thumbnail handlers (through `IShellItemImageFactory`) and macOS Quick Look. Both were written but never run. On Linux, PDF (`pdftoppm`) and video (`ffmpeg`) rendering was run in tests. Office documents have no preview on Linux, and what Windows and macOS show depends on the handlers installed there.
+* **Terminal choices for Windows (PowerShell 7, WSL, Git Bash, Windows Terminal profiles and new tabs) and macOS (iTerm, startup commands)** are covered by tests of the command that would be started, not by starting those programs.
+* **Resource limits** cap worker threads and cache memory per performance level; they are not a hard limit on processor time or disk throughput.
+* **Live drive activity** reads per-drive throughput from the operating system through the sysinfo library, which was not run against a Windows or macOS drive here. The files-per-second expectation uses typical figures per drive type until the scan has its own pace; the total and time-left estimate for a whole drive comes from used space and the average size found so far, so it is rough.
+* **Folders and drives with saving off** are skipped by the search index and searched live, so searching them is slower. A disk-usage snapshot is not kept for a drive that contains such a folder.
 * **Performance presets** are starting points chosen by reasoning about memory and cores, not tuned from measurements on each class of hardware.
 
 * Cut and paste into another program arrives as a copy (operating systems do not let the sender mark "cut").

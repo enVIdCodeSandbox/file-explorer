@@ -3,11 +3,13 @@ import { useEffect, useState } from "react";
 import { api, on } from "./api";
 import { adv } from "./settings/advanced";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
+import { useChrome } from "./util/chrome";
 import { DetailsPane } from "./components/DetailsPane";
 import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
+import { PickBar } from "./components/PickBar";
 import { Setup } from "./components/Setup";
 import { ShareDialog } from "./components/Share";
 import { BatchRename } from "./components/BatchRename";
@@ -37,6 +39,8 @@ export default function App() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
   const [layout] = useLayout();
+  const chrome = useChrome();
+  const tabCount = useStore((s) => s.tabs.length);
 
   useAppearance();
 
@@ -194,15 +198,24 @@ export default function App() {
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <SettingsView detached />;
 
   const loc = parseLocation(location);
-  const topFirst = panelsAt(layout, "top")[0];
+  // A hidden tab strip (Finder and GNOME show it only with two or more tabs) cannot own the window buttons.
+  const topFirst = panelsAt(layout, "top").filter((id) => !(id === "tabs" && chrome !== "windows" && tabCount < 2))[0];
   const tabsOwnWindowButtons = topFirst === "tabs";
+  // The Finder-like and GNOME-like windows put the window buttons in the header row.
+  const headerOwnsControls = chrome !== "windows" && topFirst === "address" && !layout.address.collapsed;
 
   const render = (id: PanelId, dock: string) => {
     const vertical = dock === "left" || dock === "right";
     switch (id) {
       case "tabs":
+        // Finder and GNOME Files show the tab strip only once there is more than one tab.
+        if (chrome !== "windows" && tabCount < 2) return null;
         return <TabBar controls={tabsOwnWindowButtons && dock === "top"} vertical={vertical} />;
       case "address":
+        if (chrome === "macos")
+          return <Toolbar parts={["nav", "title", "search"]} controls={headerOwnsControls} extra={<CommandBar onFilter={setFilterAnchor} only={["view", "sort", "share", "more"]} iconOnly />} />;
+        if (chrome === "linux")
+          return <Toolbar parts={["nav", "address", "search"]} controls={headerOwnsControls} extra={<CommandBar onFilter={setFilterAnchor} only={["view", "sort", "more"]} iconOnly />} />;
         return <Toolbar />;
       case "commands":
         return <CommandBar vertical={vertical} onFilter={setFilterAnchor} />;
@@ -215,7 +228,8 @@ export default function App() {
 
   return (
     <div className="app" data-os={os}>
-      {!(tabsOwnWindowButtons && layout.tabs.dock === "top" && !layout.tabs.collapsed) && <CaptionStrip />}
+      {!(tabsOwnWindowButtons && layout.tabs.dock === "top" && !layout.tabs.collapsed) && !headerOwnsControls && <CaptionStrip />}
+      <PickBar />
       <Shell
         render={render}
         content={
@@ -225,6 +239,8 @@ export default function App() {
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
             {loc.kind === "folder" && <FileView path={loc.path} />}
+            {/* Finder shows the path of the folder along the bottom, under the item count. */}
+            {chrome === "macos" && loc.kind === "folder" && <Toolbar parts={["address"]} />}
           </div>
         }
       />

@@ -44,6 +44,7 @@ export const SECTIONS = [
   "Themes",
   "Layout",
   "Navigation pane",
+  "Thumbnails",
   "Performance",
   "Storage",
   "Privacy and locks",
@@ -113,15 +114,17 @@ export const SETTINGS: SettingDef[] = [
   { key: "performance.resources", section: "Performance", label: "What the app is using", description: "Live processor, memory and disk use, what is kept for later, and ways to use less.", control: { type: "resources" }, keywords: "cpu ram memory disk usage monitor footprint compress shrink release" },
   { key: "performance.priority", section: "Performance", label: "Resource use", description: "Automatic adapts threads, caches and background work to your CPU, memory and battery. Manual uses the limits below exactly.", control: { type: "select", options: [{ value: "dynamic", label: "Automatic" }, { value: "manual", label: "Manual" }] }, keywords: "priority dynamic battery cpu ram" },
   { key: "performance.maxThreads", section: "Performance", label: "Maximum threads", description: "0 uses one per CPU core.", control: { type: "number", min: 0, max: 128 }, keywords: "cpu cores parallel" },
-  { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings.", control: { type: "number", min: 16, max: 16384, step: 16, unit: "MB" }, keywords: "ram memory" },
+  { key: "performance.maxCpuPercent", section: "Performance", label: "Processor limit", description: "The most of your processor the app may use, as a share of all its cores. It limits how many worker threads run at once. 0 means no limit. Each performance preset sets this; God-like sets none.", control: { type: "number", min: 0, max: 100, step: 5, unit: "%" }, keywords: "cpu cap limit threads share percent" },
+  { key: "performance.maxMemoryPercent", section: "Performance", label: "Memory limit", description: "The most of your computer's memory the app's caches may hold, as a share of what is installed. 0 means no limit. Each performance preset sets this; God-like sets none.", control: { type: "number", min: 0, max: 100, step: 1, unit: "%" }, keywords: "ram memory cap limit percent" },
+  { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings, in megabytes. 0 means no limit. The lower of this and the memory limit applies.", control: { type: "number", min: 0, max: 65536, step: 16, unit: "MB" }, keywords: "ram memory" },
   { key: "performance.reduceOnBattery", section: "Performance", label: "Do less on battery", description: "Pauses background indexing and uses fewer threads when unplugged.", control: toggle, keywords: "laptop power" },
   { key: "performance.backgroundIndexing", section: "Performance", label: "Index files in the background", description: "Keeps search instant. Without it, searches scan the folder each time.", control: toggle, keywords: "cache search" },
   { key: "performance.indexDrives", section: "Performance", label: "Index all local drives", description: "Every local drive is indexed in the background so search answers instantly. Turn off to index only your home folder. Network shares are never indexed automatically.", control: toggle },
   { key: "performance.metadataCaching", section: "Performance", label: "Cache folder listings", description: "Folders you revisit appear instantly and refresh in the background.", control: toggle, keywords: "metadata cache" },
   { key: "performance.predictivePrefetch", section: "Performance", label: "Preload folders you are likely to open", description: "Loads a folder when you point at it, and the ones you usually open next.", control: toggle, keywords: "predict prefetch hover" },
   { key: "performance.lazyLoading", section: "Performance", label: "Lazy rendering", description: "Only draws rows near the screen. Turning this off renders further ahead and uses more memory.", control: toggle, keywords: "virtual scroll" },
-  { key: "performance.thumbnails", section: "Performance", label: "Show image thumbnails", control: toggle, keywords: "preview pictures" },
-  { key: "performance.thumbnailSize", section: "Performance", label: "Thumbnail size", control: { type: "number", min: 48, max: 256, step: 16, unit: "px" } },
+  { key: "performance.thumbnails", section: "Thumbnails", label: "Show thumbnails", description: "The master switch. Off: every file keeps its type icon. Each performance level sets it.", control: toggle, keywords: "preview pictures photos videos documents" },
+  { key: "performance.thumbnailSize", section: "Thumbnails", label: "Preview size in the details pane and elsewhere", description: "How large previews are made when no icon size applies.", control: { type: "number", min: 48, max: 256, step: 16, unit: "px" } },
 
   // ---- Storage ----
   { key: "storage.caches", section: "Storage", label: "What the app stores", description: "Each kind of cache, how much space it takes, and a button to clear just that one.", control: { type: "storage" }, keywords: "cache clear thumbnails index disk usage snapshots history space" },
@@ -150,14 +153,21 @@ export const SETTINGS: SettingDef[] = [
   { key: "contextMenu.hidden", section: "Right-click menu", label: "Entries shown in the right-click menu", control: { type: "menuItems" }, keywords: "context menu customize" },
 
   // ---- Terminal ----
-  { key: "terminal.windowsShell", section: "Terminal", label: "Terminal to open", control: { type: "select", options: [{ value: "cmd", label: "Command Prompt" }, { value: "powershell", label: "PowerShell" }, { value: "wt", label: "Windows Terminal" }] }, os: ["windows"], keywords: "cmd command prompt shell" },
-  { key: "terminal.macTerminal", section: "Terminal", label: "Terminal app", control: { type: "text", placeholder: "Terminal" }, os: ["macos"], keywords: "iterm shell" },
+  { key: "terminal.windowsShell", section: "Terminal", label: "Terminal to open", description: "Windows Terminal, WSL and Git Bash must be installed to be used.", control: { type: "select", options: [{ value: "cmd", label: "Command Prompt" }, { value: "powershell", label: "Windows PowerShell" }, { value: "pwsh", label: "PowerShell 7" }, { value: "wt", label: "Windows Terminal" }, { value: "wsl", label: "WSL (Linux)" }, { value: "gitbash", label: "Git Bash" }] }, os: ["windows"], keywords: "cmd command prompt shell powershell pwsh wsl git bash" },
+  { key: "terminal.windowsProfile", section: "Terminal", label: "Windows Terminal profile", description: "The profile to open, by its name in Windows Terminal (for example Ubuntu). Empty uses its default. Only used with Windows Terminal.", control: { type: "text", placeholder: "Default profile" }, os: ["windows"], keywords: "wt profile ubuntu" },
+  { key: "terminal.macTerminal", section: "Terminal", label: "Terminal app", description: "Terminal and iTerm can also run a startup command.", control: { type: "text", placeholder: "Terminal" }, os: ["macos"], keywords: "iterm shell" },
   { key: "terminal.linuxTerminal", section: "Terminal", label: "Terminal program", description: "Leave empty to detect one automatically.", control: { type: "text", placeholder: "e.g. konsole" }, os: ["linux"], keywords: "shell gnome-terminal" },
+  { key: "terminal.shellProgram", section: "Terminal", label: "Shell to run inside it", description: "bash, zsh, fish or a full path. Empty uses your login shell.", control: { type: "text", placeholder: "Login shell" }, os: ["linux", "macos"], keywords: "bash zsh fish sh" },
+  { key: "terminal.startupCommand", section: "Terminal", label: "Run when it opens", description: "A command to run as soon as the terminal opens, for example git status or ls -la. The terminal stays open afterwards. Not used for administrator terminals.", control: { type: "text", placeholder: "Nothing" }, keywords: "startup command run script default init" },
+  { key: "terminal.newTab", section: "Terminal", label: "Open in a new tab", description: "Add a tab to the terminal window that is already open, where the terminal supports it (Windows Terminal, GNOME Terminal, Ptyxis, Konsole).", control: toggle, keywords: "tab window reuse" },
+  { key: "terminal.defaultFolder", section: "Terminal", label: "Open terminal in", description: "Which folder the Open terminal button and shortcut use. The menu next to it can still pick another.", control: { type: "select", options: [{ value: "here", label: "The folder being viewed" }, { value: "home", label: "Your home folder" }] }, keywords: "start directory working folder" },
+  { key: "terminal.useSelectedFolder", section: "Terminal", label: "Use the selected folder", description: "When exactly one folder is selected, open the terminal inside it.", control: toggle, keywords: "selection selected directory" },
+  { key: "terminal.customCommand", section: "Terminal", label: "Custom command", description: "Replaces all the choices above with a command of your own. {path} stands for the folder, for example: alacritty --working-directory {path}. Leave empty to use the choices above.", control: { type: "text", placeholder: "Use the choices above" }, keywords: "custom launch command template path placeholder" },
 ];
 
 /** Advanced options appear in Settings like any other entry (and in search). */
 const sectionOf = (d: (typeof ADVANCED)[number]) =>
-  d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+  d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
 
 for (const d of ADVANCED) {
   SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });

@@ -42,6 +42,7 @@ import {
 import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
+import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { FileIcon, Icon } from "./Icons";
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,14 @@ export function CaptionStrip() {
       {os !== "macos" && side === "right" && <WindowControls />}
     </div>
   );
+}
+
+/** The window buttons inside the Finder-like and GNOME-like header row. */
+function HeaderControls() {
+  const os = useStore((s) => s.info?.os);
+  const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
+  if (os === "macos") return side === "left" ? <div className="traffic-light-space" data-tauri-drag-region /> : null;
+  return <WindowControls side={side} />;
 }
 
 export function TabBar({ controls = true, vertical = false }: { controls?: boolean; vertical?: boolean } = {}) {
@@ -392,7 +401,18 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
 // Address row: navigation, breadcrumb, search
 // ---------------------------------------------------------------------------
 
-export function Toolbar() {
+export type ToolbarPart = "nav" | "title" | "address" | "search" | "terminal";
+const ALL_PARTS: ToolbarPart[] = ["nav", "address", "search", "terminal"];
+
+/**
+ * The navigation row. By default it holds everything (Windows layout). The
+ * Finder-like and GNOME-like layouts use the same row with fewer parts, put the
+ * window buttons in it (`controls`), and slot other buttons in (`extra`); the path
+ * bar of the Finder-like layout is a second copy showing only the address.
+ */
+export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?: ToolbarPart[]; controls?: boolean; extra?: React.ReactNode } = {}) {
+  const has = (p: ToolbarPart) => parts.includes(p);
+  const controlsSide = useStore((st) => (adv<string>(st.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   const tab = useStore((s) => s.tabs.find((t) => t.id === s.activeTab));
   const info = useStore((s) => s.info);
   const drives = useStore((s) => s.drives);
@@ -435,6 +455,10 @@ export function Toolbar() {
     const onKey = (e: KeyboardEvent) => {
       const cmd = commandFor(useStore.getState().settings, e);
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
+      // Two copies can be on screen (header and path bar): each answers only for what it shows.
+      if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
+        if (!has("address")) return;
+      } else if (!has("nav") && !has("search")) return;
       if (cmd === "focusSearch" || e.key === "F3") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -455,10 +479,27 @@ export function Toolbar() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [up, back, forward, navigate]);
+  }, [up, back, forward, navigate, parts.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const terminalDir = folder ?? info?.home ?? "/";
-  const openTerminal = (mode: TerminalMode) => api.openTerminal(terminalDir, mode).catch((e) => showToast(String(e)));
+  const openTerminal = async (mode: TerminalMode, plain = false) => {
+    try {
+      const { terminal } = useStore.getState().settings!;
+      let dir = terminalDir;
+      // The plain button follows the settings: the home folder, or the one selected folder.
+      if (plain && mode === "here") {
+        if (terminal.defaultFolder === "home" && info?.home) dir = info.home;
+        const sel = useStore.getState().selection;
+        if (terminal.useSelectedFolder && sel.length === 1) {
+          const r = await api.resolvePath(sel[0]).catch(() => null);
+          if (r?.isDir) dir = r.path;
+        }
+      }
+      await api.openTerminal(dir, mode);
+    } catch (e) {
+      showToast(String(e));
+    }
+  };
   const terminalMenu = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const admin = info?.os === "windows" ? "as administrator" : "as root";
@@ -466,7 +507,8 @@ export function Toolbar() {
       x: r.left,
       y: r.bottom + 4,
       items: [
-        { id: "here", label: folder ? "Open in this folder" : "Open terminal", run: () => void openTerminal("here") },
+        { id: "plain", label: "Open terminal", run: () => void openTerminal("here", true) },
+        { id: "here", label: "Open in this folder", disabled: !folder, run: () => void openTerminal("here") },
         { id: "home", label: "Open in home folder", run: () => void openTerminal("home") },
         { id: "drive", label: "Open at drive root", disabled: !folder, run: () => void openTerminal("driveRoot") },
         { id: "admin", label: `Open here ${admin}`, separatorBefore: true, run: () => void openTerminal("admin") },
@@ -492,7 +534,9 @@ export function Toolbar() {
   }
 
   return (
-    <div className="toolbar">
+    <div className="toolbar" data-parts={parts.join(" ")} data-tauri-drag-region={controls || undefined}>
+      {controls && controlsSide === "left" && <HeaderControls />}
+      {has("nav") && (
       <div className="nav-buttons">
         <button aria-label="Back" title="Back (Alt+Left)" disabled={!tab || tab.historyIndex === 0} onClick={back}>
           <Icon name="back" />
@@ -500,14 +544,22 @@ export function Toolbar() {
         <button aria-label="Forward" title="Forward (Alt+Right)" disabled={!tab || tab.historyIndex >= tab.history.length - 1} onClick={forward}>
           <Icon name="forward" />
         </button>
-        <button aria-label="Up" title="Up (Alt+Up)" disabled={!up} onClick={() => up && navigate(up)}>
+        <button aria-label="Up" data-nav="up" title="Up (Alt+Up)" disabled={!up} onClick={() => up && navigate(up)}>
           <Icon name="up" />
         </button>
-        <button aria-label="Refresh" title="Refresh (F5)" onClick={() => (folder ? bumpDirs([folder]) : useStore.getState().refreshDrives())}>
+        <button aria-label="Refresh" data-nav="refresh" title="Refresh (F5)" onClick={() => (folder ? bumpDirs([folder]) : useStore.getState().refreshDrives())}>
           <Icon name="refresh" />
         </button>
       </div>
+      )}
 
+      {has("title") && (
+        <div className="header-title" data-tauri-drag-region title={loc.kind === "folder" ? archiveDisplay(loc.path) : tabTitle(location)}>
+          {tabTitle(location)}
+        </div>
+      )}
+
+      {has("address") && (
       <div
         className="address-bar"
         data-editing={editing || undefined}
@@ -585,7 +637,12 @@ export function Toolbar() {
           </div>
         )}
       </div>
+      )}
 
+      {controls && <div className="header-drag" data-tauri-drag-region />}
+      {extra && <div className="header-actions">{extra}</div>}
+
+      {has("search") && (
       <div className="search-box" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { setBoxFocused(false); if (loc.kind === "search") useStore.getState().addSearch(query); } }}>
         <Icon name="search" size={14} />
         <input
@@ -630,9 +687,13 @@ export function Toolbar() {
           </div>
         )}
       </div>
+      )}
+      {has("terminal") && (
       <button className="icon-button" aria-label="Open terminal" title="Open terminal" onClick={terminalMenu}>
         <Icon name="terminal" />
       </button>
+      )}
+      {controls && controlsSide === "right" && <HeaderControls />}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );
@@ -660,7 +721,7 @@ const SORT_NAMES: [string, string][] = [
   ["size", "Size"],
 ];
 
-export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: DOMRect) => void; vertical?: boolean }) {
+export function CommandBar({ onFilter, vertical = false, only, iconOnly = false }: { onFilter: (anchor: DOMRect) => void; vertical?: boolean; only?: string[]; iconOnly?: boolean }) {
   const os = useStore((s) => s.info?.os);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location ?? HOME);
   const selection = useStore((s) => s.selection);
@@ -763,7 +824,8 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
             ...networkMenuItems(drives, os, settings.appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           ]
         : []),
-      { id: "selectAll", label: "Select all", shortcut: "Ctrl+A", separatorBefore: true, disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
+      { id: "newTab", label: "New tab", shortcut: "Ctrl+T", separatorBefore: true, run: () => useStore.getState().newTab() },
+      { id: "selectAll", label: "Select all", shortcut: "Ctrl+A", disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
       { id: "selectNone", label: "Select none", disabled: !inFolder, run: () => useStore.getState().runCommand("selectNone") },
       { id: "invert", label: "Invert selection", disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
       { id: "properties", label: "Properties", icon: "info", separatorBefore: true, disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
@@ -771,31 +833,32 @@ export function CommandBar({ onFilter, vertical = false }: { onFilter: (anchor: 
     ]);
   };
 
-  const button = (id: string, label: string, icon: string, run: (e: React.MouseEvent) => void, opts?: { disabled?: boolean; caret?: boolean; on?: boolean; title?: string }) => (
+  const button = (id: string, label: string, icon: string, run: (e: React.MouseEvent) => void, opts?: { disabled?: boolean; caret?: boolean; on?: boolean; title?: string }) =>
+    only && !only.includes(id) ? null : (
     <button key={id} className="cmd" data-cmd={id} data-on={opts?.on || undefined} disabled={opts?.disabled} title={opts?.title ?? label} onClick={run}>
       <Icon name={icon} size={16} />
-      <span>{label}</span>
-      {opts?.caret && <Icon name="expand" size={9} />}
+      {!iconOnly && <span>{label}</span>}
+      {opts?.caret && !iconOnly && <Icon name="expand" size={9} />}
     </button>
   );
 
   return (
-    <div className="command-bar" role="toolbar" aria-label="Actions" data-vertical={vertical || undefined}>
+    <div className="command-bar" role="toolbar" aria-label="Actions" data-vertical={vertical || undefined} data-icons={iconOnly || undefined}>
       {button("new", "New", "newItem", newMenu, { disabled: !inFolder, caret: true })}
-      <span className="cmd-sep" />
+      {!only && <span className="cmd-sep" />}
       {button("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, title: "Cut (Ctrl+X)" })}
       {button("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, title: "Copy (Ctrl+C)" })}
       {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: "Paste (Ctrl+V)" })}
       {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, title: selection.length > 1 ? "Rename the selected items (F2)" : "Rename (F2)" })}
       {button("share", "Share", "share", share, { disabled: !hasSel, caret: true })}
       {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: "Delete (Del) — Shift+click deletes permanently" })}
-      <span className="cmd-sep" />
+      {!only && <span className="cmd-sep" />}
       {button("sort", "Sort", "sort", sortMenu, { disabled: !inFolder, caret: true })}
       {button("view", "View", "view", viewMenu, { caret: true })}
       {button("filter", isFiltering(filter) ? "Filter •" : "Filter", "filter", (e) => onFilter((e.currentTarget as HTMLElement).getBoundingClientRect()), { disabled: !inFolder, caret: true, on: isFiltering(filter) })}
-      <span className="cmd-sep" />
+      {!only && <span className="cmd-sep" />}
       {button("more", "", "more", more, { title: "See more" })}
-      <span className="cmd-grow" />
+      {!only && <span className="cmd-grow" />}
       {button("details", "Details", "details", () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)), { on: settings.appearance.showDetailsPane })}
       {button("settings", "Settings", "settings", () => useStore.getState().openSettings(), { title: "Settings (Ctrl+,)" })}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
@@ -969,6 +1032,8 @@ export function Sidebar() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
 
+  const chrome = useChrome();
+  const nm = (t: string) => SIDE_NAMES[chrome][t] ?? t;
   const collapsed = appearance.sidebarCollapsed;
   const width = collapsed ? COLLAPSED_WIDTH : (dragWidth ?? appearance.sidebarWidth);
 
@@ -1082,7 +1147,7 @@ export function Sidebar() {
         aria-expanded={id ? !folded.has(id) : undefined}
       >
         {id && <span className="side-fold" data-folded={folded.has(id) || undefined}><Icon name="chevron" size={9} /></span>}
-        {text}
+        {nm(text)}
       </div>
     );
   /** A section's rows, with their own scroll bar past the chosen number. */
@@ -1188,7 +1253,7 @@ export function Sidebar() {
         {collapsed ? <div className="side-divider" /> : (
           <div className="side-heading" aria-expanded={!folded.has("servers")} title={folded.has("servers") ? "Click to expand" : "Click to collapse"} onClick={() => toggleFold("servers")}>
             <span className="side-fold" data-folded={folded.has("servers") || undefined}><Icon name="chevron" size={9} /></span>
-            Servers
+            {nm("Servers")}
           </div>
         )}
         {(!folded.has("servers") || collapsed) && <div className="side-section">

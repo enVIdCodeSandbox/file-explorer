@@ -40,6 +40,27 @@ impl IndexSet {
         IndexSet { parts: self.parts.iter().filter(|p| roots.contains(&key(p))).cloned().collect() }
     }
 
+    /// A set that no longer knows anything under `path`: drives inside it go
+    /// away, and where it lies inside a drive the folder stays listed but its
+    /// contents are dropped. Returns the new set and how many entries went.
+    pub fn without_under(&self, path: &Path) -> (IndexSet, usize) {
+        let rule = path.to_string_lossy().into_owned();
+        let before = self.len();
+        let mut parts = Vec::new();
+        for p in &self.parts {
+            if crate::cachepolicy::is_under(Path::new(&key(p)), &rule) {
+                continue;
+            }
+            match p.covers(path).then(|| p.without_contents(path)).flatten() {
+                Some(trimmed) => parts.push(Arc::new(trimmed)),
+                None => parts.push(p.clone()),
+            }
+        }
+        let set = IndexSet { parts };
+        let gone = before.saturating_sub(set.len());
+        (set, gone)
+    }
+
     pub fn len(&self) -> usize {
         self.parts.iter().map(|p| p.len()).sum()
     }
@@ -93,6 +114,28 @@ impl IndexSet {
 mod tests {
     use super::*;
     use crate::index::{tests::sample_tree, ScanOptions};
+
+    #[test]
+    fn forgets_a_drive_or_just_a_folders_contents() {
+        let (a, b) = (sample_tree(), sample_tree());
+        let set = IndexSet::default().with_part(part(&a)).with_part(part(&b));
+        let total = set.len();
+        // A whole drive goes.
+        let (no_a, gone) = no_under(&set, a.path());
+        assert_eq!(no_a.parts().len(), 1);
+        assert_eq!(gone, total / 2);
+        // A folder inside a drive loses its contents but stays listed.
+        let (less, gone) = set.without_under(&b.path().join("docs"));
+        assert!(gone > 0);
+        assert!(less.covers(&b.path().join("docs")));
+        assert!(less.search(&Query::parse("report"), Some(b.path()), true, 50).len() < 3);
+        // Something nobody indexed changes nothing.
+        let (same, gone) = set.without_under(Path::new("/nowhere/at/all"));
+        assert_eq!((gone, same.len()), (0, total));
+    }
+    fn no_under(s: &IndexSet, p: &Path) -> (IndexSet, usize) {
+        s.without_under(p)
+    }
 
     fn part(d: &tempfile::TempDir) -> Arc<Index> {
         Arc::new(Index::scan(&[d.path().to_path_buf()], &ScanOptions::default()))

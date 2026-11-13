@@ -5,9 +5,11 @@
 //! exposes these functions as commands. See `docs/ARCHITECTURE.md`.
 
 pub mod archive;
+pub mod cachepolicy;
 pub mod browse;
 pub mod edit;
 pub mod details;
+pub mod driveio;
 pub mod drives;
 pub mod entry;
 pub mod error;
