@@ -152,8 +152,29 @@ mod imp {
 
     /// Ask the other program for the bytes of item `index` and save them to `target`.
     unsafe fn write_item(data: &IDataObject, contents: u32, index: i32, target: &Path) -> Result<()> {
-        let fe = format(contents, index, TYMED_ISTREAM.0 | TYMED_HGLOBAL.0);
-        let mut medium: STGMEDIUM = data.GetData(&fe).map_err(|e| fail("the other program would not give a file", e))?;
+        // Ask for one kind of storage at a time: most programs refuse a request that offers
+        // several at once ("Invalid FORMATETC"). A stream is best (it can be read in pieces),
+        // then memory. Some programs number their files from zero only when asked one by one.
+        let mut last = None;
+        let mut got: Option<STGMEDIUM> = None;
+        for tymed in [TYMED_ISTREAM.0, TYMED_HGLOBAL.0] {
+            for aspect_index in [index, index.max(0)] {
+                match data.GetData(&format(contents, aspect_index, tymed)) {
+                    Ok(m) => {
+                        got = Some(m);
+                        break;
+                    }
+                    Err(e) => last = Some(e),
+                }
+            }
+            if got.is_some() {
+                break;
+            }
+        }
+        let mut medium: STGMEDIUM = match got {
+            Some(m) => m,
+            None => return Err(fail("the other program would not give a file", last.expect("at least one attempt"))),
+        };
         let mut file = std::fs::File::create(target).map_err(|e| CoreError::io(target, e))?;
         let result: Result<()> = (|| {
             if medium.tymed == TYMED_ISTREAM.0 as u32 {

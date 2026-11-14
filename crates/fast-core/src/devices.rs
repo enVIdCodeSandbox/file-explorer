@@ -755,6 +755,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // the folder names contain ':', which Windows forbids
     fn reads_a_sysfs_tree() {
         let d = tempfile::tempdir().unwrap();
         let w = |p: &str, v: &str| {
@@ -796,6 +797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // the folder names contain ':', which Windows forbids
     fn finds_mounted_and_mountable_phones() {
         let d = tempfile::tempdir().unwrap();
         fs::create_dir(d.path().join("mtp:host=Google_Pixel_8_ABC12345")).unwrap();

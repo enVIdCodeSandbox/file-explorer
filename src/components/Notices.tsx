@@ -2,22 +2,82 @@
 // fade on their own, or a small bell that opens the list. Configured in
 // Settings > Notifications.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { adv } from "../settings/advanced";
 import { useStore } from "../store";
-import type { NoticeKind } from "../util/notices";
+import type { Notice, NoticeKind } from "../util/notices";
 import { Icon } from "./Icons";
 
 const ICON: Record<NoticeKind, string> = { copy: "copy", cut: "cut", move: "forward", delete: "trash", rename: "rename", create: "plus", undo: "undo", info: "info", error: "close" };
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
+
+const SHOWN_NAMES = 8;
+
+/** One notice. When it has details, it opens into the same layout a transfer's card uses. */
+function NoticeRow({ n, popup }: { n: Notice; popup?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const { dismissNotice } = useStore.getState();
+  const detailed = !!n.facts?.length;
+  return (
+    <div className={`notice-block${popup ? " notice-popup" : ""}`} data-kind={n.kind} data-open={open || undefined}>
+      <div className="notice" data-kind={n.kind} role={popup ? "status" : undefined}>
+        <Icon name={ICON[n.kind]} size={14} />
+        <div className="grow">
+          <div>{n.title}</div>
+          {n.detail && <div className="muted">{n.detail}</div>}
+        </div>
+        {!popup && <span className="muted">{clock(n.at)}</span>}
+        {detailed && (
+          <button className="icon-button" aria-label={open ? "Hide details" : "Show details"} aria-expanded={open} title={open ? "Hide details" : "Show details"} onClick={() => setOpen(!open)}>
+            <Icon name={open ? "expand" : "chevron"} size={11} />
+          </button>
+        )}
+        {popup && (
+          <button className="icon-button" aria-label="Hide" title="Hide" onClick={() => dismissNotice(n.id)}>
+            <Icon name="close" size={11} />
+          </button>
+        )}
+      </div>
+      {open && detailed && (
+        <div className="transfer-detail notice-detail">
+          <div className="percent">
+            <strong>{n.kind === "cut" || n.kind === "copy" ? (n.facts!.find(([k]) => k === "Status")?.[1] ?? "Done") : n.kind === "error" ? "Failed" : "100% complete"}</strong>
+          </div>
+          <div className="meter" role="progressbar" aria-valuenow={n.kind === "cut" || n.kind === "copy" ? 0 : 100} aria-valuemin={0} aria-valuemax={100}>
+            <div className="meter-fill" style={{ width: n.kind === "cut" || n.kind === "copy" ? "0%" : "100%" }} />
+          </div>
+          <dl className="details-list transfer-facts">
+            {n.facts!.map(([k, v]) => (
+              <span key={k} style={{ display: "contents" }}>
+                <dt>{k}</dt>
+                <dd className="path">{v}</dd>
+              </span>
+            ))}
+            <dt>When</dt>
+            <dd>{clock(n.at)}</dd>
+          </dl>
+          {!!n.names?.length && (
+            <ul className="notice-names">
+              {n.names.slice(0, SHOWN_NAMES).map((name, i) => (
+                <li key={i} className="path">{name}</li>
+              ))}
+              {n.names.length > SHOWN_NAMES && <li className="muted">and {n.names.length - SHOWN_NAMES} more</li>}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Notices() {
   const settings = useStore((s) => s.settings)!;
   const notices = useStore((s) => s.notices);
   const open = useStore((s) => s.noticesOpen);
   const unread = useStore((s) => s.unreadNotices);
-  const { dismissNotice, clearNotices } = useStore.getState();
+  const { clearNotices } = useStore.getState();
   const box = useRef<HTMLDivElement>(null);
 
   const enabled = adv<boolean>(settings, "notify.enabled");
@@ -56,30 +116,11 @@ export function Notices() {
           </div>
           {notices.length === 0 && <p className="muted">Nothing yet. Copy, move, delete and rename show up here.</p>}
           {[...notices].reverse().map((n) => (
-            <div key={n.id} className="notice" data-kind={n.kind}>
-              <Icon name={ICON[n.kind]} size={14} />
-              <div className="grow">
-                <div>{n.title}</div>
-                {n.detail && <div className="muted">{n.detail}</div>}
-              </div>
-              <span className="muted">{clock(n.at)}</span>
-            </div>
+            <NoticeRow key={n.id} n={n} />
           ))}
         </div>
       )}
-      {!open &&
-        popups.map((n) => (
-          <div key={n.id} className="notice notice-popup" data-kind={n.kind} role="status">
-            <Icon name={ICON[n.kind]} size={14} />
-            <div className="grow">
-              <div>{n.title}</div>
-              {n.detail && <div className="muted">{n.detail}</div>}
-            </div>
-            <button className="icon-button" aria-label="Hide" title="Hide" onClick={() => dismissNotice(n.id)}>
-              <Icon name="close" size={11} />
-            </button>
-          </div>
-        ))}
+      {!open && popups.map((n) => <NoticeRow key={n.id} n={n} popup />)}
       {showBell && (
         <button
           className="notice-bell"

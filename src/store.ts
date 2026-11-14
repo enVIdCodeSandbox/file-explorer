@@ -24,10 +24,10 @@ import {
   type TransferOp,
   type TransferSpec,
 } from "./api";
-import { describeItems, transferNotice, type Notice, type NoticeKind } from "./util/notices";
+import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
-import { formatDate, formatSize, steadyFraction } from "./util/format";
+import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
 import { HOME, THIS_PC, baseName, insideArchive, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
@@ -276,7 +276,7 @@ interface State {
   pushUndo: (a: UndoAction) => void;
   startTransfer: (sources: string[], destDir: string, op: TransferOp) => Promise<void>;
   showToast: (message: string) => void;
-  notify: (kind: NoticeKind, title: string, detail?: string) => void;
+  notify: (kind: NoticeKind, title: string, detail?: string, more?: { facts?: [string, string][]; names?: string[] }) => void;
   dismissNotice: (id: number, forget?: boolean) => void;
   clearNotices: () => void;
 }
@@ -748,7 +748,7 @@ export const useStore = create<State>((set, get) => ({
           .catch(() => {});
       } else void api.clipboardSetFiles(paths).catch(() => {});
     }
-    if (clipboard && clipboard.paths.length) get().notify(clipboard.op === "move" ? "cut" : "copy", `${clipboard.op === "move" ? "Cut" : "Copied"} ${describeItems(clipboard.paths)}`, "Ready to paste");
+    if (clipboard && clipboard.paths.length) get().notify(clipboard.op === "move" ? "cut" : "copy", `${clipboard.op === "move" ? "Cut" : "Copied"} ${describeItems(clipboard.paths)}`, "Ready to paste", itemFacts(clipboard.op === "move" ? "Cut (moves when pasted)" : "Copy", clipboard.paths, [["Status", "Ready to paste"]]));
   },
   pasteInto: async (dest) => {
     const ours = get().clipboard;
@@ -813,7 +813,12 @@ export const useStore = create<State>((set, get) => ({
       if (detachedView) return;
       if (spec) {
         const t = transferNotice(spec.op === "move" ? "move" : "copy", spec.sources, spec.destDir);
-        get().notify(spec.op === "move" ? "move" : "copy", t.title, t.detail);
+        get().notify(spec.op === "move" ? "move" : "copy", t.title, t.detail, itemFacts(spec.op === "move" ? "Move" : "Copy", spec.sources, [
+          ["To", spec.destDir],
+          ["Files", String(p.filesDone)],
+          ["Elapsed", formatDuration(p.elapsedSecs)],
+          ...(p.skipped ? ([["Skipped", String(p.skipped)]] as [string, string][]) : []),
+        ]));
       } else get().notify("info", `Finished ${p.filesDone} item${p.filesDone === 1 ? "" : "s"}`);
     }
     if (p.phase === "running" && !prev && adv<boolean>(get().settings, "transfers.openWindow")) set({ transfersOpen: true });
@@ -840,7 +845,16 @@ export const useStore = create<State>((set, get) => ({
       const trashed = trashedBy.get(p.id);
       trashedBy.delete(p.id);
       if (p.phase === "done" && p.errorCount === 0 && trashed) get().pushUndo({ kind: "trash", paths: trashed });
-      if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`);
+      if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`, {
+        facts: [
+          ["Action", "Delete"],
+          ["Items", `${p.itemsDone} of ${p.itemsTotal}`],
+          ["Method", p.permanent ? "Permanent delete" : `Moved ${where}`],
+          ["Elapsed", formatDuration(p.elapsedSecs)],
+          ...(p.errorCount ? ([["Could not delete", String(p.errorCount)]] as [string, string][]) : []),
+        ],
+        names: trashed ? trashed.map((t) => baseName(t)) : p.firstName ? [p.firstName] : undefined,
+      });
       else get().notify("info", `Delete stopped`, `${p.itemsDone} of ${p.itemsTotal} done`);
     }
   },
@@ -970,13 +984,13 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  notify: (kind, title, detail) => {
+  notify: (kind, title, detail, more) => {
     const settings = get().settings;
     if (!settings || !adv<boolean>(settings, "notify.enabled")) return;
     const id = nextNoticeId++;
     const bell = adv<string>(settings, "notify.mode") === "bell";
     const keep = Math.max(5, adv<number>(settings, "notify.keep"));
-    const notice: Notice = { id, kind, title, detail, at: Date.now(), popup: !bell };
+    const notice: Notice = { id, kind, title, detail, at: Date.now(), popup: !bell, ...more };
     set({
       notices: [...get().notices, notice].slice(-keep),
       unreadNotices: get().noticesOpen ? 0 : get().unreadNotices + 1,
@@ -1302,7 +1316,7 @@ export async function renamePath(path: string, newName: string): Promise<string 
   if (insideArchive(path)) {
     try {
       const made = await api.archiveRename(path, newName);
-      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`);
+      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`, { facts: [["Action", "Rename"], ["From", baseName(path)], ["To", baseName(made)], ["Location", parentPath(made) ?? ""]] });
       refreshArchiveTabs();
       return made;
     } catch (e) {
@@ -1313,7 +1327,7 @@ export async function renamePath(path: string, newName: string): Promise<string 
   if (isRemote(path)) {
     try {
       const made = await api.remoteRename(path, newName);
-      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`);
+      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`, { facts: [["Action", "Rename"], ["From", baseName(path)], ["To", baseName(made)], ["Location", parentPath(made) ?? ""]] });
       refreshRemoteTabs();
       return made;
     } catch (e) {
@@ -1332,7 +1346,7 @@ export async function renamePath(path: string, newName: string): Promise<string 
     } else made = await api.renameItem(path, newName);
     if (made) {
       pushUndo({ kind: "rename", from: path, to: made });
-      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`);
+      useStore.getState().notify("rename", `Renamed "${baseName(path)}"`, `to "${baseName(made)}"`, { facts: [["Action", "Rename"], ["From", baseName(path)], ["To", baseName(made)], ["Location", parentPath(made) ?? ""]] });
     }
     return made;
   } catch (e) {
@@ -1346,7 +1360,7 @@ export async function createPath(dir: string, name: string, folder: boolean): Pr
   if (insideArchive(dir)) {
     try {
       const made = await api.archiveCreate(dir, name, folder);
-      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`);
+      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`, undefined, { facts: [["Action", "Create"], ["Name", baseName(made)], ["Location", parentPath(made) ?? ""]] });
       refreshArchiveTabs();
       return made;
     } catch (e) {
@@ -1361,7 +1375,7 @@ export async function createPath(dir: string, name: string, folder: boolean): Pr
     }
     try {
       const made = await api.remoteMkdir(dir, name);
-      useStore.getState().notify("create", `Created folder "${baseName(made)}"`);
+      useStore.getState().notify("create", `Created folder "${baseName(made)}"`, undefined, { facts: [["Action", "Create"], ["Name", baseName(made)], ["Location", parentPath(made) ?? ""]] });
       refreshRemoteTabs();
       return made;
     } catch (e) {
@@ -1380,7 +1394,7 @@ export async function createPath(dir: string, name: string, folder: boolean): Pr
     } else made = await api.createItem(dir, name, folder);
     if (made) {
       pushUndo({ kind: "create", path: made });
-      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`);
+      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`, undefined, { facts: [["Action", "Create"], ["Name", baseName(made)], ["Location", parentPath(made) ?? ""]] });
     }
     return made;
   } catch (e) {
