@@ -935,39 +935,67 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
     }
 }
 
-/// Recursively collect files and directories under `src`.
-fn scan(
-    src: &Path,
-    dst: &Path,
-    items: &mut Vec<Item>,
-    dirs: &mut Vec<PathBuf>,
-    moved_dirs: &mut Vec<PathBuf>,
-    shared: &Shared,
-) {
+/// What a folder tree holds, in the order a plain walk would find it.
+#[derive(Default)]
+struct Scanned {
+    items: Vec<Item>,
+    dirs: Vec<PathBuf>,
+    moved_dirs: Vec<PathBuf>,
+}
+
+/// Threads used to walk folders. Listing a folder is mostly waiting (for the disk, and on a
+/// share for the network), so more than one folder at a time is a large win on both.
+const SCAN_THREADS: usize = 8;
+
+/// Recursively collect files and directories under `src`. Folders are listed in parallel;
+/// the result is in the same order as a sequential walk (a folder, its files, then each
+/// subfolder in turn), which keeps files that sit together on disk together in the queue.
+fn scan(src: &Path, dst: &Path, items: &mut Vec<Item>, dirs: &mut Vec<PathBuf>, moved_dirs: &mut Vec<PathBuf>, shared: &Shared) {
+    let walk = || scan_dir(src, dst, shared);
+    let found = match rayon::ThreadPoolBuilder::new().num_threads(SCAN_THREADS).thread_name(|i| format!("scan-{i}")).build() {
+        Ok(pool) => pool.install(walk),
+        Err(_) => walk(),
+    };
+    items.extend(found.items);
+    dirs.extend(found.dirs);
+    moved_dirs.extend(found.moved_dirs);
+}
+
+fn scan_dir(src: &Path, dst: &Path, shared: &Shared) -> Scanned {
+    use rayon::prelude::*;
+    let mut out = Scanned::default();
     if shared.cancelled() {
-        return;
+        return out;
     }
-    dirs.push(dst.to_path_buf());
-    moved_dirs.push(src.to_path_buf());
+    out.dirs.push(dst.to_path_buf());
+    out.moved_dirs.push(src.to_path_buf());
     let rd = match fs::read_dir(src) {
         Ok(rd) => rd,
         Err(e) => {
             shared.error(src, &e);
-            return;
+            return out;
         }
     };
+    let mut subdirs: Vec<(PathBuf, PathBuf)> = Vec::new();
     for e in rd.filter_map(|e| e.ok()) {
         let path = e.path();
         let target = dst.join(e.file_name());
         match e.file_type() {
-            Ok(ft) if ft.is_dir() => scan(&path, &target, items, dirs, moved_dirs, shared),
+            Ok(ft) if ft.is_dir() => subdirs.push((path, target)),
             Ok(_) => {
                 let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-                items.push(Item { src: path, dst: target, size });
+                out.items.push(Item { src: path, dst: target, size });
             }
             Err(err) => shared.error(&path, &err),
         }
     }
+    let below: Vec<Scanned> = subdirs.par_iter().map(|(s, d)| scan_dir(s, d, shared)).collect();
+    for b in below {
+        out.items.extend(b.items);
+        out.dirs.extend(b.dirs);
+        out.moved_dirs.extend(b.moved_dirs);
+    }
+    out
 }
 
 fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
@@ -1047,18 +1075,15 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         // slower to fill, so it is left out there.
         #[cfg(not(unix))]
         let _ = output.set_len(size);
-        let mut buf: Vec<u8> = Vec::new();
         let mut chunk_start = Instant::now();
         // Linux: let the kernel move each chunk without bringing it into this
         // program (measured about 1.6x faster than read and write here).
-        #[cfg(target_os = "linux")]
-        let mut kernel = true;
         loop {
             if !shared.checkpoint() {
                 return Ok(false);
             }
             #[cfg(target_os = "linux")]
-            if kernel {
+            {
                 match kernel_copy_chunk(&input, &output, plan.buffer_bytes) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -1070,21 +1095,15 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
                     }
                     // Not possible between these two files (another filesystem,
                     // an old kernel): carry on from here with plain reads.
-                    Err(_) => kernel = false,
+                    Err(_) => {}
                 }
             }
-            if buf.is_empty() {
-                buf = vec![0u8; plan.buffer_bytes];
+            // Everything that is not a kernel-side copy: read ahead on a second thread while
+            // this one writes, so the source and the destination are busy at the same time.
+            match pipelined_copy(&mut input, &mut output, plan.buffer_bytes, shared, &mut chunk_start)? {
+                true => break,
+                false => return Ok(false),
             }
-            let n = input.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            output.write_all(&buf[..n])?;
-            shared.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
-            let now = Instant::now();
-            shared.model.lock().observe_chunk(n as u64, now.duration_since(chunk_start).as_secs_f64());
-            chunk_start = now;
         }
         // The source may have shrunk while copying.
         let written = output.stream_position_or(size);
@@ -1099,6 +1118,80 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         let _ = filetime::set_file_times(dst, atime, mtime);
     }
     Ok(true)
+}
+
+/// Copy the rest of `input` to `output` with reading and writing overlapped: a helper thread
+/// reads the next block while this one writes the last. Returns Ok(false) if cancelled.
+fn pipelined_copy(input: &mut fs::File, output: &mut fs::File, block: usize, shared: &Shared, chunk_start: &mut Instant) -> io::Result<bool> {
+    // Three blocks circulate: one being read, one being written, one waiting.
+    const IN_FLIGHT: usize = 3;
+    let (full_tx, full_rx) = chan::bounded::<io::Result<Vec<u8>>>(IN_FLIGHT);
+    let (free_tx, free_rx) = chan::bounded::<Vec<u8>>(IN_FLIGHT);
+    for _ in 0..IN_FLIGHT {
+        let _ = free_tx.send(vec![0u8; block]);
+    }
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            // Ends when the writer lets go of the channels (done, failed or cancelled).
+            while let Ok(mut buf) = free_rx.recv() {
+                buf.resize(block, 0);
+                match input.read(&mut buf) {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        buf.truncate(n);
+                        if full_tx.send(Ok(buf)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                        // Not a failure: read again into the same block.
+                        loop {
+                            match input.read(&mut buf) {
+                                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                                Ok(0) => return,
+                                Ok(n) => {
+                                    buf.truncate(n);
+                                    if full_tx.send(Ok(buf)).is_err() {
+                                        return;
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    let _ = full_tx.send(Err(e));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = full_tx.send(Err(e));
+                        return;
+                    }
+                }
+            }
+        });
+        let result = (|| -> io::Result<bool> {
+            loop {
+                if !shared.checkpoint() {
+                    return Ok(false);
+                }
+                // The reader hanging up with nothing queued means the input is finished.
+                let Ok(next) = full_rx.recv() else { return Ok(true) };
+                let buf = next?;
+                output.write_all(&buf)?;
+                shared.bytes_done.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                let now = Instant::now();
+                shared.model.lock().observe_chunk(buf.len() as u64, now.duration_since(*chunk_start).as_secs_f64());
+                *chunk_start = now;
+                let _ = free_tx.send(buf);
+            }
+        })();
+        // Let go of both channels before the scope waits for the reader, or a reader that is
+        // waiting for a free block would never end.
+        drop(full_rx);
+        drop(free_tx);
+        result
+    })
 }
 
 /// Copy up to `len` bytes from where `input` is to where `output` is, inside the kernel.
@@ -1183,6 +1276,69 @@ mod tests {
         h.wait();
         let p = last.lock().unwrap().clone().unwrap();
         p
+    }
+
+    fn test_shared() -> Shared {
+        Shared {
+            control: AtomicU8::new(ST_RUN),
+            files_done: AtomicU64::new(0),
+            bytes_done: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            active: AtomicUsize::new(0),
+            clone_ok: AtomicBool::new(true),
+            errors: Mutex::new(Vec::new()),
+            current: Mutex::new(String::new()),
+            model: Mutex::new(EtaModel::new(None)),
+            ask_gate: Mutex::new(()),
+            asker: Mutex::new(Asker::default()),
+        }
+    }
+
+    #[test]
+    fn overlapped_copy_is_exact_for_odd_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        for len in [0usize, 1, 4095, 4096, 4097, 3 * 65536, 3 * 65536 + 17, 1_000_003] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+            fs::write(&a, &data).unwrap();
+            let shared = test_shared();
+            let mut input = fs::File::open(&a).unwrap();
+            let mut output = fs::File::create(&b).unwrap();
+            let mut t = Instant::now();
+            assert!(pipelined_copy(&mut input, &mut output, 65536, &shared, &mut t).unwrap());
+            drop(output);
+            assert_eq!(fs::read(&b).unwrap(), data, "length {len}");
+            assert_eq!(shared.bytes_done.load(Ordering::Relaxed), len as u64);
+        }
+    }
+
+    #[test]
+    fn overlapped_copy_stops_when_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        fs::write(&a, vec![1u8; 2_000_000]).unwrap();
+        let shared = test_shared();
+        shared.control.store(ST_CANCEL, Ordering::Relaxed);
+        let mut input = fs::File::open(&a).unwrap();
+        let mut output = fs::File::create(dir.path().join("b")).unwrap();
+        let mut t = Instant::now();
+        // Returns instead of hanging on its reader thread.
+        assert!(!pipelined_copy(&mut input, &mut output, 65536, &shared, &mut t).unwrap());
+    }
+
+    #[test]
+    fn scan_finds_everything_in_walk_order() {
+        let src = tempfile::tempdir().unwrap();
+        make_tree(src.path());
+        let shared = test_shared();
+        let (mut items, mut dirs, mut moved) = (Vec::new(), Vec::new(), Vec::new());
+        scan(src.path(), Path::new("/dst"), &mut items, &mut dirs, &mut moved, &shared);
+        assert_eq!(items.len(), 40 + 1 + 1);
+        assert_eq!(dirs.len(), 4); // root, a, a/b, empty
+        assert_eq!(dirs[0], Path::new("/dst"));
+        assert_eq!(moved[0], src.path());
+        assert!(items.iter().all(|i| i.dst.starts_with("/dst")));
     }
 
     fn make_tree(root: &Path) {

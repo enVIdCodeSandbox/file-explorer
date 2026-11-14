@@ -145,7 +145,7 @@ fn prefetch_now(st: &Shared, paths: Vec<String>) {
     let show_hidden = st.settings.read().general.show_hidden;
     for path in paths.into_iter().take(8) {
         let p = PathBuf::from(path);
-        if st.listings.lock().contains(&p) || cache_off(st, &p) {
+        if st.listings.lock().contains(&p) || cache_off(st, &p) || on_network(st, &p) {
             continue;
         }
         if let Ok(entries) = entry::list_dir(&p, show_hidden) {
@@ -180,6 +180,8 @@ pub async fn record_visit(state: State<'_, Shared>, from: Option<String>, to: St
             let _ = st.predictor.lock().save(&st.paths.predictor);
         }
         if st.budget.read().prefetch {
+            // The folder just opened is being listed right now; warm the next ones after it.
+            std::thread::sleep(std::time::Duration::from_millis(300));
             prefetch_now(&st, predictions.clone());
         }
         Ok(predictions)
@@ -269,7 +271,18 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
         *slot = cancel.clone();
     }
     std::thread::spawn(move || {
-        let threads = st.budget.read().index_threads.clamp(1, 4);
+        // The listing and the first thumbnails come first: give them a head start, and do
+        // not walk shares at all.
+        for _ in 0..12 {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if on_network(&st, Path::new(&dir)) {
+            return;
+        }
+        let threads = st.budget.read().index_threads.clamp(1, 2);
         let save = |st: &crate::state::AppState| {
             let mut c = st.folder_sizes.lock();
             c.trim(policy.max_entries.max(100));
@@ -1588,6 +1601,10 @@ pub fn start_drive_watch(app: AppHandle, st: Shared) {
     let _ = std::thread::Builder::new().name("drive-watch".into()).spawn(move || {
         let mut last_sig = drives::signature();
         let mut last_full = Instant::now();
+        // Looking at what is plugged in costs far more than checking drive letters, so it runs
+        // on every third tick; a drive appearing is still noticed at once.
+        let mut tick: u32 = 0;
+        let mut dev_sig: u64 = 0;
         loop {
             let (on, poll, refresh) = drive_watch_settings(&st);
             std::thread::sleep(std::time::Duration::from_millis(if on { poll } else { 1000 }));
@@ -1595,12 +1612,19 @@ pub fn start_drive_watch(app: AppHandle, st: Shared) {
                 continue;
             }
             let (show_dev, show_other) = device_settings(&st);
+            if show_dev && tick % 3 == 0 {
+                use std::hash::Hasher;
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                fast_core::devices::signature(&mut h);
+                dev_sig = h.finish();
+            }
+            tick = tick.wrapping_add(1);
             let sig = {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 drives::signature().hash(&mut h);
                 if show_dev {
-                    fast_core::devices::signature(&mut h);
+                    dev_sig.hash(&mut h);
                 }
                 show_dev.hash(&mut h);
                 show_other.hash(&mut h);
@@ -1774,6 +1798,20 @@ fn cache_rules(st: &crate::state::AppState) -> Vec<String> {
 }
 
 /// Is saving things about this path switched off?
+/// Is this on a network share? Reading those is slow and can stall for seconds, so nothing is
+/// done on them speculatively.
+fn on_network(st: &crate::state::AppState, path: &Path) -> bool {
+    let text = path.to_string_lossy().to_lowercase();
+    if text.starts_with("\\\\") {
+        return true;
+    }
+    st.drives.read().iter().any(|d| {
+        let mount = d.mount.to_lowercase();
+        let mount = mount.trim_end_matches(['/', '\\']);
+        d.media == fast_core::drives::Media::Network && !mount.is_empty() && text.starts_with(mount)
+    })
+}
+
 fn cache_off(st: &crate::state::AppState, path: &Path) -> bool {
     let rules = cache_rules(st);
     !rules.is_empty() && fast_core::cachepolicy::excluded(&rules, path)

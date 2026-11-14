@@ -94,6 +94,7 @@ mod imp {
     }
 
     /// GNOME's `x-special/gnome-copied-files`: the first line is `copy` or `cut`, then one URI per line.
+    #[cfg(any(target_os = "linux", test))]
     pub fn parse_gnome_copied(text: &str) -> (bool, Vec<String>) {
         let mut lines = text.lines();
         let first = lines.next().unwrap_or("").trim().to_lowercase();
@@ -107,6 +108,7 @@ mod imp {
     }
 
     /// `text/uri-list`: one URI per line, `#` starts a comment.
+    #[cfg(any(target_os = "linux", test))]
     pub fn parse_uri_list(text: &str) -> Vec<String> {
         text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
     }

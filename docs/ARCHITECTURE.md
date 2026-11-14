@@ -41,7 +41,7 @@ interface, only the top two layers are replaced.
 | `index.rs` | Compact file index: 40-byte nodes in depth-first order plus name arenas. Parallel scan, save, load |
 | `search.rs` | Query parser and search. One SIMD substring pass over the name arena, then filters and ranking |
 | `transfer/strategy.rs` | Picks a transfer plan from job shape and device types |
-| `transfer/engine.rs` | Copy/move engine: worker lanes, pause, cancel, conflicts, progress |
+| `transfer/engine.rs` | Copy/move engine: parallel folder scan, worker lanes, kernel-side copy on Linux, overlapped read/write for big files elsewhere, pause, cancel, conflicts, progress |
 | `transfer/eta.rs` | Time estimate model |
 | `details.rs` | File properties, folder statistics, SHA-256 |
 | `treemap.rs` | Size tree and largest files for the disk usage view |

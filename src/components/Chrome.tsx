@@ -1,6 +1,7 @@
 // Window chrome: the title bar (tabs and window buttons in one row), the
 // address row, the command bar and the sidebar.
 
+import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Drive, type SavedServer, type TerminalMode } from "../api";
@@ -741,7 +742,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
   const folder = loc.kind === "folder" ? loc.path : null;
   const inFolder = !!folder;
   const hasSel = selection.length > 0;
-  const level = settings.appearance.viewLevel;
+  const folderView = useStore((s) => s.folderView);
+  const level = viewLevelOf(settings, folderView);
 
   const below = (e: React.MouseEvent, items: MenuItem[]) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();

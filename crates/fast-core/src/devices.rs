@@ -113,7 +113,11 @@ pub fn signature(h: &mut impl std::hash::Hasher) {
     }
     #[cfg(windows)]
     {
-        list_all().iter().map(|d| (&d.id, &d.name)).collect::<Vec<_>>().hash(h);
+        // Only the USB bus, not the shell's whole "This PC" listing: that walk is slow, and
+        // anything it alone would notice is picked up by the periodic full refresh.
+        let mut keys: Vec<String> = crate::remote::mtp::found_devices().into_iter().map(|f| f.key).collect();
+        keys.sort();
+        keys.hash(h);
     }
     let _ = h;
 }
@@ -124,6 +128,39 @@ fn list_all() -> Vec<Device> {
     let mounts = gvfs_dir().map(|d| gvfs_mounts(&d)).unwrap_or_default();
     let roots = gio_roots();
     build_linux(&usb, &mounts, &roots)
+}
+
+/// Which of Windows' own entries for devices (`(name, shell path)`) is the same phone as each
+/// MTP device found. By serial number, then by USB vendor and product ids, then, when exactly
+/// as many are left over on both sides, one to one. An entry that matches nothing stays on its
+/// own and opens in File Explorer.
+#[cfg(any(windows, test))]
+pub fn pair_with_shell(found: &[crate::remote::mtp::Found], shell: &[(String, String)]) -> Vec<Option<usize>> {
+    let mut taken = vec![false; shell.len()];
+    let mut out: Vec<Option<usize>> = vec![None; found.len()];
+    let lower: Vec<String> = shell.iter().map(|(_, p)| p.to_lowercase()).collect();
+    let claim = |out: &mut Vec<Option<usize>>, taken: &mut Vec<bool>, test: &dyn Fn(&crate::remote::mtp::Found, &str, &str) -> bool| {
+        for (fi, f) in found.iter().enumerate() {
+            if out[fi].is_some() {
+                continue;
+            }
+            if let Some(si) = (0..shell.len()).find(|&si| !taken[si] && test(f, &lower[si], &shell[si].0)) {
+                taken[si] = true;
+                out[fi] = Some(si);
+            }
+        }
+    };
+    claim(&mut out, &mut taken, &|f, parsing, _| !f.serial.is_empty() && parsing.contains(&f.serial.to_lowercase()));
+    claim(&mut out, &mut taken, &|f, parsing, _| parsing.contains(&format!("vid_{:04x}&pid_{:04x}", f.vendor_id, f.product_id)));
+    claim(&mut out, &mut taken, &|f, _, name| name.eq_ignore_ascii_case(&f.name));
+    let left_found: Vec<usize> = (0..found.len()).filter(|&i| out[i].is_none()).collect();
+    let left_shell: Vec<usize> = (0..shell.len()).filter(|&i| !taken[i]).collect();
+    if left_found.len() == left_shell.len() {
+        for (f, s) in left_found.into_iter().zip(left_shell) {
+            out[f] = Some(s);
+        }
+    }
+    out
 }
 
 /// Phones the app can browse itself (over MTP) get their address; the helper app stays as a
@@ -582,14 +619,15 @@ mod win {
     pub fn list() -> Vec<Device> {
         // The shell part joins a COM apartment of its own, so it gets its own thread.
         let shell = std::thread::scope(|s| s.spawn(shell_items).join().unwrap_or_default());
+        let found = crate::remote::mtp::found_devices();
+        let pairs = super::pair_with_shell(&found, &shell);
         let mut out = Vec::new();
         let mut used = vec![false; shell.len()];
-        for f in crate::remote::mtp::found_devices() {
-            // Windows names the phone ("Chau's S24+") and puts its serial number in the shell path.
-            let at = (!f.serial.is_empty()).then(|| shell.iter().position(|(_, parsing)| parsing.to_lowercase().contains(&f.serial.to_lowercase()))).flatten();
+        for (f, at) in found.into_iter().zip(pairs) {
             if let Some(i) = at {
                 used[i] = true;
             }
+            // Windows' own name for the phone ("Chau's S24+") is nicer than the USB one.
             let name = at.map(|i| shell[i].0.clone()).unwrap_or_else(|| f.name.clone());
             out.push(Device {
                 id: f.key.clone(),
@@ -682,13 +720,31 @@ mod tests {
     }
 
     #[test]
+    fn windows_entries_are_paired_with_mtp_phones() {
+        use crate::remote::mtp::Found;
+        let f = |name: &str, serial: &str, v: u16, p: u16| Found { key: name.into(), name: name.into(), maker: String::new(), serial: serial.into(), vendor_id: v, product_id: p };
+        let sh = |n: &str, p: &str| (n.to_string(), p.to_string());
+        // By serial number.
+        let found = vec![f("SAMSUNG_Android", "R5CW1234", 0x04e8, 0x6860)];
+        assert_eq!(pair_with_shell(&found, &[sh("Other", "::{x}\\\\?\\usb#vid_1111&pid_2222#abc#{g}"), sh("Chau's S24+", "::{x}\\\\?\\usb#vid_04e8&pid_6860#r5cw1234#{g}")]), [Some(1)]);
+        // By vendor and product when the serial is not in the path.
+        assert_eq!(pair_with_shell(&found, &[sh("Chau's S24+", "::{x}\\\\?\\usb#vid_04e8&pid_6860#6&1&0#{g}")]), [Some(0)]);
+        // The one phone and the one entry are the same even when nothing in the path says so.
+        assert_eq!(pair_with_shell(&found, &[sh("Chau's S24+", "::{x}\\wpd-something")]), [Some(0)]);
+        // Two phones, two entries, no way to tell: they are left apart rather than guessed.
+        let two = vec![f("A", "", 1, 1), f("B", "", 2, 2)];
+        assert_eq!(pair_with_shell(&two, &[sh("Phone", "x")]), [None, None]);
+        assert_eq!(pair_with_shell(&[], &[sh("Phone", "x")]), Vec::<Option<usize>>::new());
+    }
+
+    #[test]
     fn mtp_phones_are_matched_to_the_system_listing() {
         use crate::remote::mtp::Found;
         let mk = |id: &str, name: &str, kind| Device { id: id.into(), name: name.into(), maker: String::new(), kind, path: None, connectable: false, open: Some("OpenMTP".into()), note: String::new() };
         let mut list = vec![mk("usb:0x14100000:R5CW1234", "SAMSUNG_Android", DeviceKind::Phone), mk("usb:0x1:", "Keyboard", DeviceKind::Input)];
         let found = vec![
-            Found { key: "aaaa".into(), name: "SAMSUNG_Android".into(), maker: "SAMSUNG".into(), serial: "r5cw1234".into() },
-            Found { key: "bbbb".into(), name: "Pixel 8".into(), maker: "Google".into(), serial: String::new() },
+            Found { key: "aaaa".into(), name: "SAMSUNG_Android".into(), maker: "SAMSUNG".into(), serial: "r5cw1234".into(), vendor_id: 0x04e8, product_id: 0x6860 },
+            Found { key: "bbbb".into(), name: "Pixel 8".into(), maker: "Google".into(), serial: String::new(), vendor_id: 0x18d1, product_id: 0x4ee1 },
         ];
         attach_mtp(&mut list, &found);
         assert_eq!(list.len(), 3);

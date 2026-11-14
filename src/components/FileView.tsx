@@ -2,6 +2,7 @@
 // rows on screen (plus a small overscan) exist in the DOM, so a folder with
 // 100,000 files scrolls as smoothly as one with ten.
 
+import { viewLevelOf } from "../util/viewLevel";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, on, type FileEntry, type FolderSize, type Listing } from "../api";
@@ -68,7 +69,8 @@ export function FileView({ path }: { path: string }) {
   const { navigate, newTab, setSelection, setClipboard, startTransfer, pasteInto, togglePin, addRecent, showToast, setSort, setViewLevel } =
     useStore.getState();
 
-  const level = VIEW_LEVELS[Math.max(0, Math.min(VIEW_LEVELS.length - 1, settings.appearance.viewLevel))];
+  const folderView = useStore((s) => s.folderView);
+  const level = VIEW_LEVELS[Math.max(0, Math.min(VIEW_LEVELS.length - 1, viewLevelOf(settings, folderView)))];
   const thumbPx = ICON_PX[level] ?? settings.performance.thumbnailSize;
   const tileLayout = layoutFor(level, thumbPx);
   const details = level === "details";
@@ -223,7 +225,8 @@ export function FileView({ path }: { path: string }) {
       while (Math.abs(wheelDelta.current) >= 60) {
         const dir = wheelDelta.current < 0 ? 1 : -1; // scroll up = bigger icons
         wheelDelta.current += dir * 60;
-        const lvl = useStore.getState().settings?.appearance.viewLevel ?? 0;
+        const st = useStore.getState();
+        const lvl = viewLevelOf(st.settings, st.folderView);
         setViewLevel(lvl + dir);
       }
     };

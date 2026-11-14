@@ -73,6 +73,8 @@ pub struct Found {
     pub name: String,
     pub maker: String,
     pub serial: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
 }
 
 fn identity(vendor: u16, product: u16, serial: &Option<String>, location: u64) -> String {
@@ -93,6 +95,8 @@ pub fn found_devices() -> Vec<Found> {
             name: d.product.clone().unwrap_or_else(|| "Portable device".into()),
             maker: d.manufacturer.clone().unwrap_or_default(),
             serial: d.serial_number.clone().unwrap_or_default(),
+            vendor_id: d.vendor_id,
+            product_id: d.product_id,
         })
         .collect()
 }

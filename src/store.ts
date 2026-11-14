@@ -170,6 +170,8 @@ interface State {
   insertTabs: (locations: string[], index?: number) => void;
   sort: { key: SortKey; asc: boolean };
   filter: FilterState;
+  /** A view picked for the open folder only (when views are not shared between folders). */
+  folderView: number | null;
   /** Desktop, Documents, Downloads… for "Send to". */
   places: { label: string; path: string }[];
   /** Folders opened most often, for the sidebar. */
@@ -369,6 +371,7 @@ export const useStore = create<State>((set, get) => ({
   },
   sort: { key: "name", asc: true },
   filter: NO_FILTER,
+  folderView: null,
   frequent: [],
   places: [],
   properties: null,
@@ -449,7 +452,16 @@ export const useStore = create<State>((set, get) => ({
         return { ...t, location, history, historyIndex: history.length - 1 };
       }),
       selection: id === activeTab ? [] : get().selection,
-      filter: id === activeTab && !location.startsWith("fast://search") && !adv<boolean>(get().settings, "files.keepFilter") ? NO_FILTER : get().filter,
+      filter:
+        id !== activeTab || location.startsWith("fast://search")
+          ? get().filter
+          : adv<boolean>(get().settings, "files.keepFilter")
+            ? // "Include subfolders" is a search of the old folder; the rest of the filter carries over.
+              get().filter.subfolders
+              ? { ...get().filter, subfolders: false }
+              : get().filter
+            : NO_FILTER,
+      folderView: id === activeTab ? null : get().folderView,
     });
     if (!isAppLocation(location)) {
       get().addRecent(location, true);
@@ -880,6 +892,11 @@ export const useStore = create<State>((set, get) => ({
 
   setViewLevel: (level) => {
     const next = Math.max(0, Math.min(VIEW_LEVELS.length - 1, level));
+    if (!adv<boolean>(get().settings, "files.rememberView")) {
+      // Only for this folder: it is forgotten when another folder is opened.
+      if (next !== get().folderView) set({ folderView: next });
+      return;
+    }
     if (next === get().settings?.appearance.viewLevel) return;
     get().updateSettings((s) => void (s.appearance.viewLevel = next));
   },
