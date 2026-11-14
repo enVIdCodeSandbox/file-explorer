@@ -4,18 +4,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ResourceUsage } from "../api";
 import { adv } from "../settings/advanced";
 import {
-  PERF_PRESETS,
   capsText,
-  UI_PRESETS,
   applyPatch,
   applyProfile,
   applyUiPreset,
   currentPerfPreset,
   differences,
   newProfile,
+  mobilePlatformFor,
+  perfPresetsFor,
   platformFor,
+  recommendMobilePerf,
   recommendPerf,
+  uiPresetsFor,
 } from "../settings/presets";
+import { deviceMaker, isMobileNow, useMobile } from "../util/device";
+import { PerfSlider } from "./PerfSlider";
 import { ask, promptText, useStore } from "../store";
 import { formatSize } from "../util/format";
 import { Icon } from "./Icons";
@@ -29,63 +33,101 @@ const systemDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").mat
 export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?: boolean; roomy?: boolean }) {
   const settings = useStore((s) => s.settings)!;
   const info = useStore((s) => s.info);
+  const mobile = useMobile();
   const { updateSettings, showToast } = useStore.getState();
   const [open, setOpen] = useState<string | null>(null);
   const hw = info?.system;
+  const presets = perfPresetsFor(mobile);
   const recommended = useMemo(
-    () => (hw ? recommendPerf(hw.totalRamMb, hw.cpus, hw.batteryPercent != null) : null),
-    [hw],
+    () => (hw ? (mobile ? recommendMobilePerf(hw.totalRamMb, hw.cpus) : recommendPerf(hw.totalRamMb, hw.cpus, hw.batteryPercent != null)) : null),
+    [hw, mobile],
   );
   const current = currentPerfPreset(settings);
+  const usedIdx = current ? presets.findIndex((p) => p.id === current.id) : -1;
+  const recIdx = Math.max(0, presets.findIndex((p) => p.id === recommended?.id));
+  // The slider shows a step before it is applied, so every step can be read without changing anything.
+  const [shown, setShown] = useState<number | null>(null);
+  const showIdx = Math.min(presets.length - 1, shown ?? (usedIdx >= 0 ? usedIdx : recIdx));
+  const view = compact ? "cards" : adv<string>(settings, "ui.perfPresetView");
+  const setView = (v: string) => updateSettings((s) => void (s.advanced = { ...s.advanced, "ui.perfPresetView": v }));
+  const device = mobile ? "device" : "computer";
   const choose = (id: string) => {
-    const preset = PERF_PRESETS.find((p) => p.id === id)!;
+    const preset = presets.find((p) => p.id === id)!;
     updateSettings((s) => applyPatch(s, preset.patch));
     showToast(`Performance: ${preset.name}. Every value can still be changed in Settings.`);
   };
+  const values = (p: (typeof presets)[number]) => (
+    <ul className="preset-values">
+      {Object.entries(p.patch).map(([k, v]) => (
+        <li key={k}>
+          <code>{k.replace(/^advanced\./, "")}</code>: {String(v)}
+        </li>
+      ))}
+    </ul>
+  );
   return (
     <div className="preset-panel">
-      {hw && recommended && (
-        <p className="muted">
-          This computer: {hw.cpus} threads, {(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB of memory{hw.batteryPercent != null ? ", with a battery" : ""}. Recommended: <strong>{recommended.name}</strong>.
-        </p>
-      )}
-      <div className="preset-grid preset-grid-perf" role="radiogroup" aria-label="Performance preset">
-        {PERF_PRESETS.map((p, i) => {
-          const isCurrent = current?.id === p.id;
-          const isRecommended = recommended?.id === p.id;
-          return (
-            <div key={p.id} className="preset-card" data-clickable data-on={isCurrent || undefined} data-recommended={isRecommended || undefined} data-preset={p.id} onClick={() => choose(p.id)}>
-              <button role="radio" aria-checked={isCurrent} className="preset-pick" onClick={() => choose(p.id)}>
-                <span className="preset-step">{i + 1}</span>
-                <strong>{p.name}</strong>
-                {isRecommended && <span className="pill">Recommended for this computer</span>}
-                {isCurrent && <span className="pill" data-kind="current">In use</span>}
-              </button>
-              {(!compact || roomy) && <span className="muted">{p.description}</span>}
-              <span className="preset-for">
-                <b>Suits:</b> {p.recommendedFor}
-              </span>
-              <span className="preset-for">
-                <b>Limit:</b> {capsText(p)}
-              </span>
-              {!compact && !roomy && (
-                <button className="link-button" aria-expanded={open === p.id} onClick={(e) => { e.stopPropagation(); setOpen(open === p.id ? null : p.id); }}>
-                  {open === p.id ? "Hide what it sets" : "What it sets"}
-                </button>
-              )}
-              {open === p.id && (
-                <ul className="preset-values">
-                  {Object.entries(p.patch).map(([k, v]) => (
-                    <li key={k}>
-                      <code>{k.replace(/^advanced\./, "")}</code>: {String(v)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        })}
+      <div className="preset-head">
+        {hw && recommended ? (
+          <p className="muted">
+            This {device}: {hw.cpus} threads, {(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB of memory{!mobile && hw.batteryPercent != null ? ", with a battery" : ""}. Recommended: <strong>{recommended.name}</strong>.
+          </p>
+        ) : (
+          <span />
+        )}
+        {!compact && (
+          <div className="segmented" role="radiogroup" aria-label="Show the presets as">
+            <button role="radio" aria-checked={view === "slider"} data-on={view === "slider" || undefined} onClick={() => setView("slider")}>Slider</button>
+            <button role="radio" aria-checked={view !== "slider"} data-on={view !== "slider" || undefined} onClick={() => setView("cards")}>Cards</button>
+          </div>
+        )}
       </div>
+      {view === "slider" ? (
+        <div className="preset-slider">
+          <PerfSlider presets={presets} index={showIdx} recIndex={recIdx} onPick={setShown} mobile={mobile} usedIndex={usedIdx >= 0 ? usedIdx : undefined}>
+            <div className="perf-actions">
+              <button className="primary" disabled={showIdx === usedIdx} onClick={() => choose(presets[showIdx].id)}>
+                {showIdx === usedIdx ? "In use" : `Use ${presets[showIdx].name}`}
+              </button>
+              {showIdx !== recIdx && <button onClick={() => setShown(recIdx)}>Show the recommended one</button>}
+              <button className="link-button" aria-expanded={open === presets[showIdx].id} onClick={() => setOpen(open === presets[showIdx].id ? null : presets[showIdx].id)}>
+                {open === presets[showIdx].id ? "Hide what it sets" : "What it sets"}
+              </button>
+            </div>
+            {open === presets[showIdx].id && values(presets[showIdx])}
+          </PerfSlider>
+        </div>
+      ) : (
+        <div className="preset-grid preset-grid-perf" role="radiogroup" aria-label="Performance preset">
+          {presets.map((p, i) => {
+            const isCurrent = current?.id === p.id;
+            const isRecommended = recommended?.id === p.id;
+            return (
+              <div key={p.id} className="preset-card" data-clickable data-on={isCurrent || undefined} data-recommended={isRecommended || undefined} data-preset={p.id} onClick={() => choose(p.id)}>
+                <button role="radio" aria-checked={isCurrent} className="preset-pick" onClick={() => choose(p.id)}>
+                  <span className="preset-step">{i + 1}</span>
+                  <strong>{p.name}</strong>
+                  {isRecommended && <span className="pill">Recommended for this {device}</span>}
+                  {isCurrent && <span className="pill" data-kind="current">In use</span>}
+                </button>
+                {(!compact || roomy) && <span className="muted">{p.description}</span>}
+                <span className="preset-for">
+                  <b>Suits:</b> {p.recommendedFor}
+                </span>
+                <span className="preset-for">
+                  <b>Limit:</b> {capsText(p)}
+                </span>
+                {!compact && !roomy && (
+                  <button className="link-button" aria-expanded={open === p.id} onClick={(e) => { e.stopPropagation(); setOpen(open === p.id ? null : p.id); }}>
+                    {open === p.id ? "Hide what it sets" : "What it sets"}
+                  </button>
+                )}
+                {open === p.id && values(p)}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {!current && !compact && <p className="muted">Your settings do not match one preset exactly (you changed something by hand). Choosing a preset replaces those values.</p>}
     </div>
   );
@@ -98,12 +140,13 @@ export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?:
 export function UiPresetsPanel({ compact = false, roomy = false }: { compact?: boolean; roomy?: boolean }) {
   const settings = useStore((s) => s.settings)!;
   const os = useStore((s) => s.info?.os);
+  const mobile = useMobile();
   const { updateSettings, showToast } = useStore.getState();
-  const mine = platformFor(os);
+  const mine = mobile ? mobilePlatformFor(os, deviceMaker()) : platformFor(os);
   return (
     <div className="preset-panel">
       <div className="preset-grid" role="radiogroup" aria-label="Interface style">
-        {UI_PRESETS.map((p) => {
+        {uiPresetsFor(mobile).map((p) => {
           const same = differences(settings, p.patch).length === 0;
           return (
             <div
@@ -120,7 +163,7 @@ export function UiPresetsPanel({ compact = false, roomy = false }: { compact?: b
             >
               <button role="radio" aria-checked={same} className="preset-pick">
                 <strong>{p.name}</strong>
-                {p.id === mine && <span className="pill">Matches this computer</span>}
+                {p.id === mine && <span className="pill">Matches this {mobile ? "device" : "computer"}</span>}
                 {same && <span className="pill" data-kind="current">In use</span>}
               </button>
               {(!compact || roomy) && <span className="muted">{p.description}</span>}
@@ -312,7 +355,7 @@ export function ResourcesPanel() {
       ],
     });
     if (r?.button !== "ok") return;
-    updateSettings((s) => applyPatch(s, PERF_PRESETS[0].patch));
+    updateSettings((s) => applyPatch(s, perfPresetsFor(isMobileNow())[0].patch));
     await api.clearCache("all").catch(() => {});
     await api.compactMemory().catch(() => {});
     showToast("Smallest footprint is on.");

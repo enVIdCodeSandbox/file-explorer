@@ -1,0 +1,347 @@
+/*
+ * The phone and tablet layout (src/components/Mobile.tsx).
+ *
+ * Everything here sits under .m-app, so nothing changes the computer layout.
+ * The first part is shared by the three looks; then one part each for
+ * [data-phone="google"] (Files by Google), "samsung" (My Files) and "apple"
+ * (Files). Colors come from the theme's variables as everywhere else.
+ */
+
+.m-app {
+  --m-row: 64px;
+  --m-pad: 16px;
+  --m-bar: 56px;
+  --m-nav: 64px;
+  --m-icon: 40px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  font-size: 16px;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.m-app input, .m-app textarea, .m-app pre { user-select: text; -webkit-user-select: text; }
+.m-app button { cursor: pointer; }
+.m-app .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Bars on top --------------------------------------------------------- */
+.m-top { flex: none; padding-top: var(--safe-top); background: var(--bg); z-index: 5; }
+.m-bar { display: flex; align-items: center; gap: 4px; min-height: var(--m-bar); padding: 0 8px; }
+.m-title { flex: 1; min-width: 0; margin: 0; font-size: 20px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-large-title { margin: 0; padding: 4px var(--m-pad) 10px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; }
+.m-icon-button, .m-back { flex: none; min-width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 2px; border-radius: 50%; color: var(--text); }
+.m-icon-button:active, .m-back:active, .m-text-button:active { background: var(--surface-active); }
+.m-text-button { height: 40px; padding: 0 12px; border-radius: 20px; color: var(--accent); font-weight: 600; }
+.m-back svg { transform: none; }
+.m-app[data-phone="samsung"] .m-back svg, .m-app[data-phone="apple"] .m-back svg { transform: scaleX(-1); }
+.m-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 6px 0 14px; border-radius: 22px; background: var(--surface-raised); color: var(--text-muted); }
+.m-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 16px; }
+.m-search input::-webkit-search-cancel-button { display: none; }
+.m-search .m-icon-button { min-width: 36px; height: 36px; }
+.m-crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; padding: 0 var(--m-pad) 8px; scrollbar-width: none; white-space: nowrap; }
+.m-crumbs::-webkit-scrollbar { display: none; }
+.m-crumbs button { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px; color: var(--text-muted); font-size: 14px; }
+.m-crumbs button:disabled { opacity: 1; color: var(--text); font-weight: 600; }
+.m-crumbs svg { opacity: 0.6; }
+
+/* ---- Pages ---------------------------------------------------------------- */
+.m-content { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.m-page { flex: 1; overflow-y: auto; padding: 4px 0 24px; -webkit-overflow-scrolling: touch; }
+.m-section { margin: 0 0 18px; }
+.m-section > header { display: flex; align-items: center; justify-content: space-between; padding: 10px var(--m-pad) 6px; }
+.m-section h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-muted); }
+.m-section h2:empty { display: none; }
+.m-list { display: flex; flex-direction: column; }
+.m-item { display: flex; align-items: center; gap: 14px; width: 100%; min-height: var(--m-row); padding: 8px var(--m-pad); text-align: left; }
+.m-item:active { background: var(--surface-active); }
+.m-item > svg { flex: none; color: var(--text-muted); opacity: 0.7; }
+.m-item-icon { flex: none; width: var(--m-icon); height: var(--m-icon); display: grid; place-items: center; border-radius: 12px; }
+.m-item-icon[data-tint] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.m-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-item-text strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-item-text span { font-size: 13px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-meter { height: 4px; margin-top: 4px; border-radius: 2px; background: var(--surface-active); overflow: hidden; }
+.m-meter i { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.m-meter i[data-full] { background: var(--danger); }
+.m-empty { margin: 0; padding: 14px var(--m-pad); color: var(--text-muted); font-size: 14px; line-height: 1.45; }
+.m-categories { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 0 var(--m-pad); }
+.m-category { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 14px; border-radius: 16px; background: var(--surface-raised); text-align: left; font-weight: 500; }
+.m-category:active { background: var(--surface-active); }
+.m-category-icon { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; color: var(--cat); background: color-mix(in srgb, var(--cat) 18%, transparent); }
+.m-access { display: flex; flex-direction: column; gap: 8px; margin: 8px var(--m-pad) 14px; padding: 16px; border-radius: 16px; background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised)); line-height: 1.45; }
+.m-access span { font-size: 14px; color: var(--text-muted); }
+.m-access .primary { align-self: flex-start; }
+.m-app .primary, .m-app .secondary { height: 44px; padding: 0 20px; border-radius: 22px; font-size: 15px; }
+.m-app .secondary { background: var(--surface-active); }
+
+/* ---- The bar along the bottom, the paste bar, select mode ----------------- */
+.m-nav { flex: none; display: flex; height: calc(var(--m-nav) + var(--safe-bottom)); padding-bottom: var(--safe-bottom); background: var(--surface-raised); border-top: 1px solid var(--border); }
+.m-nav button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.m-nav button[data-on] { color: var(--accent); }
+.m-nav-icon { display: grid; place-items: center; width: 64px; height: 30px; border-radius: 15px; }
+.m-paste { flex: none; display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 8px 12px; background: var(--surface-raised); border-top: 1px solid var(--border); font-size: 14px; }
+.m-app[data-phone="samsung"] .m-paste, .m-app[data-selecting] .m-paste { padding-bottom: calc(8px + var(--safe-bottom)); }
+.m-select-top { position: fixed; z-index: 20; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 8px; height: calc(var(--m-bar) + var(--safe-top)); padding: var(--safe-top) 8px 0; background: var(--surface-raised); box-shadow: 0 1px 0 var(--border); }
+.m-select-top strong { font-size: 18px; font-weight: 600; }
+.m-select-top .muted { font-size: 13px; color: var(--text-muted); }
+.m-actions { flex: none; display: flex; height: calc(64px + var(--safe-bottom)); padding-bottom: var(--safe-bottom); background: var(--surface-raised); border-top: 1px solid var(--border); }
+.m-actions button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--text); }
+.m-actions button:active:not(:disabled) { background: var(--surface-active); }
+.m-actions button[data-danger] { color: var(--danger); }
+
+/* ---- The folder view on a phone ------------------------------------------ */
+.m-app .file-view { --columns: 1fr; }
+.m-app .status-bar { display: none; }
+.m-app .file-scroller { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.m-app .file-row.m-row { display: flex; align-items: center; gap: 14px; left: 0; right: 0; margin: 0; padding: 0 4px 0 var(--m-pad); border: 0; border-radius: 0; }
+.m-app .file-row:hover, .m-app .file-tile:hover { background: transparent; }
+.m-app .file-row:active, .m-app .file-tile:active { background: var(--surface-hover); }
+.m-app .file-row[data-selected], .m-app .file-tile[data-selected] { background: var(--selection); }
+.m-thumb { flex: none; width: var(--m-icon); height: var(--m-icon); display: grid; place-items: center; }
+.m-thumb .thumb { border-radius: 8px; object-fit: cover; }
+.m-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.m-text .file-name { font-size: 16px; }
+.m-meta { font-size: 13px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 16px; }
+.m-more { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: var(--text-muted); }
+.m-more:active { background: var(--surface-active); }
+.m-chevron { flex: none; display: none; color: var(--text-muted); opacity: 0.6; padding-right: 12px; }
+.m-check { flex: none; display: none; width: 24px; height: 24px; place-items: center; border-radius: 50%; border: 2px solid var(--border-strong); color: transparent; }
+.file-view[data-selecting] .m-check { display: grid; }
+.file-view[data-selecting] [data-selected] .m-check { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.file-view[data-selecting] .m-more, .file-view[data-selecting] .m-chevron { display: none; }
+.m-app .file-tile { position: relative; border: 0; border-radius: 14px; padding-top: 10px; }
+.m-app .file-tile .file-name { font-size: 13px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; word-break: break-word; }
+.m-app .file-tile .m-check { position: absolute; top: 6px; left: 6px; background: var(--bg); }
+.m-app .rename-input { height: 36px; font-size: 16px; padding: 0 8px; border-radius: 8px; }
+.m-app .empty-state { padding: 80px 28px; font-size: 15px; }
+.m-app .empty-state span { font-size: 14px; }
+/* While selecting, the folder view's own bars replace the shell's. */
+.m-app[data-selecting] .m-nav { display: none; }
+
+/* ---- Menus become sheets that rise from the bottom ------------------------ */
+.m-app .menu-backdrop { background: rgba(0, 0, 0, 0.4); }
+.m-app .context-menu { left: 0 !important; right: 0; top: auto !important; bottom: 0; width: 100%; min-width: 0; max-height: 78vh; padding: 10px 6px calc(10px + var(--safe-bottom)); border: 0; border-radius: 24px 24px 0 0; background: var(--surface-raised); backdrop-filter: none; box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.35); animation: m-rise 0.18s ease-out; }
+.m-app .context-menu::before { content: ""; display: block; width: 36px; height: 4px; margin: 0 auto 8px; border-radius: 2px; background: var(--border-strong); }
+.m-app .menu-item { height: 52px; padding: 0 18px; gap: 18px; border-radius: 14px; font-size: 16px; }
+.m-app .menu-item kbd { display: none; }
+.m-app .menu-icon { width: 24px; }
+.m-app .menu-icon svg { width: 20px; height: 20px; }
+.m-app .menu-separator { margin: 6px 18px; }
+@keyframes m-rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+:root[data-animations="off"] .m-app .context-menu { animation: none; }
+
+/* ---- Dialogs, settings, transfers, notices, toasts ------------------------ */
+.m-app .modal-backdrop { padding: 16px; }
+.m-app .dialog { width: min(420px, 100%); max-width: 100%; padding: 22px 22px 14px; border-radius: 24px; }
+.m-app .dialog h3 { font-size: 20px; }
+.m-app .dialog-message { font-size: 15px; line-height: 1.45; }
+.m-app .text-input, .m-app .dialog select { height: 48px; font-size: 16px; padding: 0 12px; border-radius: 10px; }
+.m-app .dialog-buttons { gap: 8px; }
+.m-app .settings { position: fixed; inset: 0; width: 100% !important; height: 100% !important; transform: none !important; flex-direction: column; border: 0; border-radius: 0; padding-top: var(--safe-top); }
+.m-app .settings-nav { width: auto; display: flex; align-items: center; gap: 6px; padding: 8px 56px 8px 12px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex: none; }
+.m-app .settings-nav::-webkit-scrollbar { display: none; }
+.m-app .settings-nav h2 { display: none; }
+.m-app .settings-nav .search-box { flex: none; width: 190px; height: 40px; margin: 0; border-radius: 20px; }
+.m-app .settings-nav .search-box input { font-size: 16px; }
+.m-app .settings-nav .side-item { flex: none; width: auto; height: 40px; padding: 0 14px; border-radius: 20px; white-space: nowrap; background: var(--surface-raised); }
+.m-app .settings-nav .side-item[data-active] { background: var(--accent); color: var(--accent-text); }
+.m-app .settings-nav .side-item::before { display: none; }
+.m-app .settings-body { padding: 4px 14px calc(24px + var(--safe-bottom)); }
+.m-app .settings-close { position: fixed; top: calc(8px + var(--safe-top)); right: 8px; float: none; background: transparent; z-index: 3; }
+.m-app .settings-close .icon-button { width: 40px; height: 40px; border-radius: 50%; background: var(--surface-raised); }
+.m-app .settings-close [aria-label="Open in its own window"], .m-app .transfer-window [aria-label*="own window"], .m-app .transfer-window [title*="own window"] { display: none; }
+.m-app .setting { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px; border-radius: 16px; }
+.m-app .setting select, .m-app .setting input[type="text"], .m-app .setting input[type="number"] { max-width: none; width: 100%; height: 44px; font-size: 16px; }
+.m-app .preset-grid { grid-template-columns: 1fr; }
+.m-app .transfers { left: 8px; right: 8px; width: auto; bottom: calc(var(--m-nav) + var(--safe-bottom) + 8px); }
+.m-app[data-phone="samsung"] .transfers { bottom: calc(12px + var(--safe-bottom)); }
+.m-app .transfer-window { inset: 0; width: 100%; height: 100%; border: 0; border-radius: 0; padding-top: var(--safe-top); padding-bottom: var(--safe-bottom); }
+.m-app .notices { left: 8px !important; right: 8px !important; top: auto !important; bottom: calc(var(--m-nav) + var(--safe-bottom) + 8px) !important; width: auto !important; max-width: none; align-items: stretch !important; flex-direction: column !important; }
+.m-app .notice-bell { display: none; }
+.m-app .notice-list { max-height: 70vh; }
+.m-app .toast { bottom: calc(var(--m-nav) + var(--safe-bottom) + 16px); max-width: calc(100vw - 32px); width: max-content; border-radius: 14px; padding: 12px 16px; font-size: 14px; line-height: 1.4; text-align: center; }
+.m-app .search-view .file-header { display: none; }
+.m-app .page { padding: 12px var(--m-pad); }
+.m-viewer { position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column; background: var(--bg); padding-top: var(--safe-top); }
+.m-viewer header { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--m-bar); padding: 0 8px; }
+.m-viewer header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-viewer-body { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding-bottom: var(--safe-bottom); }
+.m-viewer-body img, .m-viewer-body video { max-width: 100%; max-height: 100%; object-fit: contain; }
+.m-viewer-body iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.m-viewer-body pre { place-self: stretch; margin: 0; padding: 14px; font: 13px/1.5 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
+
+/* ---- The first-run setup on a narrow screen ------------------------------- */
+.setup-backdrop[data-mobile] .caption-strip { display: none; }
+.setup[data-mobile] { padding: env(safe-area-inset-top, 0px) 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+.setup[data-mobile] .setup-top { padding: 8px 0 10px; }
+.setup[data-mobile] .setup-step-name { display: none; }
+.setup[data-mobile] .setup-steps { gap: 2px; flex-wrap: nowrap; }
+.setup[data-mobile] .setup-steps button { padding: 4px; }
+.setup[data-mobile] h1 { font-size: 30px; }
+.setup[data-mobile] h2 { font-size: 24px; }
+.setup[data-mobile] .lead { font-size: 15px; }
+.setup[data-mobile] .os-grid, .setup[data-mobile] .setup-modes, .setup[data-mobile] .setup-tiles, .setup[data-mobile] .setup-summary { grid-template-columns: 1fr; gap: 12px; flex: none; }
+.setup[data-mobile] .setup-stage[data-fill] { flex: none; }
+.setup[data-mobile] .os-col, .setup[data-mobile] .setup-modes .os-col { min-height: 0; }
+.setup[data-mobile] .os-preview, .setup[data-mobile] .mode-preview { min-height: 0; height: 96px; flex: none; }
+.setup[data-mobile] .os-card, .setup[data-mobile] .setup-mode { padding: 14px; border-radius: 18px; }
+.setup[data-mobile] .os-card strong, .setup[data-mobile] .setup-mode strong, .setup[data-mobile] .setup-tile strong { font-size: 19px; }
+.setup[data-mobile] .setup-tiles { grid-auto-rows: auto; }
+.setup[data-mobile] .setup-tile { padding: 16px; border-radius: 18px; }
+.setup[data-mobile] .setup-hw > div { min-width: 0; flex: 1 1 40%; padding: 12px 14px; }
+.setup[data-mobile] .setup-lang { flex-direction: column; align-items: stretch; gap: 6px; }
+.setup[data-mobile] .setup-lang select { min-width: 0; width: 100%; height: 46px; font-size: 16px; }
+.setup[data-mobile] .setup-buttons button { min-width: 0; flex: 1; height: 48px; padding: 0 12px; border-radius: 24px; }
+.setup[data-mobile] .setup-buttons .grow { display: none; }
+/* The three phone looks, drawn small. */
+.os-preview[data-os="google"], .os-preview[data-os="samsung"], .os-preview[data-os="apple"] { width: 44%; align-self: center; border-radius: 16px; }
+.os-preview[data-os="google"] .wf-top, .os-preview[data-os="samsung"] .wf-top, .os-preview[data-os="apple"] .wf-top { display: none; }
+.os-preview[data-os="google"] .wf-side, .os-preview[data-os="samsung"] .wf-side, .os-preview[data-os="apple"] .wf-side { display: none; }
+.os-preview[data-os="google"] .wf-bar { height: 18px; border-radius: 9px; background: var(--surface-active); }
+.os-preview[data-os="google"] .wf-body::after, .os-preview[data-os="apple"] .wf-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 14px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 35%, var(--surface-active)); }
+.os-preview[data-os="google"] .wf-body, .os-preview[data-os="apple"] .wf-body { position: relative; padding-bottom: 18px; }
+.os-preview[data-os="samsung"] .wf-bar { height: 30px; width: 55%; align-self: center; background: transparent; border-bottom: 5px solid var(--surface-active); border-radius: 0; }
+.os-preview[data-os="samsung"] .wf-main { background: var(--surface-hover); border-radius: 12px; padding: 8px; }
+.os-preview[data-os="apple"] .wf-bar { height: 14px; width: 45%; border-radius: 4px; background: var(--text-muted); opacity: 0.5; }
+.os-preview[data-os="apple"] .wf-main i { background: color-mix(in srgb, var(--accent) 40%, var(--surface-active)); }
+
+/* ---- The performance slider (setup and Settings) on a narrow screen ------- */
+.m-app .perf-readout, .setup[data-mobile] .perf-readout { grid-template-columns: 1fr; gap: 12px; }
+.m-app .perf-end, .setup[data-mobile] .perf-end { display: none; }
+.m-app .perf-now, .setup[data-mobile] .perf-now { min-width: 0; }
+.m-app .perf-now h3, .setup[data-mobile] .perf-now h3 { font-size: 32px; }
+.m-app .perf-detail, .setup[data-mobile] .perf-detail { padding: 14px 16px; }
+.m-app .perf-wrap, .setup[data-mobile] .perf-wrap { --thumb: 34px; }
+
+/* =========================================================================
+ * Google: Files by Google. Tonal surfaces, pills, a tall bar on the bottom.
+ * ========================================================================= */
+.m-app[data-phone="google"] { --m-row: 72px; --m-bar: 64px; --m-nav: 80px; }
+.m-app[data-phone="google"] .m-top-root .m-bar { padding: 8px 8px 8px var(--m-pad); }
+.m-app[data-phone="google"] .m-top-root .m-search { height: 48px; border-radius: 24px; }
+.m-app[data-phone="google"] .m-title { font-size: 22px; font-weight: 400; padding-left: 4px; }
+.m-app[data-phone="google"] .m-crumbs button { height: 30px; padding: 0 2px; }
+.m-app[data-phone="google"] .m-crumbs button:disabled { color: var(--accent); }
+.m-app[data-phone="google"] .m-section h2 { font-size: 14px; letter-spacing: 0.01em; color: var(--text); font-weight: 500; }
+.m-app[data-phone="google"] .m-nav { border-top: 0; }
+.m-app[data-phone="google"] .m-nav button { gap: 4px; color: var(--text-muted); }
+.m-app[data-phone="google"] .m-nav button[data-on] { color: var(--text); font-weight: 700; }
+.m-app[data-phone="google"] .m-nav button[data-on] .m-nav-icon { background: var(--selection); }
+.m-app[data-phone="google"] .m-thumb, .m-app[data-phone="google"] .m-item-icon { border-radius: 12px; }
+.m-app[data-phone="google"] .m-select-top { background: var(--selection); box-shadow: none; }
+.m-app[data-phone="google"] .m-check { display: none !important; }
+.m-app[data-phone="google"] .file-view[data-selecting] [data-selected] .m-thumb { position: relative; }
+.m-app[data-phone="google"] .file-view[data-selecting] [data-selected] .m-thumb::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-weight: 700; }
+.m-app[data-phone="google"] .file-view[data-selecting] .file-tile[data-selected] { outline: 2px solid var(--accent); outline-offset: -2px; }
+.m-app[data-phone="google"] .context-menu { border-radius: 28px 28px 0 0; }
+.m-app[data-phone="google"] .menu-item { border-radius: 26px; }
+.m-app[data-phone="google"] .dialog { border-radius: 28px; }
+
+/* =========================================================================
+ * Samsung: My Files. A tall title to bring the page down to the thumb,
+ * rounded cards on a flat background, round colored category buttons.
+ * ========================================================================= */
+.m-app[data-phone="samsung"] { --m-row: 68px; --m-pad: 24px; }
+.m-app[data-phone="samsung"] .m-top-root { display: flex; flex-direction: column; }
+.m-app[data-phone="samsung"] .m-top-root .m-bar:first-child { order: 2; justify-content: flex-end; padding: 0 12px; }
+.m-app[data-phone="samsung"] .m-large-title { order: 1; padding: 44px var(--m-pad) 22px; text-align: center; font-size: 34px; font-weight: 400; letter-spacing: 0; }
+.m-app[data-phone="samsung"] .m-top-root .m-bar:last-child:not(:first-child) { order: 3; padding: 0 12px 8px; }
+.m-app[data-phone="samsung"] .m-crumbs { flex: 1; padding: 0 4px; }
+.m-app[data-phone="samsung"] .m-crumbs button { font-size: 15px; }
+.m-app[data-phone="samsung"] .m-crumbs button:disabled { color: var(--accent); font-weight: 700; }
+.m-app[data-phone="samsung"] .m-section { margin: 0 12px 14px; }
+.m-app[data-phone="samsung"] .m-section > header { padding: 8px 14px 8px; }
+.m-app[data-phone="samsung"] .m-section h2 { font-size: 14px; font-weight: 700; }
+.m-app[data-phone="samsung"] .m-list, .m-app[data-phone="samsung"] .m-categories { background: var(--surface); border-radius: 26px; overflow: hidden; }
+.m-app[data-phone="samsung"] .m-item { padding: 8px 20px; position: relative; }
+.m-app[data-phone="samsung"] .m-item + .m-item::before { content: ""; position: absolute; top: 0; left: 74px; right: 20px; height: 1px; background: var(--border); }
+.m-app[data-phone="samsung"] .m-item > svg { display: none; }
+.m-app[data-phone="samsung"] .m-item-icon[data-tint] { border-radius: 50%; }
+.m-app[data-phone="samsung"] .m-categories { grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 16px 8px; }
+.m-app[data-phone="samsung"] .m-category { flex-direction: column; gap: 8px; min-height: 0; padding: 8px 2px; background: transparent; text-align: center; font-size: 13px; font-weight: 400; }
+.m-app[data-phone="samsung"] .m-category-icon { width: 48px; height: 48px; background: var(--cat); color: #fff; }
+.m-app[data-phone="samsung"] .m-content { background: var(--bg); }
+.m-app[data-phone="samsung"] .file-scroller { background: var(--surface); border-radius: 26px 26px 0 0; margin: 4px 0 0; }
+.m-app[data-phone="samsung"] .file-row.m-row { padding-left: 20px; }
+.m-app[data-phone="samsung"] .file-row.m-row::after { content: ""; position: absolute; left: 74px; right: 20px; bottom: 0; height: 1px; background: var(--border); }
+.m-app[data-phone="samsung"] .m-more { display: none; }
+.m-app[data-phone="samsung"] .m-select-top { background: var(--bg); box-shadow: none; }
+.m-app[data-phone="samsung"] .m-actions, .m-app[data-phone="samsung"] .m-paste { background: var(--bg); border-top: 0; }
+.m-app[data-phone="samsung"] .m-access { margin: 0 12px 14px; border-radius: 26px; }
+.m-app[data-phone="samsung"] .context-menu { left: 12px !important; right: 12px; bottom: calc(12px + var(--safe-bottom)); width: auto; border-radius: 26px; padding-bottom: 10px; }
+.m-app[data-phone="samsung"] .modal-backdrop { place-items: end center; padding: 12px 12px calc(12px + var(--safe-bottom)); }
+.m-app[data-phone="samsung"] .dialog { width: 100%; border-radius: 26px; }
+.m-app[data-phone="samsung"] .dialog-buttons { justify-content: stretch; }
+.m-app[data-phone="samsung"] .dialog-buttons button { flex: 1; background: transparent; color: var(--accent); font-weight: 700; }
+.m-app[data-phone="samsung"] .dialog-buttons button[data-danger] { color: var(--danger); }
+.m-app[data-phone="samsung"] .setting { border-radius: 22px; }
+
+/* =========================================================================
+ * Apple: Files. Large titles, grouped lists with hairlines, a translucent
+ * bar along the bottom, accent-colored text buttons.
+ * ========================================================================= */
+.m-app[data-phone="apple"] { --m-row: 60px; --m-bar: 44px; --m-nav: 50px; }
+.m-app[data-phone="apple"] .m-large-title { padding: 0 var(--m-pad) 8px; font-size: 34px; font-weight: 700; }
+.m-app[data-phone="apple"] .m-top-root .m-bar:last-child { padding: 0 var(--m-pad) 10px; min-height: 0; }
+.m-app[data-phone="apple"] .m-search { height: 36px; border-radius: 10px; padding-left: 8px; gap: 6px; background: var(--surface-active); }
+.m-app[data-phone="apple"] .m-search input { font-size: 17px; }
+.m-app[data-phone="apple"] .m-title { text-align: center; font-size: 17px; font-weight: 600; }
+.m-app[data-phone="apple"] .m-back { border-radius: 8px; padding: 0 6px 0 2px; color: var(--accent); font-size: 17px; max-width: 38%; }
+.m-app[data-phone="apple"] .m-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-app[data-phone="apple"] .m-icon-button { color: var(--accent); }
+.m-app[data-phone="apple"] .m-menu-button { min-width: 30px; width: 30px; height: 30px; margin: 0 8px; background: var(--surface-active); }
+.m-app[data-phone="apple"] .m-crumbs { display: none; }
+.m-app[data-phone="apple"] .m-section { margin: 0 var(--m-pad) 22px; }
+.m-app[data-phone="apple"] .m-section > header { padding: 6px 0 8px; }
+.m-app[data-phone="apple"] .m-section h2 { font-size: 22px; font-weight: 700; color: var(--text); }
+.m-app[data-phone="apple"] .m-list, .m-app[data-phone="apple"] .m-categories { background: var(--surface-raised); border-radius: 12px; overflow: hidden; }
+.m-app[data-phone="apple"] .m-item { min-height: 52px; padding: 6px 14px; gap: 12px; position: relative; }
+.m-app[data-phone="apple"] .m-item + .m-item::before, .m-app[data-phone="apple"] .m-category + .m-category::before { content: ""; position: absolute; top: 0; left: 56px; right: 0; height: 0.5px; background: var(--border-strong); }
+.m-app[data-phone="apple"] .m-item-icon { --m-icon: 30px; border-radius: 7px; }
+.m-app[data-phone="apple"] .m-item-icon[data-tint] { background: transparent; }
+.m-app[data-phone="apple"] .m-item-text strong { font-weight: 400; font-size: 17px; }
+.m-app[data-phone="apple"] .m-categories { grid-template-columns: 1fr; gap: 0; padding: 0; }
+.m-app[data-phone="apple"] .m-category { position: relative; min-height: 52px; padding: 6px 14px; border-radius: 0; background: transparent; font-weight: 400; font-size: 17px; }
+.m-app[data-phone="apple"] .m-category-icon { width: 30px; height: 30px; background: transparent; color: var(--accent); }
+.m-app[data-phone="apple"] .m-empty { padding: 14px; }
+.m-app[data-phone="apple"] .m-access { border-radius: 12px; }
+.m-app[data-phone="apple"] .m-nav { background: color-mix(in srgb, var(--surface-raised) 82%, transparent); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); border-top: 0.5px solid var(--border-strong); }
+.m-app[data-phone="apple"] .m-nav button { font-size: 10px; gap: 1px; }
+.m-app[data-phone="apple"] .m-nav-icon { height: 28px; }
+.m-app[data-phone="apple"] .file-row.m-row::after { content: ""; position: absolute; left: 70px; right: 0; bottom: 0; height: 0.5px; background: var(--border-strong); }
+.m-app[data-phone="apple"] .m-text .file-name { font-size: 17px; }
+.m-app[data-phone="apple"] .m-more { display: none; }
+.m-app[data-phone="apple"] .m-chevron { display: block; }
+.m-app[data-phone="apple"] .m-select-top strong { flex: 1; text-align: center; font-size: 17px; }
+.m-app[data-phone="apple"] .m-select-top .grow, .m-app[data-phone="apple"] .m-select-top .muted { display: none; }
+.m-app[data-phone="apple"] .m-select-top { background: var(--bg); }
+.m-app[data-phone="apple"] .m-actions { background: color-mix(in srgb, var(--surface-raised) 82%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); height: calc(52px + var(--safe-bottom)); }
+.m-app[data-phone="apple"] .m-actions button { color: var(--accent); }
+.m-app[data-phone="apple"] .m-actions button span { display: none; }
+.m-app[data-phone="apple"] .m-actions button[data-danger] { color: var(--danger); }
+.m-app[data-phone="apple"] .context-menu { left: 8px !important; right: 8px; bottom: calc(8px + var(--safe-bottom)); width: auto; border-radius: 14px; padding: 0; background: color-mix(in srgb, var(--surface-raised) 88%, transparent); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.m-app[data-phone="apple"] .context-menu::before { display: none; }
+.m-app[data-phone="apple"] .menu-item { height: 46px; border-radius: 0; flex-direction: row-reverse; font-size: 17px; }
+.m-app[data-phone="apple"] .menu-label { text-align: left; }
+.m-app[data-phone="apple"] .menu-separator { height: 8px; margin: 0; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.m-app[data-phone="apple"] .dialog { width: 280px; padding: 20px 0 0; border-radius: 14px; text-align: center; overflow: hidden; }
+.m-app[data-phone="apple"] .dialog h3 { padding: 0 16px; font-size: 17px; }
+.m-app[data-phone="apple"] .dialog-message { padding: 0 16px; font-size: 13px; }
+.m-app[data-phone="apple"] .dialog .text-input, .m-app[data-phone="apple"] .dialog-select { margin: 0 16px; width: calc(100% - 32px); height: 36px; }
+.m-app[data-phone="apple"] .dialog-buttons { flex-wrap: nowrap; flex-direction: row-reverse; gap: 0; margin-top: 18px; border-top: 0.5px solid var(--border-strong); }
+.m-app[data-phone="apple"] .dialog-buttons button { flex: 1; height: 44px; border-radius: 0; background: transparent; color: var(--accent); font-size: 17px; font-weight: 400; padding: 0 6px; }
+.m-app[data-phone="apple"] .dialog-buttons button + button { border-right: 0.5px solid var(--border-strong); }
+.m-app[data-phone="apple"] .dialog-buttons .primary { font-weight: 600; }
+.m-app[data-phone="apple"] .dialog-buttons button[data-danger] { color: var(--danger); }
+.m-app[data-phone="apple"] .primary, .m-app[data-phone="apple"] .secondary { border-radius: 12px; }
+.m-app[data-phone="apple"] .setting { border-radius: 12px; }
+
+/* A tablet, or a phone on its side: keep the page from stretching across the whole screen. */
+@media (min-width: 760px) {
+  .m-app .m-page > *, .m-app .m-top > * { max-width: 760px; margin-left: auto; margin-right: auto; width: 100%; }
+  .m-app .m-categories { grid-template-columns: repeat(4, 1fr); }
+  .m-app .context-menu, .m-app[data-phone="samsung"] .context-menu, .m-app[data-phone="apple"] .context-menu { left: 50% !important; right: auto; width: 420px; transform: translateX(-50%); bottom: 24px; border-radius: 24px; animation: none; }
+  .m-app .settings { inset: 24px 10%; width: auto !important; height: auto !important; border-radius: 24px; border: 1px solid var(--border-strong); }
+}

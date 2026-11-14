@@ -176,16 +176,18 @@ fn battery_state() -> (bool, Option<f32>) {
     }
 }
 
-/// Mobile: assume a battery-powered, memory-constrained device until the
-/// native battery and memory APIs are wired in (see docs/ROADMAP.md).
+/// Phones and tablets: memory from the system, and the battery when the system shows it
+/// to apps. When it does not, the device counts as running on battery, the careful guess.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn snapshot() -> SystemSnapshot {
+    let (total_ram_mb, available_ram_mb) = crate::phone::memory_mb().unwrap_or((4096, 1024));
+    let (on_battery, battery_percent) = crate::phone::battery_in(std::path::Path::new("/sys/class/power_supply"));
     SystemSnapshot {
         cpus: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2),
-        total_ram_mb: 4096,
-        available_ram_mb: 1024,
-        on_battery: true,
-        battery_percent: None,
+        total_ram_mb,
+        available_ram_mb,
+        on_battery,
+        battery_percent,
     }
 }
 

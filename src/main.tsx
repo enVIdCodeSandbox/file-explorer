@@ -5,6 +5,7 @@ import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/shell.css";
 import "./styles/analyzer.css";
+import "./styles/mobile.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -6,6 +6,7 @@
 //! percentage): the view compares it with the fastest it has seen.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -1,5 +1,6 @@
 // Global UI state. Components subscribe to the slices they need, so a
 // transfer progress tick does not re-render the file list.
+import { isMobileOs, openOutside } from "./util/native";
 import { create } from "zustand";
 import {
   api,
@@ -206,8 +207,12 @@ interface State {
   /** The popped-out panel that is open, if any. */
   popout: "tabs" | "address" | "commands" | "sidebar" | "details" | null;
   /** A command for the folder view to carry out (select all, rename…). */
-  command: { name: "selectAll" | "selectNone" | "invert" | "rename"; tick: number } | null;
-  runCommand: (name: "selectAll" | "selectNone" | "invert" | "rename") => void;
+  command: { name: FolderCommand; tick: number } | null;
+  runCommand: (name: FolderCommand) => void;
+  /** A file shown in the app's own viewer (phones without an "open with" sheet), or null. */
+  viewing: string | null;
+  /** Phone layout: the open folder is in "select" mode (ticks on every item, actions along the bottom). */
+  selecting: boolean;
   settingsOpen: boolean;
   dialog: DialogRequest | null;
   toast: string | null;
@@ -451,6 +456,8 @@ export const useStore = create<State>((set, get) => ({
   pendingSelect: null,
   layoutEdit: false,
   popout: null,
+  selecting: false,
+  viewing: null,
   command: null,
   runCommand: (name) => set({ command: { name, tick: (get().command?.tick ?? 0) + 1 } }),
   settingsOpen: false,
@@ -1242,6 +1249,9 @@ export async function promptText(title: string, initial: string): Promise<string
 }
 
 /** Folder views, from the most detail to the biggest icons. */
+/** Things the bars around the folder view ask it to do. The last six are used by the phone layout. */
+export type FolderCommand = "selectAll" | "selectNone" | "invert" | "rename" | "select" | "newFolder" | "newFile" | "paste" | "refresh" | "menu";
+
 export const VIEW_LEVELS = ["details", "list", "small", "medium", "large", "xl"] as const;
 export type ViewLevel = (typeof VIEW_LEVELS)[number];
 /** Thumbnail edge in pixels for each icon level (Windows uses 48/96/256). */
@@ -1333,7 +1343,14 @@ export async function openFile(path: string): Promise<void> {
   // Choosing a file for a form: opening it picks it instead.
   const picking = useStore.getState().picker;
   if (picking) return picking.done(path);
-  const { showToast, chooseApp } = useStore.getState();
+  const { showToast, chooseApp, info } = useStore.getState();
+  if (isMobileOs(info?.os)) {
+    // A phone opens files through its own "open with" sheet; the app only hands the file over.
+    const said = openOutside(path);
+    if (said === "") return;
+    if (said) return showToast(said);
+    return void useStore.setState({ viewing: path });
+  }
   try {
     const used = await api.openItem(path);
     if (used) showToast(`No app was set for this file, so it was opened with ${used}. Right-click and choose Open with to pick another.`);
@@ -1381,7 +1398,8 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
     }
   }
   if (isRemote(paths[0])) return deleteOnServer(paths);
-  const permanent = forcePermanent || !s.settings.general.deleteToTrash;
+  // A phone has no recycle bin the app can use, so deleting there is always for good (and always asks).
+  const permanent = forcePermanent || !s.settings.general.deleteToTrash || isMobileOs(s.info?.os);
   const forced = adv<number>(s.settings, "files.confirmDeleteOver");
   if (s.settings.general.confirmDelete || permanent || (forced > 0 && paths.length >= forced)) {
     const what = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;

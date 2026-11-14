@@ -1,10 +1,12 @@
 // Presets and profiles.
 //
-//  - Performance presets: twelve steps from "Barebones" to "God-like". Each one
-//    is a set of ordinary settings (threads, cache size, indexing, thumbnails…),
-//    so after choosing one every value can still be changed by hand.
-//  - Interface presets: Windows, macOS and Linux looks (layout, colors, icons,
-//    corners, window buttons and keyboard shortcuts).
+//  - Performance presets: twelve steps from "Barebones" to "God-like" on a
+//    computer, and six much lighter steps on a phone or tablet. Each one is a
+//    set of ordinary settings (threads, cache size, indexing, thumbnails…), so
+//    after choosing one every value can still be changed by hand.
+//  - Interface presets: Windows, macOS and Linux looks on a computer (layout,
+//    colors, icons, corners, window buttons and keyboard shortcuts), and
+//    Google, Samsung and Apple looks on a phone or tablet.
 //  - Profiles: a saved copy of every setting, unlimited in number. Choosing one
 //    applies it; changes made while a profile of your own is active are saved
 //    into it automatically.
@@ -199,7 +201,7 @@ function perfPatch(l: Level): Patch {
   };
 }
 
-export const PERF_PRESETS: PerfPreset[] = LEVELS.map((l) => ({
+const presetOf = (l: Level): PerfPreset => ({
   id: l.id,
   name: l.name,
   description: l.description,
@@ -208,7 +210,83 @@ export const PERF_PRESETS: PerfPreset[] = LEVELS.map((l) => ({
   minCores: l.minCores,
   caps: { cpu: l.cpu, memory: l.memory },
   patch: perfPatch(l),
-}));
+});
+
+export const PERF_PRESETS: PerfPreset[] = LEVELS.map(presetOf);
+
+// Phones and tablets. A phone shares a few gigabytes between every open app, runs on a
+// battery, and closes whichever app holds the most memory when it runs short. So these
+// are far lighter than the computer presets at the same memory size: the heaviest one
+// here uses less than "Average" does on a computer. Every step gives memory back when the
+// app is in the background and slows down on battery; none of them may be told not to.
+const MOBILE_LEVELS: Level[] = [
+  {
+    id: "m-essential", name: "Essential", threads: 1, cacheMb: 8, index: false, allDrives: false, listings: false, prefetch: false,
+    thumbs: false, thumbPx: 48, overscan: 2, animations: false, folderSizes: false, sizeCache: false, thumbDiskMb: 0, keepUsage: false,
+    keepHardware: false, batterySaver: true, compactIdle: true,
+    description: "The least it can do: one worker thread, nothing kept in memory or on storage, no thumbnails, no folder sizes, no search index and no animation. Search looks through the folder you are in.",
+    recommendedFor: "Phones with 2 GB of memory or less: Android Go phones, phones from before about 2018, and very old tablets.",
+    minRamGb: 0, minCores: 1, cpu: 8, memory: 2,
+  },
+  {
+    id: "m-light", name: "Light", threads: 1, cacheMb: 16, index: false, allDrives: false, listings: true, prefetch: false,
+    thumbs: true, thumbPx: 48, overscan: 3, animations: false, folderSizes: false, sizeCache: false, thumbDiskMb: 16, keepUsage: false,
+    keepHardware: true, batterySaver: true, compactIdle: true,
+    description: "Still one thread. Remembers the last few folders so going back is instant, and shows small thumbnails. No folder sizes, search index or animation.",
+    recommendedFor: "Phones with 3 GB of memory: entry-level phones and older tablets.",
+    minRamGb: 3, minCores: 4, cpu: 10, memory: 2,
+  },
+  {
+    id: "m-balanced", name: "Balanced", threads: 2, cacheMb: 32, index: false, allDrives: false, listings: true, prefetch: false,
+    thumbs: true, thumbPx: 64, overscan: 4, animations: true, folderSizes: false, sizeCache: true, thumbDiskMb: 48, keepUsage: true,
+    keepHardware: true, batterySaver: true, compactIdle: true,
+    description: "Two threads and a 32 MB cache. Thumbnails are kept on storage so picture folders open quickly, and animations are on. Folder sizes are shown only where they were measured before.",
+    recommendedFor: "Phones with 4 GB of memory: most budget phones of the last few years.",
+    minRamGb: 4, minCores: 6, cpu: 15, memory: 3,
+  },
+  {
+    id: "m-smooth", name: "Smooth", threads: 2, cacheMb: 64, index: false, allDrives: false, listings: true, prefetch: false,
+    thumbs: true, thumbPx: 96, overscan: 6, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 96, keepUsage: true,
+    keepHardware: true, batterySaver: true, compactIdle: true,
+    description: "Sharper thumbnails and folder sizes measured in the background, still on two threads. No search index, so nothing runs while the app is idle.",
+    recommendedFor: "Phones with 6 GB of memory: mid-range phones and most tablets.",
+    minRamGb: 6, minCores: 8, cpu: 20, memory: 4,
+  },
+  {
+    id: "m-fast", name: "Fast", threads: 3, cacheMb: 96, index: true, allDrives: false, listings: true, prefetch: true,
+    thumbs: true, thumbPx: 128, overscan: 8, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 160, keepUsage: true,
+    keepHardware: true, batterySaver: true, compactIdle: true,
+    description: "Search becomes instant: built-in storage is indexed in the background on three threads, and folders you are likely to open next are prepared early.",
+    recommendedFor: "Phones with 8 GB of memory: flagship phones of the last few years and good tablets.",
+    minRamGb: 8, minCores: 8, cpu: 25, memory: 5,
+  },
+  {
+    id: "m-max", name: "Maximum", threads: 4, cacheMb: 160, index: true, allDrives: true, listings: true, prefetch: true,
+    thumbs: true, thumbPx: 160, overscan: 10, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 256, keepUsage: true,
+    keepHardware: true, batterySaver: true, compactIdle: true,
+    description: "The most a phone should give one app: four threads, a 160 MB cache, large thumbnails and an index of the memory card as well. It still slows down on battery and gives memory back in the background.",
+    recommendedFor: "Phones and tablets with 12 GB of memory or more: current flagships, foldables and large tablets.",
+    minRamGb: 12, minCores: 8, cpu: 35, memory: 6,
+  },
+];
+
+export const MOBILE_PERF_PRESETS: PerfPreset[] = MOBILE_LEVELS.map(presetOf);
+
+/** The performance presets for the kind of device: a computer, or a phone or tablet. */
+export function perfPresetsFor(mobile: boolean): PerfPreset[] {
+  return mobile ? MOBILE_PERF_PRESETS : PERF_PRESETS;
+}
+
+/** Which phone preset suits a device: the strongest one its memory AND cores support. */
+export function recommendMobilePerf(totalRamMb: number, cpus: number): PerfPreset {
+  // A phone reports noticeably less than the size on its box (an "8 GB" phone says about 7.3), so round up.
+  const gb = Math.ceil(totalRamMb / 1024 - 0.05);
+  let best = 0;
+  MOBILE_PERF_PRESETS.forEach((p, i) => {
+    if (gb >= p.minRamGb && cpus >= p.minCores) best = i;
+  });
+  return MOBILE_PERF_PRESETS[best];
+}
 
 /** Which performance preset suits a machine: the strongest one its memory AND cores support. */
 export function recommendPerf(totalRamMb: number, cpus: number, laptop: boolean): PerfPreset {
@@ -223,10 +301,10 @@ export function recommendPerf(totalRamMb: number, cpus: number, laptop: boolean)
 }
 
 // ---------------------------------------------------------------------------
-// Interface presets (Windows, macOS, Linux)
+// Interface presets (Windows, macOS, Linux; Google, Samsung, Apple on phones)
 // ---------------------------------------------------------------------------
 
-export type Platform = "windows" | "macos" | "linux";
+export type Platform = "windows" | "macos" | "linux" | "google" | "samsung" | "apple";
 
 export interface UiPreset {
   id: Platform;
@@ -238,6 +316,8 @@ export interface UiPreset {
   patch: Patch;
   /** Values set when the style is chosen but not part of what it "is", so changing them later does not make the style read as customized. */
   start?: Patch;
+  /** A phone and tablet look, modelled on a phone's own file manager. */
+  mobile?: boolean;
 }
 
 const layoutOf = (id: string) => LAYOUTS.find((l) => l.id === id)!.layout;
@@ -365,11 +445,98 @@ export const UI_PRESETS: UiPreset[] = [
       keys: LINUX_KEYS,
     },
   },
+  // ---- Phones and tablets. The phone layout has no docks or window buttons, so these
+  // ---- set the arrangement, colors, shapes and how items open, and nothing else.
+  {
+    id: "google",
+    name: "Google",
+    mobile: true,
+    description: "Arranged like Files by Google: a rounded search bar on top, a Browse page with categories and storage, a bar along the bottom to switch pages, and a simple list with a menu button on every row. Material colors, pill-shaped buttons and large rounded sheets.",
+    recommendedFor: "Pixel, Motorola, Nokia, OnePlus and most other Android phones.",
+    themes: { dark: "material-dark", light: "material-light" },
+    start: { "appearance.viewLevel": 0 },
+    patch: {
+      "advanced.ui.chrome": "google",
+      "advanced.ui.statusBar": false,
+      "appearance.density": "comfortable",
+      "appearance.style.icons": "outline",
+      "appearance.style.radius": 16,
+      "appearance.style.menu": "floating",
+      "appearance.style.folderColor": "mono",
+      "appearance.style.font": "ui",
+      "appearance.showDetailsPane": false,
+      "advanced.files.singleClickOpen": true,
+      "advanced.files.sizeUnits": "decimal",
+      keys: {},
+    },
+  },
+  {
+    id: "samsung",
+    name: "Samsung",
+    mobile: true,
+    description: "Arranged like My Files on a Galaxy: a large title that leaves room for your thumb, categories as round colored buttons, storage and tools in rounded cards, the path across the top of every folder, and Move, Copy, Share and Delete along the bottom while you select. One UI colors and yellow folders.",
+    recommendedFor: "Samsung Galaxy phones and tablets.",
+    themes: { dark: "oneui-dark", light: "oneui-light" },
+    start: { "appearance.viewLevel": 0 },
+    patch: {
+      "advanced.ui.chrome": "samsung",
+      "advanced.ui.statusBar": false,
+      "appearance.density": "comfortable",
+      "appearance.style.icons": "bold",
+      "appearance.style.radius": 22,
+      "appearance.style.menu": "floating",
+      "appearance.style.folderColor": "classic",
+      "appearance.style.font": "ui",
+      "appearance.showDetailsPane": false,
+      "advanced.files.singleClickOpen": true,
+      "advanced.files.sizeUnits": "decimal",
+      keys: {},
+    },
+  },
+  {
+    id: "apple",
+    name: "Apple",
+    mobile: true,
+    description: "Arranged like Files on an iPhone: a large Browse title with a search field, Locations and Favorites in grouped lists, Recents and Browse in a bar along the bottom, blue folders in a grid, a back button that names where you came from, and a round menu button for Select, New Folder, view and sorting.",
+    recommendedFor: "iPhone and iPad.",
+    themes: { dark: "ios-dark", light: "ios-light" },
+    start: { "appearance.viewLevel": 3 },
+    patch: {
+      "advanced.ui.chrome": "apple",
+      "advanced.ui.statusBar": false,
+      "appearance.density": "comfortable",
+      "appearance.style.icons": "thin",
+      "appearance.style.radius": 12,
+      "appearance.style.menu": "glass",
+      "appearance.style.folderColor": "blue",
+      "appearance.style.font": "ui",
+      "appearance.showDetailsPane": false,
+      "advanced.files.singleClickOpen": true,
+      "advanced.files.sizeUnits": "decimal",
+      keys: {},
+    },
+  },
 ];
 
-/** The interface preset that matches this computer. */
-export function platformFor(os: string | undefined): Platform {
+/** The interface presets for the kind of device. */
+export function uiPresetsFor(mobile: boolean): UiPreset[] {
+  return UI_PRESETS.filter((p) => !!p.mobile === mobile);
+}
+
+/**
+ * The interface preset that matches this device. On Android the maker decides between the
+ * Samsung and the Google look; `maker` is the manufacturer's name when it is known.
+ */
+export function platformFor(os: string | undefined, maker?: string): Platform {
+  if (os === "ios") return "apple";
+  if (os === "android") return /samsung/i.test(maker ?? "") ? "samsung" : "google";
   return os === "macos" ? "macos" : os === "linux" ? "linux" : "windows";
+}
+
+/** The phone look that goes with a system when the phone layout is shown on a computer. */
+export function mobilePlatformFor(os: string | undefined, maker?: string): Platform {
+  if (os === "macos" || os === "ios") return "apple";
+  return /samsung/i.test(maker ?? "") ? "samsung" : "google";
 }
 
 // ---------------------------------------------------------------------------
@@ -411,9 +578,9 @@ export function differences(settings: Settings, patch: Patch): string[] {
 
 const sorted = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
 
-/** The preset whose values all match the settings, if any. */
+/** The preset whose values all match the settings, if any (computer and phone presets alike). */
 export function currentPerfPreset(settings: Settings): PerfPreset | undefined {
-  return PERF_PRESETS.find((p) => differences(settings, p.patch).length === 0);
+  return [...PERF_PRESETS, ...MOBILE_PERF_PRESETS].find((p) => differences(settings, p.patch).length === 0);
 }
 
 /** Everything that belongs in a profile: the settings without the profile bookkeeping. */

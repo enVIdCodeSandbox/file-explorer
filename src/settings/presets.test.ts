@@ -96,8 +96,8 @@ describe("performance presets", () => {
 });
 
 describe("interface presets", () => {
-  it("covers the three platforms with real themes and shortcut ids", () => {
-    expect(UI_PRESETS.map((p) => p.id)).toEqual(["windows", "macos", "linux"]);
+  it("covers the three platforms and the three phone looks with real themes and shortcut ids", () => {
+    expect(UI_PRESETS.map((p) => p.id)).toEqual(["windows", "macos", "linux", "google", "samsung", "apple"]);
     const ids = new Set(THEMES.map((t) => t.id));
     const commands = new Set(KEY_COMMANDS.map((k) => k.id));
     for (const p of UI_PRESETS) {

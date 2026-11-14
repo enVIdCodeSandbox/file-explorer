@@ -32,7 +32,6 @@ rustls-native-certs = "0.8"
 quick-xml = "0.42"
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3"
-mtp-rs = "0.38"
 bytes = "1"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "net", "io-util", "time", "sync"] }
@@ -51,6 +50,8 @@ argon2 = "0.5"
 
 # Desktop-only dependencies. Mobile builds get reduced-feature fallbacks.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Phones over USB. Its USB layer cannot list devices on Android, and a phone has no use for it.
+mtp-rs = "0.38"
 sysinfo = { version = "0.33", default-features = false, features = ["disk", "system"] }
 dirs = "6"
 trash = "5"
@@ -59,7 +60,7 @@ reflink-copy = "0.1"
 starship-battery = "0.10"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

@@ -31,6 +31,7 @@ pub struct Drive {
     pub remote: Option<String>,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const NETWORK_FS: &[&str] = &[
     "nfs", "nfs4", "cifs", "smb", "smb2", "smb3", "smbfs", "afpfs", "webdav", "davfs",
     "fuse.sshfs", "sshfs", "9p", "ncpfs", "fuse.rclone", "ceph", "glusterfs",
@@ -109,6 +110,7 @@ pub fn list_drives() -> Vec<Drive> {
 pub fn signature() -> u64 {
     #[allow(unused_imports)] // Windows hashes through its own module
     use std::hash::{Hash, Hasher};
+    #[allow(unused_mut)] // phones have nothing to feed it
     let mut h = std::collections::hash_map::DefaultHasher::new();
     #[cfg(windows)]
     win::signature(&mut h);
@@ -144,8 +146,25 @@ pub fn changes<'a>(before: &'a [Drive], after: &'a [Drive]) -> (Vec<&'a Drive>, 
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn list_drives() -> Vec<Drive> {
-    // Mobile storage roots are granted by the OS per app; see docs/ROADMAP.md.
-    Vec::new()
+    crate::phone::roots()
+        .into_iter()
+        .map(|r| {
+            let space = crate::phone::space(&r.path);
+            Drive {
+                name: r.name,
+                mount: r.path.to_string_lossy().into_owned(),
+                fs: String::new(),
+                total: space.map(|s| s.0).unwrap_or(0),
+                available: space.map(|s| s.1).unwrap_or(0),
+                media: if r.removable { Media::Removable } else { Media::Ssd },
+                removable: r.removable,
+                read_only: false,
+                // An unreadable root still appears, so the app can explain how to allow access.
+                online: true,
+                remote: None,
+            }
+        })
+        .collect()
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

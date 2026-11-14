@@ -27,6 +27,12 @@ export const THEMES: ThemeInfo[] = [
   { id: "mac-light", name: "macOS Light", dark: false, swatch: ["#ececec", "#ffffff", "#1d1d1f", "#007aff"] },
   { id: "adwaita-dark", name: "GNOME Dark", dark: true, swatch: ["#1e1e1e", "#2e2e32", "#ffffff", "#78aeed"] },
   { id: "adwaita-light", name: "GNOME Light", dark: false, swatch: ["#fafafb", "#ffffff", "#2e3436", "#3584e4"] },
+  { id: "material-dark", name: "Google Dark", dark: true, swatch: ["#131314", "#1e1f20", "#e3e3e3", "#a8c7fa"] },
+  { id: "material-light", name: "Google Light", dark: false, swatch: ["#ffffff", "#f0f4f9", "#1f1f1f", "#0b57d0"] },
+  { id: "oneui-dark", name: "Samsung Dark", dark: true, swatch: ["#000000", "#171717", "#fafafa", "#3e91ff"] },
+  { id: "oneui-light", name: "Samsung Light", dark: false, swatch: ["#f2f2f2", "#fcfcfc", "#252525", "#0381fe"] },
+  { id: "ios-dark", name: "iOS Dark", dark: true, swatch: ["#000000", "#1c1c1e", "#ffffff", "#0a84ff"] },
+  { id: "ios-light", name: "iOS Light", dark: false, swatch: ["#f2f2f7", "#ffffff", "#000000", "#007aff"] },
   { id: "contrast-dark", name: "High contrast (dark)", dark: true, swatch: ["#000000", "#000000", "#ffffff", "#ffff00"] },
   { id: "contrast-light", name: "High contrast (light)", dark: false, swatch: ["#ffffff", "#ffffff", "#000000", "#0000cc"] },
 ];

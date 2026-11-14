@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Phones and tablets: the system back button may close the app once nothing is left to go back to.",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": ["core:app:allow-exit"]
+}

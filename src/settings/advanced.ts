@@ -38,7 +38,9 @@ export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and li
 export const ADVANCED: AdvDef[] = [
   // ---- Interface ----
   sel("auto", "ui.language", "Interface", "Language", [["auto", "Automatic (system language)"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["pt", "Português"], ["it", "Italiano"], ["ru", "Русский"], ["zh", "简体中文"], ["ja", "日本語"], ["ko", "한국어"]], "Used by the setup wizard and the labels that are translated so far; anything else stays in English."),
-  sel("windows", "ui.chrome", "Interface", "Window arrangement", [["windows", "Windows (File Explorer)"], ["macos", "macOS (Finder)"], ["linux", "Linux (GNOME Files)"]], "How the same tabs, address bar, commands and navigation pane are arranged. The interface style sets this for you."),
+  sel("windows", "ui.chrome", "Interface", "Window arrangement", [["windows", "Windows (File Explorer)"], ["macos", "macOS (Finder)"], ["linux", "Linux (GNOME Files)"], ["google", "Phone: Google (Files by Google)"], ["samsung", "Phone: Samsung (My Files)"], ["apple", "Phone: Apple (Files)"]], "How the same parts are arranged. The interface style sets this for you. The three phone arrangements are used by the phone layout."),
+  sel("auto", "ui.phoneLayout", "Interface", "Phone layout", [["auto", "Automatic (on phones and tablets)"], ["on", "Always"], ["off", "Never"]], "The touch layout: one column, a bar along the bottom, press and hold to select. \"Always\" shows it on a computer too, which is a quick way to see it; make the window narrow."),
+  sel("slider", "ui.perfPresetView", "Interface", "Performance presets are shown as", [["slider", "A slider"], ["cards", "Cards"]], "Settings > Presets and profiles has a button for this too."),
   yn(true, "ui.animations", "Interface", "Animations", "Turn off for instant, motion-free changes."),
   num(100, "ui.scale", "Interface", "Interface zoom", 60, 200, "%", "Makes everything larger or smaller.", 5),
   num(0, "ui.rowHeight", "Interface", "Row height", 0, 60, "px", "0 follows the density setting."),

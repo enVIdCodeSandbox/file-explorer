@@ -23,6 +23,7 @@ pub mod locks;
 pub mod media;
 pub mod openwith;
 pub mod ops;
+pub mod phone;
 pub mod platform;
 pub mod predict;
 pub mod remote;

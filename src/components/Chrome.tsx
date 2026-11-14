@@ -1015,7 +1015,7 @@ const MIN_WIDTH = 150;
 const MAX_WIDTH = 480;
 
 /** The address a saved server opens at. */
-function serverUrl(s: SavedServer): string {
+export function serverUrl(s: SavedServer): string {
   const scheme = s.protocol === "dav" ? (s.tls ? "davs" : "dav") : s.protocol;
   const port = s.port === (s.protocol === "ftp" ? 21 : s.protocol === "sftp" ? 22 : s.tls ? 443 : 80) ? "" : `:${s.port}`;
   const user = s.user ? `${s.user}@` : "";

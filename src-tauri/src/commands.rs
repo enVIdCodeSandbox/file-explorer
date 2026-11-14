@@ -339,6 +339,34 @@ pub async fn hash_file(path: String) -> CmdResult<String> {
     .await
 }
 
+/// The most a file may weigh to be shown in the app's own viewer. It is read into memory
+/// whole, and a phone has little to spare.
+const VIEW_LIMIT: u64 = 96 * 1024 * 1024;
+
+/// The bytes of a file, for the app's own viewer on devices that cannot hand a file to
+/// another app. Folders, locked places and very large files are refused.
+#[tauri::command]
+pub async fn read_for_view(state: State<'_, Shared>, path: String) -> CmdResult<tauri::ipc::Response> {
+    let st = state.inner().clone();
+    guard(&st, &path)?;
+    let bytes = blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|e| format!("Could not read {path}: {e}"))?;
+        if !meta.is_file() {
+            return Err("That is not a file.".to_string());
+        }
+        if meta.len() > VIEW_LIMIT {
+            return Err(format!(
+                "This file is {} MB; the viewer shows files up to {} MB.",
+                meta.len() / (1024 * 1024),
+                VIEW_LIMIT / (1024 * 1024)
+            ));
+        }
+        std::fs::read(&path).map_err(|e| format!("Could not read {path}: {e}"))
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> CmdResult<tauri::ipc::Response> {
     let st = state.inner().clone();
@@ -2828,6 +2856,9 @@ pub async fn import_settings(app: AppHandle, state: State<'_, Shared>, json: Str
 #[tauri::command]
 pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: String, x: Option<f64>, y: Option<f64>) -> CmdResult<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if cfg!(mobile) {
+        return Err(ONE_WINDOW.into());
+    }
     let n = state.next_id.fetch_add(1, Ordering::Relaxed);
     let script = format!("window.__OPEN__ = {};", serde_json::to_string(&location).map_err(err)?);
     let mut builder = WebviewWindowBuilder::new(&app, format!("window-{n}"), WebviewUrl::App("index.html".into()))
@@ -2839,7 +2870,7 @@ pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: Str
     {
         builder = builder.decorations(true).title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(desktop, not(target_os = "macos")))]
     {
         builder = builder.decorations(false);
     }
@@ -2850,6 +2881,9 @@ pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: Str
     Ok(())
 }
 
+
+/// Phones and tablets show the app in one window.
+const ONE_WINDOW: &str = "This device shows the app in one window, so panels and tabs stay inside it.";
 
 /// Logical height of the tab strip, used to decide whether a pointer is over another window's tabs.
 const TAB_BAR_HEIGHT: f64 = 46.0;
@@ -2908,6 +2942,7 @@ pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: St
     let Some(target) = app.get_webview_window(&label) else { return Ok(false) };
     let payload = serde_json::json!({ "location": location, "x": (px - left) / ts, "y": (py - top) / ts });
     app.emit_to(label.as_str(), "tab-drop", payload).map_err(err)?;
+    #[cfg(desktop)]
     let _ = target.unminimize();
     let _ = target.set_focus();
     if close_source {
@@ -2921,7 +2956,11 @@ pub async fn drop_tab(app: AppHandle, window: tauri::WebviewWindow, location: St
 /// are labelled by `kind`, and every window is told when one opens or closes.
 fn open_detached(app: &AppHandle, kind: &'static str, title: &str, size: (f64, f64), min: (f64, f64)) -> CmdResult<()> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if cfg!(mobile) {
+        return Err(ONE_WINDOW.into());
+    }
     if let Some(w) = app.get_webview_window(kind) {
+        #[cfg(desktop)]
         let _ = w.unminimize();
         w.set_focus().map_err(err)?;
         return Ok(());
@@ -2967,6 +3006,7 @@ pub async fn reattach(app: AppHandle, window: tauri::WebviewWindow, kind: String
     use tauri::Manager;
     let main = app.get_webview_window("main").ok_or("The main window is closed, so there is nothing to attach to.")?;
     app.emit_to("main", "reattach", serde_json::json!({ "kind": kind, "payload": payload })).map_err(err)?;
+    #[cfg(desktop)]
     let _ = main.unminimize();
     let _ = main.set_focus();
     window.close().map_err(err)?;

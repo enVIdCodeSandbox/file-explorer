@@ -6,8 +6,18 @@ import { adv } from "../settings/advanced";
 import { useStore } from "../store";
 
 export type Chrome = "windows" | "macos" | "linux";
+/** The phone arrangements, each like the file manager that comes with that maker's phones. */
+export type PhoneChrome = "google" | "samsung" | "apple";
 
-export const asChrome = (v: unknown): Chrome => (v === "macos" || v === "linux" ? v : "windows");
+/** The computer arrangement to use. A phone look saved in the settings shows as the nearest computer one. */
+export const asChrome = (v: unknown): Chrome => (v === "macos" || v === "apple" ? "macos" : v === "linux" ? "linux" : "windows");
+
+/** The phone arrangement to use. A computer look saved in the settings shows as the nearest phone one. */
+export const asPhoneChrome = (v: unknown): PhoneChrome => (v === "samsung" ? "samsung" : v === "apple" || v === "macos" ? "apple" : "google");
+
+export function usePhoneChrome(): PhoneChrome {
+  return useStore((s) => asPhoneChrome(s.settings ? adv<string>(s.settings, "ui.chrome") : "google"));
+}
 
 export function useChrome(): Chrome {
   return useStore((s) => asChrome(s.settings ? adv<string>(s.settings, "ui.chrome") : "windows"));

@@ -168,6 +168,7 @@ pub fn run() {
             commands::folder_sizes_start,
             commands::hash_file,
             commands::thumbnail,
+            commands::read_for_view,
             commands::get_drives,
             commands::get_devices,
             commands::network_link,

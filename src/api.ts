@@ -624,6 +624,8 @@ export const api = {
   folderStats: (path: string) => invoke<FolderStats>("folder_stats", { path }),
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
   thumbnail: (path: string, size: number) => invoke<ArrayBuffer>("thumbnail", { path, size }),
+  /** A whole file, for the app's own viewer (phones that cannot hand a file to another app). */
+  readForView: (path: string) => invoke<ArrayBuffer>("read_for_view", { path }),
   getDrives: () => invoke<Drive[]>("get_drives"),
   getDevices: () => invoke<Device[]>("get_devices"),
   networkLink: () => invoke<NetworkLink>("network_link"),

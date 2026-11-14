@@ -32,6 +32,8 @@ import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Thumb } from "./Thumb";
 import { useShellItems } from "./shellMenu";
+import { Icon } from "./Icons";
+import { shareOutside, useMobile } from "../util/device";
 
 /** Pixel widths of the Details columns. The list is only as wide as these,
  *  so there is always empty space on the right to right-click. */
@@ -85,7 +87,11 @@ export function FileView({ path }: { path: string }) {
   const level = VIEW_LEVELS[Math.max(0, Math.min(VIEW_LEVELS.length - 1, viewLevelOf(settings, folderView)))];
   const thumbPx = ICON_PX[level] ?? settings.performance.thumbnailSize;
   const tileLayout = layoutFor(level, thumbPx);
-  const details = level === "details";
+  // The phone layout has two shapes: a list of two-line rows, and a grid of icons.
+  const mobile = useMobile();
+  const details = level === "details" || (mobile && (level === "list" || level === "small"));
+  const selecting = useStore((s) => s.selecting);
+  const setSelecting = (on: boolean) => useStore.setState({ selecting: on });
 
   const [listing, setListing] = useState<Listing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,9 +123,13 @@ export function FileView({ path }: { path: string }) {
   useEffect(() => {
     setSelected(new Set());
     setRenaming(null);
+    useStore.setState({ selecting: false });
     scroller.current?.scrollTo({ top: 0 });
-    scroller.current?.focus();
-  }, [path]);
+    // On a phone, focusing would do nothing useful and can bring up the keyboard's accessory bar.
+    if (!mobile) scroller.current?.focus();
+  }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the folder view (to Settings, another page) ends select mode.
+  useEffect(() => () => useStore.setState({ selecting: false }), []);
 
   const current = listing?.path === path ? listing : null;
 
@@ -217,6 +227,12 @@ export function FileView({ path }: { path: string }) {
     else if (command.name === "selectNone") setSelected(new Set());
     else if (command.name === "invert") setSelected(new Set(entries.filter((e) => !selected.has(e.name)).map((e) => e.name)));
     else if (command.name === "rename") startRename();
+    else if (command.name === "select") setSelecting(true);
+    else if (command.name === "newFolder") void create(true);
+    else if (command.name === "newFile") void create(false);
+    else if (command.name === "paste") paste();
+    else if (command.name === "refresh") refresh();
+    else if (command.name === "menu") showMenu(window.innerWidth, 0, null);
   }, [command?.tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -255,13 +271,18 @@ export function FileView({ path }: { path: string }) {
   const columnsPerRow = details ? 1 : Math.max(1, Math.floor((width - 16) / tileLayout.w));
   const rowCount = Math.ceil(entries.length / columnsPerRow);
   const customRow = adv<number>(settings, "ui.rowHeight");
-  const rowHeight = details ? (customRow > 0 ? customRow : compact ? 26 : 34) : tileLayout.h;
-  const headerHeight = details ? 28 : 0;
+  // A phone row is tall enough for a finger: an icon, the name, and a line of date and size.
+  // A phone shows two lines of the name under an icon, so its tiles are a little taller.
+  const tileH = tileLayout.h + (mobile ? 20 : 0);
+  const rowHeight = details ? (mobile ? Math.max(56, customRow) : customRow > 0 ? customRow : compact ? 26 : 34) : tileH;
+  const headerHeight = details && !mobile ? 28 : 0;
+  // On a phone the icons spread to fill the row instead of leaving a gap on the right.
+  const tileW = mobile && !details ? Math.floor((width - 16) / columnsPerRow) : tileLayout.w;
   // Name keeps its own width and the list does not stretch to the pane's edge (the free
   // space on the right stays free). In a pane too narrow for that, Name gives way first,
   // so there is no sideways scrollbar unless the other columns alone are wider than the pane.
   const cols = { ...columns, name: Math.max(MIN_COLUMN.name, Math.min(columns.name, width - 14 - columns.modified - columns.type - columns.size)) };
-  const rowsWidth = cols.name + cols.modified + cols.type + cols.size;
+  const rowsWidth = mobile ? width : cols.name + cols.modified + cols.type + cols.size;
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller.current,
@@ -497,7 +518,7 @@ export function FileView({ path }: { path: string }) {
   // ---- Selection box (see useSelectionBand) ---------------------------------------
   const { band, startBand } = useSelectionBand({
     scroller,
-    geometry: { count: entries.length, details, rowHeight, headerHeight, rowsWidth, columnsPerRow, tileW: tileLayout.w, tileH: tileLayout.h },
+    geometry: { count: entries.length, details, rowHeight, headerHeight, rowsWidth, columnsPerRow, tileW, tileH },
     keys: useMemo(() => entries.map((e) => e.name), [entries]),
     selected,
     commit: (next) => commit(next),
@@ -620,7 +641,92 @@ export function FileView({ path }: { path: string }) {
 
   const isArchiveDrop = (e: FileEntry) => !e.isDir && isArchiveFile(e.name) && !isRemote(path) && !isArchiveLoc(path);
 
-  const itemProps = (e: FileEntry, i: number) => ({
+  // ---- Touch (the phone layout) ---------------------------------------------
+  // A tap opens. Pressing and holding starts select mode with that item ticked; from then
+  // on a tap ticks or unticks. Android reports a long press as a "context menu" request;
+  // iOS reports nothing, so a timer does the same job on both.
+  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; x: number; y: number; held: boolean }>({ x: 0, y: 0, held: false });
+  const tick = (name: string, on?: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on ?? !next.has(name)) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+  const hold = (e: FileEntry) => {
+    if (!press.current.held) {
+      try {
+        navigator.vibrate?.(12);
+      } catch {
+        /* no vibration motor, or not allowed */
+      }
+    }
+    press.current.held = true;
+    setSelecting(true);
+    tick(e.name, true);
+  };
+  const touchProps = (e: FileEntry, i: number) => ({
+    "data-selected": selected.has(e.name) || undefined,
+    "data-cut": cut?.has(fullPath(e.name)) || undefined,
+    "data-hidden": e.isHidden || undefined,
+    "data-kind": kindOf(e.name, e.isDir),
+    onPointerDown: (ev: React.PointerEvent) => {
+      clearTimeout(press.current.timer);
+      press.current = { x: ev.clientX, y: ev.clientY, held: false };
+      if (renaming || ev.button !== 0) return;
+      press.current.timer = setTimeout(() => hold(e), 480);
+    },
+    onPointerMove: (ev: React.PointerEvent) => {
+      // A finger that travels is scrolling, not holding.
+      if (Math.abs(ev.clientX - press.current.x) > 10 || Math.abs(ev.clientY - press.current.y) > 10) clearTimeout(press.current.timer);
+    },
+    onPointerUp: () => clearTimeout(press.current.timer),
+    onPointerCancel: () => clearTimeout(press.current.timer),
+    onPointerLeave: () => clearTimeout(press.current.timer),
+    onClick: (ev: React.MouseEvent) => {
+      ev.stopPropagation();
+      if (renaming) return;
+      // The tap that ends a long press is not also a tap on the item.
+      if (press.current.held) {
+        press.current.held = false;
+        return;
+      }
+      cursor.current = i;
+      if (useStore.getState().selecting) tick(e.name);
+      else open(e);
+    },
+    onContextMenu: (ev: React.MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      clearTimeout(press.current.timer);
+      hold(e);
+    },
+  });
+  /** Phone layout: the items the bar along the bottom acts on. */
+  const act = (what: "move" | "copy" | "share" | "delete" | "more", ev?: React.MouseEvent) => {
+    const chosen = entries.filter((x) => selected.has(x.name));
+    const paths = chosen.map((x) => fullPath(x.name));
+    if (!paths.length) return;
+    if (what === "move" || what === "copy") {
+      setClipboard({ paths, op: what });
+      setSelecting(false);
+      setSelected(new Set());
+      showToast(`Open the folder to ${what} ${paths.length === 1 ? "it" : "them"} to, then tap ${what === "move" ? "Move here" : "Copy here"}.`);
+    } else if (what === "delete") {
+      void deletePaths(paths).then((gone) => gone && setSelecting(false));
+    } else if (what === "share") {
+      if (chosen.some((x) => x.isDir) || isRemote(path) || isArchiveLoc(path)) return void useStore.setState({ shareFor: paths });
+      const said = shareOutside(paths);
+      if (said === null) useStore.setState({ shareFor: paths });
+      else if (said) showToast(said);
+    } else {
+      const r = (ev?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect();
+      showMenu(r?.left ?? 0, r?.top ?? 0, chosen[0]);
+    }
+  };
+
+  const itemProps = (e: FileEntry, i: number) => (mobile ? touchProps(e, i) : desktopProps(e, i));
+  const desktopProps = (e: FileEntry, i: number) => ({
     // A folder takes what is dropped on it; so does an archive file, which adds to it.
     "data-drop": e.isDir || isArchiveDrop(e) ? "folder" : undefined,
     "data-drop-path": e.isDir ? fullPath(e.name) : isArchiveDrop(e) ? archiveUrl(fullPath(e.name)) : undefined,
@@ -738,7 +844,7 @@ export function FileView({ path }: { path: string }) {
   const filtered = isFiltering(filter);
 
   return (
-    <div className="file-view" data-view={details ? "details" : "grid"} data-level={level}>
+    <div className="file-view" data-view={details ? "details" : "grid"} data-level={level} data-selecting={(mobile && selecting) || undefined}>
       <div
         ref={scroller}
         className="file-scroller"
@@ -746,14 +852,16 @@ export function FileView({ path }: { path: string }) {
         data-drop-path={path}
         tabIndex={0}
         onKeyDown={onKeyDown}
-        onMouseDown={startBand}
+        onMouseDown={mobile ? undefined : startBand}
         onContextMenu={(ev) => {
           ev.preventDefault();
+          // On a phone a long press on empty space does nothing; the menu is in the bar on top.
+          if (mobile) return;
           setSelected(new Set());
           showMenu(ev.clientX, ev.clientY, null);
         }}
       >
-        {details && (
+        {details && !mobile && (
           <div className="file-header" style={{ width: rowsWidth + 14 }} onMouseDown={(e) => e.stopPropagation()}>
             {header("name", "Name", "name")}
             {header("modified", "Date modified", "modified")}
@@ -784,6 +892,33 @@ export function FileView({ path }: { path: string }) {
               details ? (
                 (() => {
                   const e = entries[row.index];
+                  if (mobile)
+                    return (
+                      <div key={e.name} className="file-row m-row" style={{ transform: `translateY(${row.start}px)`, height: rowHeight }} {...itemProps(e, row.index)}>
+                        <span className="m-check" aria-hidden="true"><Icon name="check" size={14} /></span>
+                        <span className="m-thumb"><Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={40} iconSize={30} view="small" /></span>
+                        <span className="m-text">
+                          {nameCell(e)}
+                          <span className="m-meta">
+                            {[formatDate(e.modified), e.isDir ? (folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "") : formatSize(e.size)].filter(Boolean).join("  ·  ")}
+                          </span>
+                        </span>
+                        {e.isDir && <span className="m-chevron" aria-hidden="true"><Icon name="chevron" size={14} /></span>}
+                        <button
+                          className="m-more"
+                          aria-label={`More actions for ${e.name}`}
+                          onPointerDown={(ev) => ev.stopPropagation()}
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            const r = ev.currentTarget.getBoundingClientRect();
+                            cursor.current = row.index;
+                            showMenu(r.left, r.bottom, e);
+                          }}
+                        >
+                          <Icon name="more" size={18} />
+                        </button>
+                      </div>
+                    );
                   return (
                     <div
                       key={e.name}
@@ -808,10 +943,11 @@ export function FileView({ path }: { path: string }) {
                       key={e.name}
                       className="file-tile"
                       data-layout={tileLayout.mode}
-                      style={{ width: tileLayout.w, height: tileLayout.h - 4 }}
-                      title={e.name}
+                      style={{ width: tileW, height: tileH - 4 }}
+                      title={mobile ? undefined : e.name}
                       {...itemProps(e, row.index * columnsPerRow + k)}
                     >
+                      {mobile && <span className="m-check" aria-hidden="true"><Icon name="check" size={14} /></span>}
                       <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={tileLayout.icon} view={level} />
                       {nameCell(e)}
                     </div>
@@ -823,6 +959,37 @@ export function FileView({ path }: { path: string }) {
         )}
         {band && <div className="select-band" style={{ left: band.l, top: band.t, width: band.w, height: band.h }} />}
       </div>
+      {mobile && selecting && (
+        <>
+          <div className="m-select-top" role="toolbar" aria-label="Selection">
+            <button className="m-icon-button" aria-label="Stop selecting" onClick={() => { setSelecting(false); setSelected(new Set()); }}>
+              <Icon name="close" size={20} />
+            </button>
+            <strong>{selected.size === 0 ? "Select items" : `${selected.size.toLocaleString()} selected`}</strong>
+            {selectedSize > 0 && <span className="muted">{formatSize(selectedSize)}</span>}
+            <span className="grow" />
+            <button className="m-text-button" onClick={() => setSelected(selected.size === entries.length ? new Set() : new Set(entries.map((x) => x.name)))}>
+              {selected.size === entries.length && entries.length > 0 ? "None" : "All"}
+            </button>
+          </div>
+          <div className="m-actions" role="toolbar" aria-label="Actions for the selected items" data-empty={selected.size === 0 || undefined}>
+            {(
+              [
+                ["move", "Move", "cut"],
+                ["copy", "Copy", "copy"],
+                ["share", "Share", "share"],
+                ["delete", "Delete", "trash"],
+                ["more", "More", "more"],
+              ] as const
+            ).map(([id, label, icon]) => (
+              <button key={id} disabled={selected.size === 0} data-danger={id === "delete" || undefined} onClick={(ev) => act(id, ev)}>
+                <Icon name={icon} size={22} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <div className="status-bar">
         <span>
           {entries.length.toLocaleString()} item{entries.length === 1 ? "" : "s"}

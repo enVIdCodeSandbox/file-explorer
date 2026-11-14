@@ -43,9 +43,10 @@
 9. **Details:** EXIF, audio/video metadata, owner names, Windows ACL summary.
 10. **Drive health** (SMART). Needs elevated access on every OS; show it only
     when available.
-11. **Mobile shell.** Android via the Storage Access Framework; iOS via the
-    document picker and the app's own container. Whole-device indexing is not
-    possible on either; the mobile build will be a reduced-feature app.
+11. **Mobile, next steps.** The Android and iOS builds exist (docs/MOBILE.md).
+    Still to do: opening and sharing files through the system on iOS (needs a
+    small Swift plugin), picking folders outside the app's own on iOS, and
+    a Play Store bundle (.aab) for Android.
 12. **Signing and auto-update** for installers. Signing is wired into the release workflow and switches on when the certificate secrets exist (see RELEASING.md); it has never run with a real certificate. Auto-update is not built.
 
 ## Known limits in this build

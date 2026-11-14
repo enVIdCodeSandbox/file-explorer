@@ -13,6 +13,7 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `folder_sizes_start` | `folderSizesStart` | `dir: String, names: Vec<String>, refresh: bool` | `()` | Measure the given subfolders of `dir` one after another in the background, sending a `folder-size` event for each. Starting another job (opening a different folder) cancels this one. Recent results are reused unless `refresh` is set. |
 | `hash_file` | `hashFile` | `path: String` | `String` |  |
 | `thumbnail` | `thumbnail` | `path: String, size: u32` | `tauri::ipc::Response` |  |
+| `read_for_view` | `readForView` | `path: String` | `tauri::ipc::Response` | A whole file (up to 96 MB) for the viewer on phones. |
 | `get_drives` | `getDrives` | `—` | `Vec<Drive>` | Query the OS for volumes. The frontend shows the cached list from the session first, so this never delays first paint. |
 | `known_folders` | `knownFolders` | `—` | `Vec<Place>` |  |
 | `index_status` | `indexStatus` | `—` | `IndexStatus` |  |

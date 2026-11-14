@@ -1,6 +1,7 @@
 // Settings: one searchable screen, divided into sections, generated from
 // src/settings/schema.ts. Changes apply and save immediately.
 
+import { isMobileNow } from "../util/device";
 import { useT } from "../i18n";
 import { About } from "./About";
 import { Docs } from "./Docs";
@@ -223,7 +224,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
           </h2>
           <div className="search-box">
             <Icon name="search" size={14} />
-            <input autoFocus value={query} placeholder="Search settings" aria-label="Search settings" onChange={(e) => setQuery(e.target.value)} />
+            <input autoFocus={!isMobileNow()} value={query} placeholder="Search settings" aria-label="Search settings" onChange={(e) => setQuery(e.target.value)} />
           </div>
           {SECTIONS.map((s) => (
             <button

@@ -10,6 +10,7 @@ import iface from "../../docs/INTERFACE.md?raw";
 import ipc from "../../docs/IPC.md?raw";
 import theming from "../../docs/THEMING.md?raw";
 import roadmap from "../../docs/ROADMAP.md?raw";
+import mobile from "../../docs/MOBILE.md?raw";
 
 export interface DocPage {
   id: string;
@@ -23,6 +24,7 @@ export interface DocPage {
 export const DOC_PAGES: DocPage[] = [
   { id: "guide", group: "Using the app", title: "User guide", file: "USER-GUIDE.md", text: userGuide },
   { id: "themes", group: "Using the app", title: "Themes and custom CSS", file: "THEMING.md", text: theming },
+  { id: "mobile", group: "Using the app", title: "Phones and tablets", file: "MOBILE.md", text: mobile },
   { id: "plans", group: "Using the app", title: "Roadmap and known limits", file: "ROADMAP.md", text: roadmap },
   { id: "dev", group: "Developers", title: "Developer guide", file: "DEVELOPER-GUIDE.md", text: developerGuide },
   { id: "arch", group: "Developers", title: "Architecture", file: "ARCHITECTURE.md", text: architecture },

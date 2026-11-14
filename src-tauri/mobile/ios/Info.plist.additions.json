@@ -1,0 +1,6 @@
+{
+  "UIFileSharingEnabled": true,
+  "LSSupportsOpeningDocumentsInPlace": true,
+  "UISupportsDocumentBrowser": false,
+  "NSLocalNetworkUsageDescription": "Connects to file servers (FTP, SFTP, WebDAV) on your network."
+}

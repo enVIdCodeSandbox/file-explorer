@@ -42,6 +42,10 @@ docs               User guide, developer guide, architecture, transfers, theming
 All disk work happens on Rust threads; the interface only draws what is on
 screen. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Phones and tablets
+
+The same code builds for Android (an `.apk`) and for iPhone and iPad (an unsigned `.ipa`), with a touch layout in three looks: Google, Samsung and Apple. The **Mobile** workflow on GitHub makes both packages. See [docs/MOBILE.md](docs/MOBILE.md) for installing, what works on each system, and how to preview the phone layout on a computer.
+
 ## Status
 
 Run-tested on Linux. The engine also type-checks for Windows and macOS, but

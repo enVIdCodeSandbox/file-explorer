@@ -10,7 +10,13 @@
     "test": "vitest run",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "android:init": "tauri android init && node scripts/mobile-setup.mjs android",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build --apk",
+    "ios:init": "tauri ios init && node scripts/mobile-setup.mjs ios",
+    "ios:dev": "tauri ios dev",
+    "ios:build:unsigned": "bash scripts/ios-unsigned.sh"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.26",

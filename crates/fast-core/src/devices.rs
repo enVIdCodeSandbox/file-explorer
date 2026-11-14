@@ -88,6 +88,7 @@ pub fn list_devices(show_other: bool) -> Vec<Device> {
 
 /// Feeds what is connected into `h`, cheaply, so a change can be noticed.
 pub fn signature(h: &mut impl std::hash::Hasher) {
+    #[allow(unused_imports)] // not every system hashes through it
     use std::hash::Hash;
     #[cfg(target_os = "macos")]
     {

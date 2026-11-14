@@ -121,10 +121,7 @@ pub fn drive_root(path: &Path) -> std::path::PathBuf {
 fn resolve_terminal_dir(path: &Path, mode: TerminalMode) -> std::path::PathBuf {
     match mode {
         TerminalMode::Here | TerminalMode::Admin => path.to_path_buf(),
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         TerminalMode::Home => home_dir().unwrap_or_else(|| path.to_path_buf()),
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        TerminalMode::Home => path.to_path_buf(),
         TerminalMode::DriveRoot => drive_root(path),
     }
 }
@@ -616,14 +613,16 @@ fn file_uri(path: &Path) -> String {
 // Mobile: the OS sandbox does not offer these. See docs/ROADMAP.md.
 // ---------------------------------------------------------------------------
 
+/// The usual folders of the device's built-in storage.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn known_folders() -> Vec<(&'static str, String)> {
-    Vec::new()
+    home_dir().map(|h| crate::phone::folders_in(&h)).unwrap_or_default()
 }
 
+/// A phone's "home" is its built-in storage (Android) or the app's own folder (iOS).
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn home_dir() -> Option<std::path::PathBuf> {
-    None
+    crate::phone::roots().into_iter().find(|r| !r.removable).map(|r| r.path)
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -633,7 +632,7 @@ pub fn open_path(_path: &Path) -> Result<()> {
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub fn trash(_paths: &[std::path::PathBuf]) -> Result<()> {
-    Err(CoreError::Unsupported("trash"))
+    Err(CoreError::Invalid("This device has no recycle bin. Delete the items permanently instead.".into()))
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]

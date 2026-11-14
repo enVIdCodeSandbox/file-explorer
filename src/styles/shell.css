@@ -801,3 +801,23 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 /* The box drawn while dragging over empty space to select (like Windows Explorer's blue box). */
 .select-band { position: absolute; z-index: 1; pointer-events: none; box-sizing: border-box; background: var(--band-fill, color-mix(in srgb, var(--accent) 28%, transparent)); border: var(--band-border-width, 1px) var(--band-border-style, solid) var(--band-border, var(--accent)); }
 .file-scroller { user-select: none; }
+
+/* ---- Performance presets as a slider (Settings > Presets and profiles) ---- */
+.preset-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.preset-head p { margin: 0; }
+.preset-head .segmented { padding: 2px; border-radius: var(--radius); background: var(--surface-hover); border: 1px solid var(--border); }
+.preset-head .segmented button { height: 28px; padding: 0 14px; }
+.preset-head .segmented button[data-on] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.preset-slider .perf-slider { gap: 16px; padding: 4px 0 0; }
+.preset-slider .perf-now h3 { font-size: clamp(26px, 3vw, 38px); }
+.preset-slider .perf-end b { font-size: 14px; } .preset-slider .perf-end span { font-size: 12.5px; }
+.preset-slider .perf-detail { padding: 14px 18px; border-radius: var(--radius); }
+.preset-slider .perf-detail p { font-size: 14px; }
+.perf-step { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+.perf-pills { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; min-height: 20px; }
+.perf-pills .pill { margin-left: 0; }
+.perf-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.perf-actions .primary:disabled { opacity: 0.5; }
+.perf-actions > button:not(.primary):not(.link-button) { height: 30px; padding: 0 12px; border-radius: var(--radius-small); border: 1px solid var(--border-strong); }
+.perf-ticks i[data-used] { height: 14px; margin-top: -2px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text-muted); }
+.perf-now h3 { color: var(--text); }

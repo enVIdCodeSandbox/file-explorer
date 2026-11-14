@@ -6,24 +6,28 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import type { Settings } from "../api";
 import { adv } from "../settings/advanced";
 import {
-  PERF_PRESETS,
-  capsText,
   UI_PRESETS,
   applyPatch,
   applyUiPreset,
   currentPerfPreset,
   differences,
+  mobilePlatformFor,
+  perfPresetsFor,
   platformFor,
+  recommendMobilePerf,
   recommendPerf,
+  uiPresetsFor,
+  type Platform,
 } from "../settings/presets";
 import { LANGUAGES, useT } from "../i18n";
 import { useStore } from "../store";
 import { THEMES } from "../util/themes";
 import { CaptionStrip } from "./Chrome";
+import { PerfSlider } from "./PerfSlider";
+import { deviceMaker, useMobile } from "../util/device";
 
 const systemDark = () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
 
@@ -62,10 +66,13 @@ function Tile({ icon, title, hint, on, onToggle }: { icon: ReactNode; title: str
   );
 }
 
-const OS_CARDS: { id: "windows" | "macos" | "linux"; name: string; tagline: string }[] = [
+const OS_CARDS: { id: Platform; name: string; tagline: string }[] = [
   { id: "windows", name: "Windows", tagline: "Like File Explorer in Windows 11" },
   { id: "macos", name: "macOS", tagline: "Like Finder on a Mac" },
   { id: "linux", name: "Linux", tagline: "Clean and simple, like GNOME or KDE" },
+  { id: "google", name: "Google", tagline: "Like Files by Google on a Pixel" },
+  { id: "samsung", name: "Samsung", tagline: "Like My Files on a Galaxy" },
+  { id: "apple", name: "Apple", tagline: "Like Files on an iPhone" },
 ];
 
 const STEPS = ["Welcome", "Interface", "Colors", "Performance", "Saving", "Privacy", "Review"] as const;
@@ -76,8 +83,16 @@ export function Setup() {
   const info = useStore((s) => s.info);
   const { updateSettings } = useStore.getState();
   const hw = info?.system;
-  const mine = platformFor(info?.os);
-  const recommended = useMemo(() => (hw ? recommendPerf(hw.totalRamMb, hw.cpus, hw.batteryPercent != null) : null), [hw]);
+  const mobile = useMobile();
+  const maker = useMemo(deviceMaker, []);
+  // On a phone the choices are the three phone looks and the lighter phone presets.
+  const mine = mobile ? mobilePlatformFor(info?.os, maker) : platformFor(info?.os, maker);
+  const LOOKS = uiPresetsFor(mobile);
+  const PRESETS = perfPresetsFor(mobile);
+  const recommended = useMemo(
+    () => (hw ? (mobile ? recommendMobilePerf(hw.totalRamMb, hw.cpus) : recommendPerf(hw.totalRamMb, hw.cpus, hw.batteryPercent != null)) : null),
+    [hw, mobile],
+  );
   const [step, setStep] = useState(0);
   const original = useRef<Settings | null>(null);
   if (!original.current) original.current = structuredClone(settings);
@@ -94,6 +109,9 @@ export function Setup() {
       s.appearance.theme = "system";
     });
   }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The same sentences, saying "device" where a phone or tablet is meant.
+  const w = (text: string) => (mobile ? text.replace(/your computer/g, "your device").replace(/computer/g, "device").replace(/Computer/g, "Device") : text);
 
   const go = (to: number) => setStep(Math.max(0, Math.min(STEPS.length - 1, to)));
 
@@ -119,20 +137,21 @@ export function Setup() {
   const mode: "system" | "dark" | "light" = theme === "system" ? "system" : THEMES.find((t) => t.id === theme)?.dark === false ? "light" : "dark";
   const pickMode = (m: "system" | "dark" | "light") =>
     updateSettings((s) => {
-      const preset = UI_PRESETS.find((p) => differences(s, p.patch).length === 0) ?? UI_PRESETS.find((p) => p.id === mine)!;
+      const preset = LOOKS.find((p) => differences(s, p.patch).length === 0) ?? UI_PRESETS.find((p) => p.id === mine)!;
       s.appearance.theme = m === "system" ? "system" : m === "dark" ? preset.themes.dark : preset.themes.light;
     });
 
   // What will be used: the person's pick, or the recommendation where nothing was picked.
-  const pickedUi = UI_PRESETS.find((p) => differences(settings, p.patch).length === 0);
+  const pickedUi = LOOKS.find((p) => differences(settings, p.patch).length === 0);
   const ui = pickedUi ?? UI_PRESETS.find((p) => p.id === mine)!;
   const pickedPerf = currentPerfPreset(settings);
-  const recIdx = Math.max(0, PERF_PRESETS.findIndex((p) => p.id === (recommended ?? PERF_PRESETS[3]).id));
-    const showIdx = perfPick ?? (pickedPerf ? PERF_PRESETS.findIndex((p) => p.id === pickedPerf.id) : recIdx);
-  const perf = PERF_PRESETS[showIdx];
+  const recIdx = Math.max(0, PRESETS.findIndex((p) => p.id === (recommended ?? PRESETS[Math.min(3, PRESETS.length - 1)]).id));
+  const pickedIdx = pickedPerf ? PRESETS.findIndex((p) => p.id === pickedPerf.id) : -1;
+  const showIdx = perfPick ?? (pickedIdx >= 0 ? pickedIdx : recIdx);
+  const perf = PRESETS[showIdx];
   const pickPerf = (i: number) => {
     setPerfPick(i);
-    updateSettings((s) => applyPatch(s, PERF_PRESETS[i].patch));
+    updateSettings((s) => applyPatch(s, PRESETS[i].patch));
   };
   const pickUi = (id: string) =>
     updateSettings((s) => {
@@ -148,7 +167,7 @@ export function Setup() {
         applyUiPreset(s, ui, systemDark());
         if (keep === "system") s.appearance.theme = "system";
       }
-      if (!pickedPerf || perfPick != null) applyPatch(s, perf.patch);
+      if (pickedIdx < 0 || perfPick != null) applyPatch(s, perf.patch);
       s.setupDone = true;
     });
   const skip = () =>
@@ -166,10 +185,10 @@ export function Setup() {
   const summary: [string, string, string][] = [
     [t("Interface style"), `${ui.name}${pickedUi ? "" : rec}`, pickedUi ? "" : t("Layout, icons, colors and shortcuts like {name}", { name: ui.name })],
     [t("Colors"), mode === "system" ? t("Match my system") : mode === "dark" ? t("Dark") : t("Light"), THEMES.find((th) => th.id === theme)?.name ?? ""],
-    [t("Performance"), `${perf.name}${pickedPerf || perfPick != null ? "" : rec}`, perf.recommendedFor],
+    [t("Performance"), `${perf.name}${pickedIdx >= 0 || perfPick != null ? "" : rec}`, perf.recommendedFor],
     [t("Folder sizes"), yes(adv(settings, "files.sizeCache")), ""],
     [t("Thumbnails"), yes(adv(settings, "cache.thumbnails")), ""],
-    [t("This computer's details"), yes(adv(settings, "cache.hardware")), ""],
+    [t(w("This computer's details")), yes(adv(settings, "cache.hardware")), ""],
     [t("Folders you open next"), yes(adv(settings, "cache.predictions")), ""],
     [t("Previous searches"), adv<number>(settings, "search.historyLimit") > 0 ? t("Last {n}", { n: adv<number>(settings, "search.historyLimit") }) : t("Off"), ""],
     [t("Hide server addresses"), yes(settings.appearance.hideNetworkAddress), ""],
@@ -177,16 +196,16 @@ export function Setup() {
 
   const ram = hw ? `${(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB` : "";
   const MODES: { id: "system" | "dark" | "light"; name: string; hint: string }[] = [
-    { id: "system", name: "Match my system", hint: "Follows your computer, day and night." },
+    { id: "system", name: "Match my system", hint: w("Follows your computer, day and night.") },
     { id: "dark", name: "Dark", hint: "Easy on the eyes in dim rooms." },
     { id: "light", name: "Light", hint: "Bright and crisp in daylight." },
   ];
 
   return (
-    <div className="setup-backdrop" role="dialog" aria-modal="true" aria-label={t("Welcome to FAST File Explorer")}>
+    <div className="setup-backdrop" data-mobile={mobile || undefined} role="dialog" aria-modal="true" aria-label={t("Welcome to FAST File Explorer")}>
       {/* The top strip drags the window and holds minimize, maximize and close. */}
       <CaptionStrip />
-      <div className="setup" data-step={STEPS[step]}>
+      <div className="setup" data-step={STEPS[step]} data-mobile={mobile || undefined}>
         <div className="setup-top">
           <ol className="setup-steps" aria-label={t("Setup progress")}>
             {STEPS.map((name, i) => (
@@ -228,7 +247,7 @@ export function Setup() {
                     <div><b>{hw.cpus}</b><span>{t("processor threads")}</span></div>
                     <div><b>{ram}</b><span>{t("memory")}</span></div>
                     <div><b>{hw.batteryPercent != null ? t("Yes") : t("No")}</b><span>{t("battery")}</span></div>
-                    <div style={{ flex: 1, minWidth: 220, justifyContent: "center" }}><span>{t("The recommendations on the next views are based on this computer.")}</span></div>
+                    <div style={{ flex: 1, minWidth: 220, justifyContent: "center" }}><span>{t(w("The recommendations on the next views are based on this computer."))}</span></div>
                   </div>
                 )}
               </div>
@@ -238,7 +257,7 @@ export function Setup() {
                 <h2>{t("Which file manager are you used to?")}</h2>
                 <p className="lead">{t("This sets the layout, icons and shortcuts together.")}</p>
                 <div className="os-grid" role="radiogroup" aria-label={t("Interface style")}>
-                  {OS_CARDS.map((c) => (
+                  {OS_CARDS.filter((c) => LOOKS.some((l) => l.id === c.id)).map((c) => (
                     <div className="os-col" key={c.id}>
                       <span className="os-rec" aria-hidden={c.id !== mine} data-show={c.id === mine || undefined}>{t("Recommended")}</span>
                       <button className="os-card" role="radio" aria-checked={ui.id === c.id} data-on={ui.id === c.id || undefined} onClick={() => pickUi(c.id)}>
@@ -289,66 +308,22 @@ export function Setup() {
             )}
             {step === 3 && (
               <>
-                <h2>{t("How much of this computer should it use?")}</h2>
+                <h2>{t(w("How much of this computer should it use?"))}</h2>
                 <p className="lead">
                   {t("More means faster search and folders, but more memory and background work.")}
-                  {hw && <> {t("This computer has {cpus} threads and {ram} of memory.", { cpus: hw.cpus, ram })}</>}
+                  {hw && <> {t(w("This computer has {cpus} threads and {ram} of memory."), { cpus: hw.cpus, ram })}</>}
                 </p>
-                <div className="perf-slider">
-                  <div className="perf-wrap" style={{ "--n": PERF_PRESETS.length - 1, "--i": showIdx, "--r": recIdx } as CSSProperties}>
-                    <div className="perf-rec">
-                      <span>{t("Recommended")}</span>
-                      <svg viewBox="0 0 24 14" width="26" height="15" aria-hidden="true"><path d="M2 1h20L12 13z" fill="currentColor" /></svg>
-                    </div>
-                    <input
-                      type="range"
-                      className="perf-range"
-                      min={0}
-                      max={PERF_PRESETS.length - 1}
-                      step={1}
-                      value={showIdx}
-                      aria-label={t("Performance level")}
-                      aria-valuetext={perf.name}
-                      onChange={(e) => pickPerf(Number(e.target.value))}
-                    />
-                    <div className="perf-ticks" aria-hidden="true">
-                      {PERF_PRESETS.map((p, i) => (
-                        <i key={p.id} data-on={i <= showIdx || undefined} />
-                      ))}
-                    </div>
-                  </div>
-                  <div className="perf-readout">
-                    <div className="perf-end">
-                      <b>{t("Light")}</b>
-                      <span>{t("Old or small devices. Saves memory and battery.")}</span>
-                    </div>
-                    <div className="perf-now" aria-live="polite">
-                      <h3>{perf.name}</h3>
-                      {showIdx === recIdx && <span className="pill">{t("Recommended for this computer")}</span>}
-                    </div>
-                    <div className="perf-end right">
-                      <b>{t("Heavy")}</b>
-                      <span>{t("Powerful PCs. Fastest search and folders.")}</span>
-                    </div>
-                  </div>
-                  <div className="perf-detail">
-                    <p>{perf.description}</p>
-                    <p className="muted">
-                      <b>{t("Suits:")}</b> {perf.recommendedFor}
-                    </p>
-                    <p className="muted perf-caps">{capsText(perf)}</p>
-                  </div>
-                </div>
+                <PerfSlider presets={PRESETS} index={showIdx} recIndex={recIdx} onPick={pickPerf} mobile={mobile} />
               </>
             )}
             {step === 4 && (
               <>
                 <h2>{t("What may it remember?")}</h2>
-                <p className="lead">{t("Remembering makes things faster. It is all saved on this computer only. Turn off anything you do not want kept.")}</p>
+                <p className="lead">{t(w("Remembering makes things faster. It is all saved on this computer only. Turn off anything you do not want kept."))}</p>
                 <div className="setup-tiles">
                   <Tile icon={ICONS.folder} title="Folder sizes" hint="Show a folder's size at once next time." on={adv(settings, "files.sizeCache")} onToggle={(v) => set("files.sizeCache", v)} />
                   <Tile icon={ICONS.image} title="Thumbnails" hint="Keep small previews so picture folders open at once." on={adv(settings, "cache.thumbnails")} onToggle={(v) => set("cache.thumbnails", v)} />
-                  <Tile icon={ICONS.chip} title="This computer's details" hint="Keep hardware and drive health so About opens at once." on={adv(settings, "cache.hardware")} onToggle={(v) => set("cache.hardware", v)} />
+                  <Tile icon={ICONS.chip} title={w("This computer's details")} hint="Keep hardware and drive health so About opens at once." on={adv(settings, "cache.hardware")} onToggle={(v) => set("cache.hardware", v)} />
                   <Tile icon={ICONS.route} title="Folders you open next" hint="Learn your habits to get the next folder ready." on={adv(settings, "cache.predictions")} onToggle={(v) => set("cache.predictions", v)} />
                   <Tile
                     icon={ICONS.search}
@@ -359,7 +334,7 @@ export function Setup() {
                   />
                   <div className="setup-tile-note" role="note">
                     <span className="tile-icon">{ICONS.shield}</span>
-                    <strong>{t("Saved only on this computer")}</strong>
+                    <strong>{t(w("Saved only on this computer"))}</strong>
                     <span className="muted">{t("Nothing here is ever uploaded.")}</span>
                   </div>
                 </div>
@@ -371,7 +346,7 @@ export function Setup() {
                 <div className="privacy-grid">
                   <div className="privacy-local" role="note">
                     <span className="tile-icon big">{ICONS.shield}</span>
-                    <h3>{t("Everything stays on this computer")}</h3>
+                    <h3>{t(w("Everything stays on this computer"))}</h3>
                     <p>{t("All information is stored locally. Nothing gets sent to a cloud.")}</p>
                     <p className="muted">{t("Your settings, history and saved details never leave this device.")}</p>
                   </div>

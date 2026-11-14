@@ -26,6 +26,8 @@ import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } f
 import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
+import { MobileApp } from "./components/Mobile";
+import { useMobile } from "./util/device";
 
 export default function App() {
   useT(); // keeps the page language (and every label) in step with the language setting
@@ -41,6 +43,7 @@ export default function App() {
   const [layout] = useLayout();
   const chrome = useChrome();
   const tabCount = useStore((s) => s.tabs.length);
+  const mobile = useMobile();
 
   useAppearance();
 
@@ -204,6 +207,31 @@ export default function App() {
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers") return <DetachedTransfers />;
 
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <SettingsView detached />;
+
+  // Phones and tablets: the same pages and dialogs in a one-column touch layout.
+  if (mobile)
+    return (
+      <MobileApp
+        location={location}
+        overlays={
+          <>
+            <PickBar />
+            <Transfers />
+            <Notices />
+            {settings && !settings.setupDone && <Setup />}
+            {settingsOpen && <SettingsView />}
+            <PropertiesDialog />
+            <OpenWithDialog />
+            <LockDialog />
+            <ShareDialog />
+            <BatchRename />
+            <ConnectServer />
+            <Dialog />
+            <Toast />
+          </>
+        }
+      />
+    );
 
   const loc = parseLocation(location);
   // A hidden tab strip (Finder and GNOME show it only with two or more tabs) cannot own the window buttons.

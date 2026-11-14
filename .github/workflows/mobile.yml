@@ -1,0 +1,145 @@
+name: Mobile
+
+# Android and iPhone/iPad packages. Kept apart from the desktop workflow, so a
+# problem here never holds up a desktop build.
+#
+#   Android  a signed .apk you can install directly (see "Signing" below)
+#   iOS      an UNSIGNED .ipa: no Apple developer account is used. Install it
+#            with a sideloading tool, which signs it with a free Apple ID.
+#
+# Run it from the Actions tab ("Run workflow"), or push a version tag.
+# docs/MOBILE.md explains installing, signing and building on your own machine.
+
+on:
+  push:
+    branches: [main, tauri-rewrite]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  android:
+    name: Android (.apk)
+    runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The runner already has the Android SDK; add the exact NDK the build is tested with.
+      - name: Install the Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platform-tools"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Generate the Android project
+        run: |
+          npx tauri android init --ci
+          node scripts/mobile-setup.mjs android
+      # Signing. With the three secrets, every build is signed with your own key, so a new
+      # version installs over the old one. Without them a key is made for this run only:
+      # the app installs, but a later build needs the earlier one uninstalled first.
+      - name: Set up signing
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          store="$RUNNER_TEMP/release.jks"
+          if [ -n "$KEYSTORE" ] && [ -n "$KEYSTORE_PASSWORD" ] && echo "$KEYSTORE" | base64 --decode > "$store" 2>/dev/null && keytool -list -keystore "$store" -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+            alias="${KEY_ALIAS:-upload}"
+            password="$KEYSTORE_PASSWORD"
+            echo "Signing with the key from the ANDROID_KEYSTORE secret."
+          else
+            [ -n "$KEYSTORE" ] && echo "::warning::The ANDROID_KEYSTORE secret could not be opened (it must be a base64 keystore, and ANDROID_KEYSTORE_PASSWORD must match). Using a key made for this run."
+            [ -z "$KEYSTORE" ] && echo "::notice::No ANDROID_KEYSTORE secret: signing with a key made for this run. To update the app later without uninstalling it, add your own key (docs/MOBILE.md)."
+            alias=upload
+            password=$(openssl rand -hex 16)
+            rm -f "$store"
+            keytool -genkeypair -keystore "$store" -storepass "$password" -keypass "$password" -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=FAST File Explorer"
+          fi
+          printf 'password=%s\nkeyAlias=%s\nstoreFile=%s\n' "$password" "$alias" "$store" > src-tauri/gen/android/keystore.properties
+      - name: Build the .apk (64-bit and 32-bit ARM)
+        run: npx tauri android build --apk --target aarch64 --target armv7
+      - name: Collect the package
+        run: |
+          mkdir -p mobile-out
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' ! -name '*unsigned*' | head -n 1)
+          [ -n "$apk" ] || apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)
+          [ -n "$apk" ] || { echo "No .apk was produced."; find src-tauri/gen/android/app/build/outputs -type f; exit 1; }
+          cp "$apk" mobile-out/FAST-File-Explorer-android.apk
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs mobile-out/FAST-File-Explorer-android.apk | head -n 3 || echo "::warning::The .apk is not signed and will not install."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fast-file-explorer-android
+          path: mobile-out/*.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS (unsigned .ipa)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install the tools Tauri uses to make the Xcode project
+        run: brew install xcodegen cocoapods libimobiledevice || true
+      - run: npm ci
+      - name: Generate the Xcode project
+        run: |
+          npx tauri ios init --ci
+          node scripts/mobile-setup.mjs ios
+      - name: Build the unsigned .ipa
+        run: scripts/ios-unsigned.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fast-file-explorer-ios-unsigned
+          path: src-tauri/gen/apple/build/unsigned/*.ipa
+          if-no-files-found: error
+
+  release:
+    name: Attach to the draft release
+    needs: [android, ios]
+    # Whatever was built is attached, even when one of the two failed.
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: mobile-files
+          merge-multiple: true
+      - run: find mobile-files -type f | sort
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: mobile-files/**

@@ -74,8 +74,8 @@ export const SETTINGS: SettingDef[] = [
   { key: "general.shellExtras", section: "General", label: "Add entries from other programs to the right-click menu", description: "Edit with…, Open with, archivers and similar. They load a moment after the menu opens, so the menu itself is never slowed down. Turn off to skip them.", control: toggle, keywords: "context menu shell extensions 7-zip open with send to" },
 
   // ---- Presets and profiles ----
-  { key: "presets.ui", section: "Presets and profiles", label: "Interface style", description: "Windows, macOS or Linux: layout, colors, icons, window buttons and shortcuts in one step.", control: { type: "uiPresets" }, keywords: "preset windows mac macos linux finder explorer layout look style" },
-  { key: "presets.performance", section: "Presets and profiles", label: "Performance preset", description: "Twelve steps from Barebones to God-like, each with the kind of device it suits.", control: { type: "perfPresets" }, keywords: "preset barebones feather reduced acceptable average satisfactory decent performance power excelling exceptional godlike speed memory" },
+  { key: "presets.ui", section: "Presets and profiles", label: "Interface style", description: "The whole look in one step, in the style of a system you know: layout, colors, icons and shortcuts.", control: { type: "uiPresets" }, keywords: "preset windows mac macos linux finder explorer layout look style" },
+  { key: "presets.performance", section: "Presets and profiles", label: "Performance preset", description: "Steps from the lightest to the heaviest, each with the kind of device it suits. Phones and tablets get their own, much lighter, set.", control: { type: "perfPresets" }, keywords: "preset barebones feather reduced acceptable average satisfactory decent performance power excelling exceptional godlike speed memory" },
   { key: "presets.profiles", section: "Presets and profiles", label: "Your profiles", description: "Saved copies of all your settings, as many as you want.", control: { type: "profiles" }, keywords: "profile save switch settings backup work laptop" },
 
   // ---- Appearance ----

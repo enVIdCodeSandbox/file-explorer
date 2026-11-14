@@ -704,7 +704,8 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, unix)))]
+// Phones, and anything else without a shell menu of its own.
+#[cfg(any(target_os = "android", target_os = "ios", not(any(windows, unix))))]
 mod imp {
     use super::ShellItem;
     use crate::Result;
@@ -719,7 +720,7 @@ mod imp {
     }
 }
 
-#[cfg(all(test, unix, not(target_os = "macos")))]
+#[cfg(all(test, unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
 mod tests {
     use std::path::PathBuf;
 
