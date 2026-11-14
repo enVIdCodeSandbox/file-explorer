@@ -368,6 +368,57 @@ pub async fn get_drives(state: State<'_, Shared>) -> CmdResult<Vec<Drive>> {
     .await
 }
 
+fn device_settings(st: &Shared) -> (bool, bool) {
+    let s = st.settings.read();
+    let show = s.advanced.get("devices.show").and_then(|v| v.as_bool()).unwrap_or(true);
+    let other = s.advanced.get("devices.showOther").and_then(|v| v.as_bool()).unwrap_or(true);
+    (show, other)
+}
+
+/// Phones, cameras and other connected devices (not drives).
+#[tauri::command]
+pub async fn get_devices(state: State<'_, Shared>) -> CmdResult<Vec<fast_core::devices::Device>> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let (show, other) = device_settings(&st);
+        let list = if show { fast_core::devices::list_devices(other) } else { Vec::new() };
+        *st.devices.write() = list.clone();
+        Ok(list)
+    })
+    .await
+}
+
+/// Mount a device the system knows about (a phone, on Linux) and return the folder it opens at.
+#[tauri::command]
+pub async fn connect_device(id: String) -> CmdResult<Option<String>> {
+    blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            fast_core::devices::connect(&id).map_err(err)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = id;
+            Err("This device cannot be opened from inside the app on this system.".to_string())
+        }
+    })
+    .await
+}
+
+/// Open a device in the system's own tool (File Explorer, Image Capture, ...).
+#[tauri::command]
+pub fn open_device_in_system(open: String) -> CmdResult<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        fast_core::devices::open_in_system(&open).map_err(err)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = open;
+        Err("There is no system tool to hand this device to.".to_string())
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Place {
@@ -993,6 +1044,8 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
                 result: result.to_string(),
                 bytes_done: 0,
                 bytes_total: 0,
+                skipped: 0,
+                conflict: None,
             };
             let _ = app.emit("delete-progress", snapshot(DeletePhase::Scanning, 0, 0, "", "", None));
             let mut last = std::time::Instant::now();
@@ -1185,6 +1238,17 @@ pub fn transfer_control(state: State<'_, Shared>, id: u64, action: String) -> Cm
 /// later conflict in the same transfer.
 #[tauri::command]
 pub fn transfer_resolve(state: State<'_, Shared>, id: u64, answer: String, all: bool) -> CmdResult<()> {
+    let r = match answer.as_str() {
+        "skip" => fast_core::transfer::Resolution::Skip,
+        "replace" => fast_core::transfer::Resolution::Replace,
+        "keepBoth" => fast_core::transfer::Resolution::KeepBoth,
+        other => return Err(format!("unknown answer {other}")),
+    };
+    // Jobs that are not transfers (copying out of an archive) ask through their own slot.
+    if let Some(ask) = state.job_asks.lock().get(&id) {
+        *ask.answer.lock() = Some((r, all));
+        return Ok(());
+    }
     let r = match answer.as_str() {
         "skip" => fast_core::transfer::Resolution::Skip,
         "replace" => fast_core::transfer::Resolution::Replace,
@@ -1411,18 +1475,28 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
     let st = state.inner().clone();
     blocking(move || {
         guard(&st, &path)?;
-        // Nothing set to open it: use the program most likely to suit it, and only
-        // when there is none say so in a form the interface turns into an app chooser.
-        if !path.contains("://") && Path::new(&path).exists() {
-            if let fast_core::openwith::Check::Missing(why) = fast_core::openwith::check(Path::new(&path)) {
-                let choices = fast_core::openwith::choices(Path::new(&path));
-                if let Some(app) = fast_core::openwith::likely_app(&choices) {
-                    if fast_core::openwith::open_with(Path::new(&path), &app.id, false).is_ok() {
-                        return Ok(Some(app.name));
-                    }
-                }
-                return Err(format!("no-handler:{why}"));
+        // The order: the app set for this kind of file, then what the system itself does with it,
+        // then the program that suits it best, and only when there is none the chooser.
+        let local = !path.contains("://") && Path::new(&path).exists();
+        let why = if !local {
+            None
+        } else if let fast_core::openwith::Check::Missing(why) = fast_core::openwith::check(Path::new(&path)) {
+            Some(why)
+        } else {
+            // Something is set (or the system will decide): let the system open it.
+            match platform::open_path(Path::new(&path)) {
+                Ok(()) => return Ok(None),
+                Err(e) => Some(format!("The system could not open this file ({}).", err(e))),
             }
+        };
+        if let Some(why) = why {
+            let choices = fast_core::openwith::choices(Path::new(&path));
+            if let Some(app) = fast_core::openwith::likely_app(&choices) {
+                if fast_core::openwith::open_with(Path::new(&path), &app.id, false).is_ok() {
+                    return Ok(Some(app.name));
+                }
+            }
+            return Err(format!("no-handler:{why}"));
         }
         platform::open_path(Path::new(&path)).map_err(err)?;
         Ok(None)
@@ -1481,6 +1555,77 @@ pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: Termina
 // ---------------------------------------------------------------------------
 // Settings, session, app info
 // ---------------------------------------------------------------------------
+
+/// Sent when the set of volumes (or their free space) changed.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DrivesChanged {
+    drives: Vec<Drive>,
+    devices: Vec<fast_core::devices::Device>,
+    /// Display names of the volumes that appeared and disappeared.
+    added: Vec<String>,
+    removed: Vec<String>,
+}
+
+fn drive_watch_settings(st: &Shared) -> (bool, u64, u64) {
+    let s = st.settings.read();
+    let on = s.advanced.get("drives.watch").and_then(|v| v.as_bool()).unwrap_or(true);
+    let poll = s.advanced.get("drives.pollMs").and_then(|v| v.as_u64()).unwrap_or(1500).clamp(250, 60_000);
+    let refresh = s.advanced.get("drives.refreshSecs").and_then(|v| v.as_u64()).unwrap_or(10).min(3600);
+    (on, poll, refresh)
+}
+
+/// Watch for drives being plugged in, removed, mounted or disconnected, and tell the window.
+/// A cheap fingerprint is checked every second or two; the volumes are only listed again
+/// when it moved, and (less often) to keep the free-space figures current.
+pub fn start_drive_watch(app: AppHandle, st: Shared) {
+    let _ = std::thread::Builder::new().name("drive-watch".into()).spawn(move || {
+        let mut last_sig = drives::signature();
+        let mut last_full = Instant::now();
+        loop {
+            let (on, poll, refresh) = drive_watch_settings(&st);
+            std::thread::sleep(std::time::Duration::from_millis(if on { poll } else { 1000 }));
+            if !on {
+                continue;
+            }
+            let (show_dev, show_other) = device_settings(&st);
+            let sig = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                drives::signature().hash(&mut h);
+                if show_dev {
+                    fast_core::devices::signature(&mut h);
+                }
+                show_dev.hash(&mut h);
+                show_other.hash(&mut h);
+                h.finish()
+            };
+            let due = refresh > 0 && last_full.elapsed().as_secs() >= refresh;
+            if sig == last_sig && !due {
+                continue;
+            }
+            last_sig = sig;
+            last_full = Instant::now();
+            let list = drives::list_drives();
+            let devices = if show_dev { fast_core::devices::list_devices(show_other) } else { Vec::new() };
+            let before = st.drives.read().clone();
+            let before_devices = st.devices.read().clone();
+            if list == before && devices == before_devices {
+                continue;
+            }
+            let (added, removed) = drives::changes(&before, &list);
+            let mut added: Vec<String> = added.iter().map(|d| d.name.clone()).collect();
+            let mut removed: Vec<String> = removed.iter().map(|d| d.name.clone()).collect();
+            added.extend(devices.iter().filter(|d| !before_devices.iter().any(|o| o.id == d.id)).map(|d| d.name.clone()));
+            removed.extend(before_devices.iter().filter(|o| !devices.iter().any(|d| d.id == o.id)).map(|o| o.name.clone()));
+            let event = DrivesChanged { added, removed, drives: list.clone(), devices: devices.clone() };
+            *st.devices.write() = devices;
+            *st.drives.write() = list.clone();
+            st.session.lock().drives = list;
+            let _ = app.emit("drives-changed", event);
+        }
+    });
+}
 
 pub fn apply_budget(app: &AppHandle, st: &Shared) {
     let budget = resources::compute(&st.settings.read().performance, &resources::snapshot());

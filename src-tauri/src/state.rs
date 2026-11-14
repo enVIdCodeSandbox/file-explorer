@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
+/// Where a running job waits for the person's answer to "this file already exists".
+#[derive(Default)]
+pub struct JobAsk {
+    /// Set by the `transfer_resolve` command; taken by the job.
+    pub answer: Mutex<Option<(fast_core::transfer::Resolution, bool)>>,
+}
+
 pub struct Paths {
     pub settings: PathBuf,
     pub session: PathBuf,
@@ -190,12 +197,16 @@ pub struct AppState {
     pub history: Mutex<History>,
     /// Running deletes, by id; setting the flag cancels.
     pub deletes: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Jobs (other than transfers) that may stop to ask about a file that already exists, by id.
+    pub job_asks: Mutex<HashMap<u64, Arc<JobAsk>>>,
     /// Running administrator helpers, by id: the file whose existence asks
     /// the helper to stop (the app cannot signal a process with more rights).
     pub elevated: Mutex<HashMap<u64, PathBuf>>,
     /// Running disk-usage scans, by scanned path.
     pub analyses: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub drives: RwLock<Vec<Drive>>,
+    /// Phones, cameras and other connected devices that are not drives.
+    pub devices: RwLock<Vec<fast_core::devices::Device>>,
     /// Servers the person logged in to this run, with open connections ready for reuse.
     pub remotes: Mutex<HashMap<String, crate::remote::Remote>>,
     /// Temporary download links that are currently being served.

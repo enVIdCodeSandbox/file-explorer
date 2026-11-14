@@ -419,13 +419,41 @@ pub fn size_under(items: &[Item], inner: &str) -> (u64, u64) {
 #[derive(Debug, Default)]
 pub struct Out {
     pub files: u64,
-    /// Files that were not written because one with that name was already there.
+    /// Files that were not written because one with that name was already there
+    /// (and the choice was to leave it).
     pub existing: u64,
+    /// Files that were written over one that was already there.
+    pub replaced: u64,
+    /// Files written under a new name because theirs was taken.
+    pub kept_both: u64,
     /// Entries refused for trying to leave the folder, or that are links.
     pub refused: u64,
 }
 
 pub type Report<'a> = &'a mut dyn FnMut(u64, u64, &str);
+
+/// A file that is in the archive and already in the folder it is being unpacked into.
+#[derive(Debug, Clone)]
+pub struct Clash {
+    pub name: String,
+    /// The incoming item, as named inside the archive or scratch folder.
+    pub src: String,
+    pub dst: PathBuf,
+    pub src_size: u64,
+    pub dst_size: u64,
+    pub dst_modified: Option<i64>,
+}
+
+/// What to do about one [`Clash`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    Skip,
+    Replace,
+    KeepBoth,
+}
+
+/// Decides each clash; `None` stops the whole unpacking (the person cancelled).
+pub type Decide<'a> = &'a mut dyn FnMut(&Clash) -> Option<Choice>;
 
 /// Which of the wanted items an entry belongs to, and where it goes: an item
 /// `a/b` wanted from the archive lands as `b` in the destination, with
@@ -470,33 +498,74 @@ fn copy_to(from: &mut (impl Read + ?Sized), target: &Path, cancel: &AtomicBool) 
     out.flush().map_err(|e| CoreError::io(target, e))
 }
 
-/// Write one file entry under `into`, never over an existing file.
-fn put(into: &Path, rel: &str, is_dir: bool, from: Option<&mut dyn Read>, cancel: &AtomicBool, out: &mut Out) -> Result<()> {
+/// Write one file entry under `into`. When a file is already there, `decide` says what
+/// happens: leave it, replace it (through a temporary file, so a cancel keeps the
+/// original) or write the new one under a free name. Returns where the file went.
+fn put(into: &Path, rel: &str, is_dir: bool, size: u64, from: Option<&mut dyn Read>, cancel: &AtomicBool, out: &mut Out, decide: Decide) -> Result<Option<PathBuf>> {
     let Some(rel) = safe_relative(rel) else {
         out.refused += 1;
-        return Ok(());
+        return Ok(None);
     };
-    let target = into.join(&rel);
+    let mut target = into.join(&rel);
     if is_dir {
         fs::create_dir_all(&target).map_err(|e| CoreError::io(&target, e))?;
-        return Ok(());
+        return Ok(None);
     }
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
     }
-    if target.exists() {
-        out.existing += 1;
-        return Ok(());
+    let mut replace = false;
+    if let Ok(meta) = fs::symlink_metadata(&target) {
+        if !meta.is_file() {
+            // A folder (or link) is in the way: a file cannot go over it.
+            out.existing += 1;
+            return Ok(None);
+        }
+        let clash = Clash {
+            name: target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            src: rel.to_string_lossy().into_owned(),
+            dst: target.clone(),
+            src_size: size,
+            dst_size: meta.len(),
+            dst_modified: meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64),
+        };
+        match decide(&clash) {
+            None => return Err(CoreError::Invalid("Cancelled.".into())),
+            Some(Choice::Skip) => {
+                out.existing += 1;
+                return Ok(None);
+            }
+            Some(Choice::KeepBoth) => {
+                target = crate::transfer::engine::unique_name(&target);
+                out.kept_both += 1;
+            }
+            Some(Choice::Replace) => replace = true,
+        }
     }
-    if let Some(from) = from {
+    let Some(from) = from else { return Ok(None) };
+    if replace {
+        let part = target.with_file_name(format!(".{}.fast-part", target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+        copy_to(from, &part, cancel)?;
+        if let Err(e) = fs::rename(&part, &target) {
+            let _ = fs::remove_file(&part);
+            return Err(CoreError::io(&target, e));
+        }
+        out.replaced += 1;
+    } else {
         copy_to(from, &target, cancel)?;
-        out.files += 1;
     }
-    Ok(())
+    out.files += 1;
+    Ok(Some(target))
 }
 
-/// Unpack the wanted items (`[""]` is everything) into `into`.
+/// Unpack the wanted items (`[""]` is everything) into `into`, leaving anything already
+/// there alone.
 pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &AtomicBool, report: Report) -> Result<Out> {
+    extract_items_with(archive, inners, into, cancel, report, &mut |_| Some(Choice::Skip))
+}
+
+/// Like [`extract_items`], asking `decide` about every file that is already there.
+pub fn extract_items_with(archive: &Path, inners: &[String], into: &Path, cancel: &AtomicBool, report: Report, decide: Decide) -> Result<Out> {
     let kind = kind_of(archive).ok_or_else(|| CoreError::Invalid("This is not a kind of archive that can be opened.".into()))?;
     fs::create_dir_all(into).map_err(|e| CoreError::io(into, e))?;
     let wanted = Wanted::new(inners);
@@ -524,12 +593,15 @@ pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &At
                 let is_dir = entry.is_dir();
                 #[cfg(unix)]
                 let mode = entry.unix_mode();
-                put(into, &rel, is_dir, Some(&mut entry), cancel, &mut out)?;
+                let size = entry.size();
+                let written = put(into, &rel, is_dir, size, Some(&mut entry), cancel, &mut out, decide)?;
                 #[cfg(unix)]
-                if let (Some(mode), false, Some(r)) = (mode, is_dir, safe_relative(&rel)) {
+                if let (Some(mode), Some(path)) = (mode, written) {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(into.join(r), fs::Permissions::from_mode(mode & 0o777));
+                    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o777));
                 }
+                #[cfg(not(unix))]
+                let _ = written;
             }
         }
         Kind::Tar | Kind::TarGz | Kind::TarBz2 | Kind::TarXz => {
@@ -548,9 +620,10 @@ pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &At
                 let Some(rel) = wanted.target(&path) else { continue };
                 report(n as u64, size.max(n as u64), &path);
                 if t.is_dir() {
-                    put(into, &rel, true, None, cancel, &mut out)?;
+                    put(into, &rel, true, 0, None, cancel, &mut out, decide)?;
                 } else if t.is_file() {
-                    put(into, &rel, false, Some(&mut entry), cancel, &mut out)?;
+                    let size = entry.header().size().unwrap_or(0);
+                    put(into, &rel, false, size, Some(&mut entry), cancel, &mut out, decide)?;
                 } else {
                     out.refused += 1;
                 }
@@ -570,7 +643,7 @@ pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &At
                 };
                 let Some(rel) = wanted.target(&path) else { return Ok(true) };
                 report(out.files, 0, &path);
-                let r = if entry.is_directory() { put(into, &rel, true, None, cancel, &mut out) } else { put(into, &rel, false, Some(data), cancel, &mut out) };
+                let r = if entry.is_directory() { put(into, &rel, true, 0, None, cancel, &mut out, decide).map(|_| ()) } else { put(into, &rel, false, entry.size(), Some(data), cancel, &mut out, decide).map(|_| ()) };
                 if let Err(e) = r {
                     failure = Some(e);
                     return Ok(false);
@@ -587,10 +660,10 @@ pub fn extract_items(archive: &Path, inners: &[String], into: &Path, cancel: &At
             if wanted.target(&name).is_some() {
                 report(0, 1, &name);
                 let mut data = decoded(archive, kind)?;
-                put(into, &name, false, Some(&mut data), cancel, &mut out)?;
+                put(into, &name, false, 0, Some(&mut data), cancel, &mut out, decide)?;
             }
         }
-        Kind::External => external_extract(archive, inners, into, cancel, &mut out)?,
+        Kind::External => external_extract(archive, inners, into, cancel, &mut out, decide)?,
     }
     Ok(out)
 }
@@ -709,7 +782,7 @@ fn parse_local_time(s: &str) -> Option<i64> {
     chrono::Local.from_local_datetime(&naive).single().map(|d| d.timestamp_millis())
 }
 
-fn external_extract(archive: &Path, inners: &[String], into: &Path, cancel: &AtomicBool, out: &mut Out) -> Result<()> {
+fn external_extract(archive: &Path, inners: &[String], into: &Path, cancel: &AtomicBool, out: &mut Out, decide: Decide) -> Result<()> {
     let (tool, exe) = find_tool().ok_or_else(|| no_tool(archive))?;
     // Unpack into a scratch folder beside the destination, then move each wanted item into place,
     // so that nothing already in the destination is touched.
@@ -774,10 +847,10 @@ fn external_extract(archive: &Path, inners: &[String], into: &Path, cancel: &Ato
             };
             if root.is_empty() {
                 for e in fs::read_dir(&src).map_err(|e| CoreError::io(&src, e))?.flatten() {
-                    merge_into(&e.path(), &into.join(e.file_name()), out)?;
+                    merge_into(&e.path(), &into.join(e.file_name()), out, decide)?;
                 }
             } else if src.exists() {
-                merge_into(&src, &into.join(dest_name), out)?;
+                merge_into(&src, &into.join(dest_name), out, decide)?;
             }
         }
         Ok(())
@@ -786,21 +859,55 @@ fn external_extract(archive: &Path, inners: &[String], into: &Path, cancel: &Ato
     result
 }
 
-/// Move `from` to `to`, merging folders and leaving files that already exist alone.
-fn merge_into(from: &Path, to: &Path, out: &mut Out) -> Result<()> {
+/// Move `from` to `to`, merging folders; a file that is already there is up to `decide`.
+fn merge_into(from: &Path, to: &Path, out: &mut Out, decide: Decide) -> Result<()> {
     let meta = fs::symlink_metadata(from).map_err(|e| CoreError::io(from, e))?;
     if meta.file_type().is_symlink() {
         out.refused += 1;
     } else if meta.is_dir() {
+        if to.exists() && !to.is_dir() {
+            out.existing += 1;
+            return Ok(());
+        }
         fs::create_dir_all(to).map_err(|e| CoreError::io(to, e))?;
         for e in fs::read_dir(from).map_err(|e| CoreError::io(from, e))?.flatten() {
-            merge_into(&e.path(), &to.join(e.file_name()), out)?;
+            merge_into(&e.path(), &to.join(e.file_name()), out, decide)?;
         }
-    } else if to.exists() {
-        out.existing += 1;
     } else {
-        if fs::rename(from, to).is_err() {
-            fs::copy(from, to).map_err(|e| CoreError::io(to, e))?;
+        let mut target = to.to_path_buf();
+        let mut replace = false;
+        if let Ok(have) = fs::symlink_metadata(to) {
+            if !have.is_file() {
+                out.existing += 1;
+                return Ok(());
+            }
+            let clash = Clash {
+                name: to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                src: from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                dst: to.to_path_buf(),
+                src_size: meta.len(),
+                dst_size: have.len(),
+                dst_modified: have.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64),
+            };
+            match decide(&clash) {
+                None => return Err(CoreError::Invalid("Cancelled.".into())),
+                Some(Choice::Skip) => {
+                    out.existing += 1;
+                    return Ok(());
+                }
+                Some(Choice::KeepBoth) => {
+                    target = crate::transfer::engine::unique_name(to);
+                    out.kept_both += 1;
+                }
+                Some(Choice::Replace) => replace = true,
+            }
+        }
+        if replace {
+            let _ = fs::remove_file(&target);
+            out.replaced += 1;
+        }
+        if fs::rename(from, &target).is_err() {
+            fs::copy(from, &target).map_err(|e| CoreError::io(&target, e))?;
         }
         out.files += 1;
     }
@@ -894,6 +1001,29 @@ mod tests {
         // A second time leaves what is there alone.
         let again = extract_items(archive, &["docs".to_string()], &dest, &cancel, &mut |_, _, _| {}).unwrap();
         assert_eq!((again.files, again.existing), (0, 2));
+        // Replace: the files already there are written over.
+        fs::write(dest.join("docs/a.txt"), "old").unwrap();
+        let mut asked = Vec::new();
+        let swapped = extract_items_with(archive, &["docs".to_string()], &dest, &cancel, &mut |_, _, _| {}, &mut |c| {
+            asked.push((c.name.clone(), c.dst_size));
+            Some(Choice::Replace)
+        })
+        .unwrap();
+        assert_eq!((swapped.files, swapped.replaced, swapped.existing), (2, 2, 0));
+        assert_eq!(asked.len(), 2);
+        assert!(asked.contains(&("a.txt".to_string(), 3)));
+        assert_eq!(fs::read_to_string(dest.join("docs/a.txt")).unwrap(), "alpha");
+        // Keep both: the new one gets a free name and the old one is untouched.
+        fs::write(dest.join("docs/a.txt"), "mine").unwrap();
+        let both = extract_items_with(archive, &["docs".to_string()], &dest, &cancel, &mut |_, _, _| {}, &mut |_| Some(Choice::KeepBoth)).unwrap();
+        assert_eq!((both.files, both.kept_both), (2, 2));
+        assert_eq!(fs::read_to_string(dest.join("docs/a.txt")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(dest.join("docs/a (2).txt")).unwrap(), "alpha");
+        assert_eq!(fs::read_to_string(dest.join("docs/deep/b (2).txt")).unwrap(), "bravo bravo");
+        // Cancelling the question stops, and leaves the original as it was.
+        assert!(extract_items_with(archive, &["docs".to_string()], &dest, &cancel, &mut |_, _, _| {}, &mut |_| None).is_err());
+        assert_eq!(fs::read_to_string(dest.join("docs/a.txt")).unwrap(), "mine");
+        assert!(!fs::read_dir(dest.join("docs")).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".fast-part")));
         let one = tmp("one");
         extract_items(archive, &["docs/deep/b.txt".to_string()], &one, &cancel, &mut |_, _, _| {}).unwrap();
         assert_eq!(fs::read_to_string(one.join("b.txt")).unwrap(), "bravo bravo");

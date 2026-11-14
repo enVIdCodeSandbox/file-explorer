@@ -3,9 +3,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mergeHits } from "../util/searchHits";
-import { api, on, type Drive, type Hit, type SearchResponse } from "../api";
+import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
 import { ask, deletePaths, openFile, thisPcLabel, useStore } from "../store";
 import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
+import { KIND_LABEL, deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { applyFilter, isFiltering } from "../util/filter";
 import { adv } from "../settings/advanced";
 import { beginDrag, type DragPayload } from "../dnd";
@@ -114,6 +115,7 @@ function Donut({ fraction }: { fraction: number }) {
 export function DrivesView() {
   const drives = useStore((s) => s.drives);
   const fresh = useStore((s) => s.drivesFresh);
+  const devices = useStore((s) => s.devices);
   const os = useStore((s) => s.info?.os);
   const appearance = useStore((s) => s.settings!.appearance);
   const { navigate, updateSettings } = useStore.getState();
@@ -151,6 +153,11 @@ export function DrivesView() {
     const name = withoutLetter(r.input.trim());
     setAlias(d, { name: name === withoutLetter(d.name) ? "" : name });
   };
+
+  const deviceGroups: [string, Device[]][] = [
+    ["Phones and cameras", devices.filter(isMainDevice)],
+    ["Other devices", devices.filter((d) => !isMainDevice(d))],
+  ];
 
   const groups: [string, Drive[]][] = [
     ["Devices and drives", drives.filter((d) => d.media !== "network")],
@@ -214,7 +221,7 @@ export function DrivesView() {
                   const usedFraction = d.total > 0 ? used / d.total : 0;
                   const shown = appearance.driveMetric === "used" ? usedFraction : 1 - usedFraction;
                   const text = !d.online
-                    ? "Not reachable"
+                    ? d.removable ? "No media" : "Not reachable"
                     : appearance.driveMetric === "used"
                       ? `${formatSize(used)} used of ${formatSize(d.total)}`
                       : `${formatSize(d.available)} free of ${formatSize(d.total)}`;
@@ -271,7 +278,52 @@ export function DrivesView() {
             </section>
           ),
       )}
-      {drives.length === 0 && <p className="muted">{fresh ? "No drives found." : "Looking for drives…"}</p>}
+      {deviceGroups.map(
+        ([title, list]) =>
+          list.length > 0 && (
+            <section key={title}>
+              <h3>
+                <button className="section-fold" aria-expanded={!folded[title]} onClick={() => setFolded({ ...folded, [title]: !folded[title] })}>
+                  <Icon name={folded[title] ? "chevron" : "expand"} size={10} /> {title} <span className="muted">({list.length})</span>
+                </button>
+              </h3>
+              {!folded[title] && (
+                <div className="card-grid drives">
+                  {list.map((d) => (
+                    <button
+                      key={d.id}
+                      className="card drive-card"
+                      onDoubleClick={() => void openDevice(d)}
+                      onKeyDown={(e) => e.key === "Enter" && void openDevice(d)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          items: [{ id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : d.open ? "Open in the system's file tool" : "Open", run: () => void openDevice(d), disabled: !d.path && !d.connectable && !d.open }],
+                        });
+                      }}
+                      title={`${d.name}\n${d.note || deviceStatus(d)}\nDouble-click to open`}
+                    >
+                      <Icon name={deviceIcon(d)} size={34} />
+                      <div className="drive-info">
+                        <strong>{d.name}</strong>
+                        <span className="muted">{deviceStatus(d)}</span>
+                        {d.note && <span className="muted drive-note">{d.note}</span>}
+                        <span className="muted">
+                          {KIND_LABEL[d.kind]}
+                          {d.maker && !d.name.toLowerCase().includes(d.maker.toLowerCase()) ? ` · ${d.maker}` : ""}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          ),
+      )}
+      {drives.length === 0 && devices.length === 0 && <p className="muted">{fresh ? "No drives found." : "Looking for drives…"}</p>}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

@@ -2,7 +2,7 @@
 
 ## Getting around
 
-**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colors; drag a group's colored label to move the whole group, and click it to collapse. Tabs are reopened at launch (Settings → General).
+**Tabs.** Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Shift+T brings back the one you closed last (with its back and forward history; the last 25 are kept, see Advanced > Tabs), Ctrl+Tab and Ctrl+Shift+Tab switch. Tabs start wide and shrink together as you open more; past the minimum width the strip scrolls. Drag a tab out of the strip to make it its own window. Drag a tab onto another window's tab bar to move it there. A window made from a tab has no Back button. Tabs can be grouped with names and colors; drag a group's colored label to move the whole group, and click it to collapse. Tabs are reopened at launch (Settings → General).
 
 **Address bar.** Click the path to type one. The parts of the path are clickable and are also drop targets: drop files on a part to move or copy them there.
 
@@ -10,7 +10,7 @@
 
 **Pinning.** Drag any folder onto the Pinned heading, or between pinned entries, to pin it. Drag pinned entries to reorder. Right-click works too. The standard folders (Downloads, Documents, Pictures, Music, Videos, Desktop) have their own icons.
 
-**Home and This PC.** Home shows pins and recent items. This PC (Ctrl+Shift+C) lists drives and network shares with free space.
+**Home and This PC.** Home shows pins and recent items. This PC (Ctrl+Shift+C) lists drives and network shares with free space. The list keeps itself current: USB drives, memory cards, discs and network drives show up within a second or two of being connected (and go when removed), with a notice, and the free space is re-read every ten seconds. On Windows every drive letter is listed, including empty card readers and DVD drives (shown as *No media*) and drives that are locked. Settings → Advanced → Files and lists has the switch, the check interval, the free-space interval and the notice. **Phones, cameras and other devices** get their own sections in This PC (phones and cameras also in the navigation pane): Windows lists the portable devices File Explorer shows under This PC; macOS and Linux list USB devices. Opening one does what the system allows. Linux: a phone that GVFS has mounted opens inside the app, and one that has not is mounted when you open it (needs `gvfs-mtp` / `gvfs-gphoto2`; unlock the phone and choose File transfer first). Windows: it opens in File Explorer, because the app browses folders by path and cannot read a phone's files itself. macOS: it opens in Android File Transfer or OpenMTP (Android) or Image Capture (iPhone, iPad, cameras) when installed. Printers, keyboards and receivers are listed too and can be hidden in Settings → Advanced → Files and lists.
 
 ## Selecting
 
@@ -86,7 +86,7 @@ Right-click → **Compress to ZIP** makes `name.zip` next to the item (`Archive.
 Double-click a zip, 7z, rar, tar, tar.gz / tgz, tar.bz2, tar.xz, single .gz / .bz2 / .xz, cab, iso or similar file and it opens as a folder. The address bar shows the way in (`Documents › photos.zip › 2024`), you can type `/path/photos.zip/2024` to go straight there, and Back, Up and tabs work as usual.
 
 * **Open** a file inside to unpack it to a temporary place and open it with its usual program.
-* **Copy** items (Ctrl+C, then paste or drag into a folder) to unpack them there. Folders keep their contents. Files that already exist are kept, never replaced, and the notice says how many were left alone.
+* **Copy** items (Ctrl+C, then paste or drag into a folder) to unpack them there. Folders keep their contents. A file that already exists follows Settings → File transfers → **When a file already exists**: with *Ask me* you get the same Replace / Skip / Keep both question as in any copy (for that file or for all that follow), otherwise it is replaced, skipped or kept under a second name automatically. Skipped files are counted in the notice, not reported as failures. A move out of an archive only takes the originals out when everything was copied or replaced.
 * Right-click empty space inside an archive → **Extract all to a folder next to the archive** or **Extract all here**.
 * **Changing an archive** works like a zip folder in Windows, for zip, tar, tar.gz and 7z (7z needs 7-Zip installed): paste or drag files and folders in from anywhere, cut and paste or drag to move things between folders of the same archive, rename, make new folders and files, and delete (deleted items do not go to the Trash). A name that already exists is never overwritten; the new item becomes "name (2)". The archive is rewritten beside itself and swapped in only when finished, so a cancel or an error leaves it as it was. Big archives take a moment to rewrite. rar, tar.bz2, tar.xz, iso and the like can be read but not changed; the app says so.
 * **Cut out of an archive** moves the items into the folder you paste in, and removes them from the archive once they have all arrived. Dragging out copies, as in Windows.
@@ -172,7 +172,7 @@ Right-click a folder or a drive and choose **Lock with passcode…** (the last i
 
 ## Thumbnails
 
-In the larger icon views (Medium, Large, Extra large) files show a preview of their contents: pictures, the first page of PDFs and Office documents, and a frame from videos. Details, List and Small icons keep the plain icon, and the details pane always shows a preview of the selected file. All of that is in Settings > Thumbnails: each kind of file, each view, sharpness, how many are made at once, network drives (off by default), the largest picture to preview and which frame of a video to show. Windows uses the same preview handlers as Explorer and macOS uses Quick Look. On Linux, PDFs need `pdftoppm` (poppler-utils) and videos need `ffmpegthumbnailer` or `ffmpeg`; without them those files keep their icons. Office documents are previewed only on Windows and macOS. Documents and videos are switched on from the Average and Decent performance levels upward, because they cost more to make.
+In the larger icon views (Medium, Large, Extra large) files show a preview of their contents: pictures, the first page of PDFs and Office documents, and a frame from videos. Details, List and Small icons keep the plain icon, and the details pane always shows a preview of the selected file. All of that is in Settings > Thumbnails: each kind of file, each view, sharpness, how many are made at once, network drives (off by default), the largest picture to preview and which frame of a video to show. Windows uses the same preview handlers as Explorer and macOS uses Quick Look. On Linux, PDFs need `pdftoppm` (poppler-utils) and videos need `ffmpegthumbnailer` or `ffmpeg`; without them those files keep their icons. Office documents are previewed only on Windows and macOS. Every performance level that has thumbnails shows them for pictures, documents and videos; videos and documents can be switched off separately in Settings > Thumbnails. Photos taken in portrait are turned the right way up from their camera's orientation tag.
 
 ## Terminal
 
@@ -180,7 +180,7 @@ Settings > Terminal chooses the terminal (on Windows Command Prompt, PowerShell,
 
 ## Opening files with no app
 
-If a file type has no program, the app first picks the most likely installed app for the file type (an image viewer for a picture, a media player for a video, and so on for the common types). Only when none is found does it show a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
+Opening a file goes in this order: the app set for that kind of file, then whatever the system itself does with it (the system's own choice is trusted, including Store apps such as Photos), and only if neither works the app picks the most likely installed app for the file type, counting programs that say they can open it (an image viewer for a picture, a media player for a video, and so on for the common types). Only when none is found does it show a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
 
 ## Settings
 

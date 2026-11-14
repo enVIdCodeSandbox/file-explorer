@@ -8,6 +8,7 @@ import {
   type Conflict,
   type ConflictInfo,
   type DeleteProgress,
+  type Device,
   type Drive,
   type IndexStatus,
   type Job,
@@ -137,6 +138,8 @@ interface State {
   /** Earlier searches, newest first. */
   searches: string[];
   drives: Drive[];
+  /** Phones, cameras and other devices that are not drives. */
+  devices: Device[];
   drivesFresh: boolean;
   transfers: Record<number, Progress>;
   /** What each transfer was asked to do, kept for "retry as administrator". */
@@ -211,6 +214,10 @@ interface State {
   forward: () => void;
   newTab: (location?: string, opts?: { background?: boolean; groupId?: string | null }) => void;
   closeTab: (id: string) => void;
+  /** Tabs closed in this window, newest last, with where each one was. */
+  closedTabs: { tab: Tab; index: number }[];
+  /** Bring back the tab closed last (Ctrl+Shift+T), with its history. */
+  reopenTab: () => void;
   moveTab: (id: string, index: number) => void;
   moveGroup: (groupId: string, index: number) => void;
   /** Move a tab into its own new window (at a screen position). */
@@ -242,6 +249,7 @@ interface State {
   removeSearch: (text: string) => void;
   clearSearches: () => void;
   refreshDrives: () => void;
+  onDrivesChanged: (p: { drives: Drive[]; devices: Device[]; added: string[]; removed: string[] }) => void;
   setClipboard: (c: Clipboard | null) => void;
   /** Paste what is on the clipboard (from this app or any other) into a folder. */
   pasteInto: (dest: string) => Promise<void>;
@@ -266,6 +274,19 @@ interface State {
   notify: (kind: NoticeKind, title: string, detail?: string) => void;
   dismissNotice: (id: number, forget?: boolean) => void;
   clearNotices: () => void;
+}
+
+/** Set while a tab leaves for another window: that is a move, not a close. */
+let skipRemembering = false;
+
+/** Keep a closed tab so Ctrl+Shift+T can bring it back. */
+function rememberClosed(tab: Tab, index: number) {
+  if (skipRemembering) return;
+  const keep = adv<number>(useStore.getState().settings, "tabs.reopenKeep");
+  if (keep <= 0) return;
+  // A tab still on a start page with no history says nothing worth bringing back.
+  if (tab.history.length === 1 && isAppLocation(tab.location) && tab.location === HOME) return;
+  useStore.setState({ closedTabs: [...useStore.getState().closedTabs, { tab, index }].slice(-keep) });
 }
 
 function makeTab(location: string, groupId: string | null = null): Tab {
@@ -315,6 +336,7 @@ export const useStore = create<State>((set, get) => ({
   incomingTab: null,
   openLockDialog: (path) => set({ lockDialog: path }),
   drives: [],
+  devices: [],
   drivesFresh: false,
   transfers: {},
   specs: {},
@@ -449,10 +471,34 @@ export const useStore = create<State>((set, get) => ({
     persist();
   },
 
+  closedTabs: [],
+
+  reopenTab: () => {
+    const { closedTabs, tabs } = get();
+    const last = closedTabs[closedTabs.length - 1];
+    if (!last) return get().showToast("There is no closed tab to bring back.");
+    const max = adv<number>(get().settings, "tabs.max");
+    if (max > 0 && tabs.length >= max) return get().showToast(`The tab limit is ${max}. Change it in Settings > Advanced.`);
+    // A tab that was the only one, replaced by a blank start tab, is not worth keeping that blank tab for.
+    const only = tabs.length === 1 && tabs[0].history.length === 1 && isAppLocation(tabs[0].location) && last.tab.id !== tabs[0].id && last.index === 0;
+    const groupId = last.tab.groupId && get().groups.some((g) => g.id === last.tab.groupId) ? last.tab.groupId : null;
+    const tab = { ...last.tab, groupId };
+    const base = only ? [] : tabs;
+    const at = Math.max(0, Math.min(base.length, last.index));
+    set({
+      closedTabs: closedTabs.slice(0, -1),
+      tabs: [...base.slice(0, at), tab, ...base.slice(at)],
+      activeTab: tab.id,
+      selection: [],
+    });
+    persist();
+  },
+
   closeTab: (id) => {
     const { tabs, activeTab, settings } = get();
     const i = tabs.findIndex((t) => t.id === id);
     if (i < 0) return;
+    rememberClosed(tabs[i], i);
     let next = tabs.filter((t) => t.id !== id);
     if (!next.length) next = [makeTab(settings?.general.startPage === "thisPc" ? THIS_PC : HOME)];
     set({
@@ -489,18 +535,26 @@ export const useStore = create<State>((set, get) => ({
       // Dropped on another window's tab bar: it moves there, like in a browser.
       // A window left with no tabs closes itself.
       if (x !== undefined && y !== undefined && (await api.dropTab(tab.location, x, y, tabs.length < 2))) {
-        if (tabs.length > 1) get().closeTab(id);
+        if (tabs.length > 1) {
+          // It moved to another window; it was not closed.
+          skipRemembering = true;
+          get().closeTab(id);
+          skipRemembering = false;
+        }
         return;
       }
       if (tabs.length < 2) return;
       await api.openWindow(tab.location, x, y);
+      skipRemembering = true;
       get().closeTab(id);
+      skipRemembering = false;
     } catch (e) {
       get().showToast(String(e));
     }
   },
 
   closeOthers: (id) => {
+    get().tabs.forEach((t, i) => t.id !== id && rememberClosed(t, i));
     set({ tabs: get().tabs.filter((t) => t.id === id), activeTab: id });
     pruneGroups();
     persist();
@@ -633,10 +687,21 @@ export const useStore = create<State>((set, get) => ({
     persist();
   },
 
+  onDrivesChanged: (p) => {
+    set({ drives: p.drives, devices: p.devices, drivesFresh: true });
+    if (!get().settings || !adv<boolean>(get().settings, "drives.notify")) return;
+    for (const name of p.added) get().notify("info", `${name} connected`);
+    for (const name of p.removed) get().notify("info", `${name} removed`);
+  },
+
   refreshDrives: () => {
     void api
       .getDrives()
       .then((drives) => set({ drives, drivesFresh: true }))
+      .catch(() => {});
+    void api
+      .getDevices()
+      .then((devices) => set({ devices }))
       .catch(() => {});
   },
 
@@ -721,6 +786,8 @@ export const useStore = create<State>((set, get) => ({
     const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.itemsTotal > 0 ? p.itemsDone / p.itemsTotal : 0;
     const shown = steadyFraction(get().shown[p.id] ?? 0, { phase: p.phase === "done" ? "done" : "running", fraction: p.phase === "scanning" ? 0 : ratio });
     set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown } });
+    // Copying out of an archive asks the same "this file already exists" question a transfer does.
+    if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);
     if (p.action !== "delete") {
       if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
@@ -824,7 +891,8 @@ export const useStore = create<State>((set, get) => ({
       return;
     }
     if (sources.some(isArchiveLoc)) {
-      // Out of an archive: unpacked into the folder, nothing already there is replaced.
+      // Out of an archive: unpacked into the folder; a file already there is handled by the
+      // "When a file already exists" setting, like any other copy.
       // A move also takes the items out of the archive once they have arrived.
       if (isRemote(destDir) || !sources.every(isArchiveLoc)) {
         s.showToast("Copy items out of an archive into a folder on this computer first.");
@@ -978,7 +1046,11 @@ async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
   });
   const b = answer?.button ?? "cancel";
   try {
-    if (b === "cancel") await api.transferControl(id, "cancel");
+    if (b === "cancel") {
+      // A transfer, or a job on the same card (copying out of an archive).
+      if (useStore.getState().deletes[id]) await api.deleteControl(id, "cancel");
+      else await api.transferControl(id, "cancel");
+    }
     else await api.transferResolve(id, b.replace("All", "") as "skip" | "replace" | "keepBoth", b.endsWith("All"));
   } catch {
     /* the transfer ended while the question was open */
@@ -1469,7 +1541,10 @@ function remoteFinished(p: DeleteProgress) {
     return;
   }
   if (p.action === "remote-delete") return s.notify("delete", `Deleted ${name} from the server`, p.errorCount ? `${p.errorCount} could not be deleted` : `${p.itemsDone} item${p.itemsDone === 1 ? "" : "s"}`);
-  if (p.action === "unpack") return s.notify("copy", `Copied out of the archive: ${name}`, p.errors[0]?.message ?? files);
+  if (p.action === "unpack") {
+    const left = p.skipped ? `${p.skipped} already there, left as they were` : "";
+    return s.notify("copy", `Copied out of the archive: ${name}`, p.errors[0]?.message ?? [files, left].filter(Boolean).join(", "));
+  }
   if (p.action === "pack") return s.notify("copy", `Added to the archive: ${name}`, p.errors[0]?.message ?? files);
   const moved = job?.op === "move";
   const verb = p.action === "upload" ? (moved ? "Moved to the server" : "Uploaded") : moved ? "Moved from the server" : "Downloaded";

@@ -131,7 +131,12 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
     }
     let px = px.clamp(16, 512);
     let mtime = crate::to_millis(meta.modified()).unwrap_or(0);
-    let variant = if kind == Kind::Video { opts.video_percent as u32 + 1 } else { 0 };
+    // Images: 1000 marks thumbnails turned by their camera's orientation tag (older ones were not).
+    let variant = match kind {
+        Kind::Video => opts.video_percent as u32 + 1,
+        Kind::Image => 1000,
+        Kind::Document => 0,
+    };
     let cached = cache_dir.map(|d| cache_file(d, path, meta.len(), mtime, px, variant));
     if let Some(Ok(bytes)) = cached.as_ref().map(fs::read) {
         return Ok(bytes);
@@ -150,7 +155,8 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
             let img = reader
                 .decode()
                 .map_err(|e| CoreError::Invalid(format!("cannot decode image: {e}")))?;
-            encode(img.thumbnail(px, px))?
+            // Shrink first (cheap), then turn the small picture the way up the camera meant it.
+            encode(upright(img.thumbnail(px, px), orientation(path)))?
         }
         Kind::Document | Kind::Video => fit(&render::render(path, px, kind, opts)?, px)?,
     };
@@ -162,6 +168,30 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
         }
     }
     Ok(bytes)
+}
+
+/// The EXIF orientation of a picture (1 to 8; 1 when there is none or it cannot be read).
+fn orientation(path: &Path) -> u32 {
+    let Ok(file) = fs::File::open(path) else { return 1 };
+    let Ok(exif) = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)) else { return 1 };
+    exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+        .and_then(|f| f.value.get_uint(0))
+        .filter(|o| (1..=8).contains(o))
+        .unwrap_or(1)
+}
+
+/// Turn a picture the way up its EXIF orientation says (what Explorer and Finder do).
+fn upright(img: image::DynamicImage, orientation: u32) -> image::DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
+    }
 }
 
 fn encode(img: image::DynamicImage) -> Result<Vec<u8>> {
@@ -433,6 +463,45 @@ mod tests {
         assert_eq!(kind_of(Path::new("a.txt")), None);
         assert_eq!(kind_of(Path::new("noext")), None);
         assert!(supported_extensions().contains(&"png"));
+    }
+
+    /// A 4x2 JPEG (wide) with an EXIF orientation tag spliced in after the start marker.
+    fn jpeg_with_orientation(o: u16) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(4, 2, |x, _| if x < 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) });
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+        // APP1 "Exif\0\0", big-endian TIFF header, one IFD0 entry: Orientation (0x0112), SHORT, 1 value.
+        let mut tiff = b"MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
+        tiff.extend_from_slice(&o.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut seg = b"Exif\0\0".to_vec();
+        seg.extend_from_slice(&tiff);
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend_from_slice(&((seg.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&seg);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    #[test]
+    fn photos_are_turned_the_way_up_their_camera_meant() {
+        let d = tempfile::tempdir().unwrap();
+        for (tag, wide) in [(1u16, true), (6, false), (8, false), (3, true)] {
+            let f = d.path().join(format!("p{tag}.jpg"));
+            fs::write(&f, jpeg_with_orientation(tag)).unwrap();
+            assert_eq!(orientation(&f), tag as u32);
+            let png = thumbnail_cached(&f, 64, None).unwrap();
+            let img = image::load_from_memory(&png).unwrap();
+            assert_eq!(img.width() > img.height(), wide, "orientation {tag}");
+        }
+        // Turned a quarter clockwise, the red left half ends up on top.
+        let f = d.path().join("p6.jpg");
+        let img = image::load_from_memory(&thumbnail_cached(&f, 64, None).unwrap()).unwrap().to_rgb8();
+        assert!(img.get_pixel(0, 0)[0] > 150 && img.get_pixel(0, img.height() - 1)[2] > 150);
+        // No tag, or a picture without EXIF, is left as it is.
+        let plain = d.path().join("plain.png");
+        image::RgbImage::new(4, 2).save(&plain).unwrap();
+        assert_eq!(orientation(&plain), 1);
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

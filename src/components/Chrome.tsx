@@ -21,6 +21,7 @@ import {
 import { adv } from "../settings/advanced";
 import { commandFor } from "../settings/keys";
 import { driveName, driveRemote, hidesAddress } from "../util/drives";
+import { deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { isFiltering, toSearchQuery } from "../util/filter";
 import {
   HOME,
@@ -102,6 +103,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
   const os = useStore((s) => s.info?.os);
   const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   const incoming = useStore((s) => s.incomingTab);
+  const closedCount = useStore((s) => s.closedTabs.length);
   const tabs = useStore((s) => s.tabs);
   const groups = useStore((s) => s.groups);
   const activeTab = useStore((s) => s.activeTab);
@@ -118,6 +120,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
     ...(groupId ? [{ id: "ungroup", label: "Remove from group", run: () => groupTab(id, null) }] : []),
     { id: "close", label: "Close tab", shortcut: "Ctrl+W", separatorBefore: true, run: () => closeTab(id) },
     { id: "closeOthers", label: "Close other tabs", disabled: tabs.length < 2, run: () => closeOthers(id) },
+    { id: "reopen", label: "Bring back closed tab", shortcut: "Ctrl+Shift+T", disabled: closedCount === 0, run: () => useStore.getState().reopenTab() },
   ];
 
   const groupMenu = (id: string): MenuItem[] => {
@@ -1071,7 +1074,7 @@ export function Sidebar() {
     label: string,
     target: string,
     icon: React.ReactNode,
-    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload },
+    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload; onOpen?: () => void },
   ) => (
     <button
       key={key}
@@ -1083,16 +1086,17 @@ export function Sidebar() {
       data-active={location === target || undefined}
       title={extra?.tip ?? (isAppLocation(target) ? label : `${label}\n${maskAddresses(target)}`)}
       onClick={() => {
-        if (extra?.isFile) {
+        if (extra?.onOpen) extra.onOpen();
+        else if (extra?.isFile) {
           addRecent(target, false);
           void openFile(target);
         } else navigate(target);
       }}
-      onAuxClick={(e) => e.button === 1 && !extra?.isFile && newTab(target, { background: true })}
+      onAuxClick={(e) => e.button === 1 && !extra?.isFile && !extra?.onOpen && newTab(target, { background: true })}
       onContextMenu={(e) => {
         e.preventDefault();
         const items: MenuItem[] = [
-          ...(extra?.isFile ? [] : [{ id: "newTab", label: "Open in new tab", run: () => newTab(target) }]),
+          ...(extra?.isFile || extra?.onOpen ? [] : [{ id: "newTab", label: "Open in new tab", run: () => newTab(target) }]),
           ...(extra?.menu ?? []),
         ];
         if (items.length) setMenu({ x: e.clientX, y: e.clientY, items });
@@ -1160,6 +1164,7 @@ export function Sidebar() {
       </div>
     );
   };
+  const devices = useStore((s) => s.devices);
   const driveIcon = (d: Drive) => <Icon name={d.media === "network" ? "network" : "drive"} />;
   const pinnedPaths = new Set(pins.map((p) => p.path));
   const frequentShown = frequent.filter((p) => !pinnedPaths.has(p)).slice(0, adv<number>(useStore.getState().settings, "files.frequentCount"));
@@ -1213,10 +1218,10 @@ export function Sidebar() {
           {heading("Drives", "sidebar.drivesRows", "showDrives", "drives")}
           {!folded.has("drives") && section(
             "sidebar.drivesRows",
-            drives.map((d) =>
+            [...drives.map((d) =>
               item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
                 drop: d.online ? "folder" : undefined,
-                sub: d.online ? undefined : "offline",
+                sub: d.online ? undefined : d.removable ? "no media" : "offline",
                 tip: `${driveName(d, appearance)}\n${hidesAddress(d, appearance) ? maskAddresses(d.mount, true) : d.mount}${driveRemote(d, appearance) ? `\n${d.remote}` : ""}`,
                 menu: [
                   { id: "open", label: "Open", run: () => navigate(d.mount), disabled: !d.online },
@@ -1224,6 +1229,14 @@ export function Sidebar() {
                 ],
               }),
             ),
+            // Phones and cameras sit with the drives.
+            ...devices.filter(isMainDevice).map((d) =>
+              item(`device-${d.id}`, d.name, d.path ?? `device:${d.id}`, <Icon name={deviceIcon(d)} />, {
+                onOpen: () => void openDevice(d),
+                tip: `${d.name}\n${deviceStatus(d)}${d.note ? `\n${d.note}` : ""}`,
+                menu: [{ id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : "Open", run: () => void openDevice(d) }],
+              }),
+            )],
           )}
         </>
       )}

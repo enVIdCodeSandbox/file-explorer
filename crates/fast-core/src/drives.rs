@@ -98,9 +98,47 @@ pub fn list_drives() -> Vec<Drive> {
         });
     }
     #[cfg(windows)]
-    win::add_network_drives(&mut out);
+    win::add_other_drives(&mut out);
     out.sort_by(|a, b| a.mount.cmp(&b.mount));
     out
+}
+
+/// A cheap fingerprint of "what is plugged in": it changes when a volume is mounted,
+/// unmounted, connected or disconnected, and costs far less than [`list_drives`], so the
+/// shell can check it every second or so and only list the volumes when it moved.
+pub fn signature() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    #[cfg(windows)]
+    win::signature(&mut h);
+    #[cfg(target_os = "linux")]
+    {
+        // Every mount, unmount and remount shows up in this table.
+        std::fs::read("/proc/self/mountinfo").unwrap_or_default().hash(&mut h);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut names: Vec<String> = std::fs::read_dir("/Volumes")
+            .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names.hash(&mut h);
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos", target_os = "android", target_os = "ios")))]
+    {
+        use sysinfo::Disks;
+        let mut mounts: Vec<String> = Disks::new_with_refreshed_list().list().iter().map(|d| d.mount_point().to_string_lossy().into_owned()).collect();
+        mounts.sort();
+        mounts.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// What changed between two listings, by mount point: `(connected, removed)`.
+pub fn changes<'a>(before: &'a [Drive], after: &'a [Drive]) -> (Vec<&'a Drive>, Vec<&'a Drive>) {
+    let added = after.iter().filter(|d| !before.iter().any(|o| o.mount == d.mount)).collect();
+    let removed = before.iter().filter(|o| !after.iter().any(|d| d.mount == o.mount)).collect();
+    (added, removed)
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -202,12 +240,60 @@ mod win {
     use windows_sys::Win32::NetworkManagement::WNet::WNetGetConnectionW;
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives};
 
+    const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_REMOTE: u32 = 4;
+    const DRIVE_CDROM: u32 = 5;
+    const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 
-    /// sysinfo lists fixed and removable disks only. Add mapped network
-    /// drives, querying each on its own thread with a timeout: a dead share
-    /// can block for tens of seconds, which is what makes "This PC" slow.
-    pub fn add_network_drives(out: &mut Vec<Drive>) {
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn text(buf: &[u16]) -> String {
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..end])
+    }
+
+    /// Label, file system and flags of a volume, or `None` when there is nothing to read
+    /// (an empty card reader or DVD drive, a locked BitLocker drive).
+    fn volume_info(root: &[u16]) -> Option<(String, String, u32)> {
+        use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+        let (mut label, mut fs) = ([0u16; 261], [0u16; 64]);
+        let mut flags = 0u32;
+        let ok = unsafe {
+            GetVolumeInformationW(
+                root.as_ptr(), label.as_mut_ptr(), label.len() as u32, std::ptr::null_mut(),
+                std::ptr::null_mut(), &mut flags, fs.as_mut_ptr(), fs.len() as u32,
+            )
+        };
+        (ok != 0).then(|| (text(&label), text(&fs), flags))
+    }
+
+    /// Feeds the drive letters that exist, and for removable and optical drives whether
+    /// anything is in them, into `h`: inserting a card into a reader that already has a
+    /// letter changes no letters, but it changes this.
+    pub fn signature(h: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        let mask = unsafe { GetLogicalDrives() };
+        mask.hash(h);
+        for i in 0..26u32 {
+            if mask & (1 << i) == 0 {
+                continue;
+            }
+            let root = wide(&format!("{}:\\", (b'A' + i as u8) as char));
+            let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
+            if kind == DRIVE_REMOVABLE || kind == DRIVE_CDROM {
+                volume_info(&root).map(|(label, ..)| label).hash(h);
+            }
+        }
+    }
+
+    /// sysinfo lists the disks that answer. This adds every other drive letter, so that
+    /// nothing is missing from "This PC": mapped network drives, and removable, optical or
+    /// locked drives that sysinfo leaves out (shown as "No media" when they are empty).
+    /// Each is queried on its own thread with a timeout: a dead share can block for tens of
+    /// seconds, which is what makes "This PC" slow.
+    pub fn add_other_drives(out: &mut Vec<Drive>) {
         let mask = unsafe { GetLogicalDrives() };
         let mut pending = Vec::new();
         for i in 0..26u32 {
@@ -219,54 +305,73 @@ mod win {
             if out.iter().any(|d| d.mount.eq_ignore_ascii_case(&mount)) {
                 continue;
             }
-            let wide: Vec<u16> = mount.encode_utf16().chain(std::iter::once(0)).collect();
-            if unsafe { GetDriveTypeW(wide.as_ptr()) } != DRIVE_REMOTE {
+            let root = wide(&mount);
+            let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
+            // 0 unknown, 1 no root: nothing to show.
+            if kind <= 1 {
                 continue;
             }
             let (tx, rx) = mpsc::channel();
             let (name_tx, name_rx) = mpsc::channel();
-            let local: Vec<u16> = format!("{letter}:").encode_utf16().chain(std::iter::once(0)).collect();
+            let local = wide(&format!("{letter}:"));
             // The share name comes from the connection table and is normally
             // instant, but it gets its own thread so it can never hold up the list.
-            std::thread::spawn(move || {
-                let mut buf = [0u16; 1024];
-                let mut len = buf.len() as u32;
-                let rc = unsafe { WNetGetConnectionW(local.as_ptr(), buf.as_mut_ptr(), &mut len) };
-                let name = (rc == 0).then(|| {
-                    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-                    String::from_utf16_lossy(&buf[..end])
+            if kind == DRIVE_REMOTE {
+                std::thread::spawn(move || {
+                    let mut buf = [0u16; 1024];
+                    let mut len = buf.len() as u32;
+                    let rc = unsafe { WNetGetConnectionW(local.as_ptr(), buf.as_mut_ptr(), &mut len) };
+                    let _ = name_tx.send((rc == 0).then(|| text(&buf)));
                 });
-                let _ = name_tx.send(name);
-            });
+            }
             std::thread::spawn(move || {
                 let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
-                let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, &mut total, &mut free) };
-                let _ = tx.send((ok != 0, total, avail));
+                let ok = unsafe { GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) };
+                let info = if kind == DRIVE_REMOTE { None } else { volume_info(&root) };
+                let _ = tx.send((ok != 0, total, avail, info));
             });
-            pending.push((letter, mount, rx, name_rx));
+            pending.push((letter, mount, kind, rx, name_rx));
         }
-        for (letter, mount, rx, name_rx) in pending {
-            let (online, total, available) =
-                rx.recv_timeout(Duration::from_millis(1500)).unwrap_or((false, 0, 0));
-            let share = name_rx
-                .recv_timeout(Duration::from_millis(400))
-                .ok()
-                .flatten()
-                .and_then(|unc| super::parse_remote(&unc));
+        for (letter, mount, kind, rx, name_rx) in pending {
+            let (ok, total, available, info) = rx.recv_timeout(Duration::from_millis(1500)).unwrap_or((false, 0, 0, None));
+            if kind == DRIVE_REMOTE {
+                let share = name_rx.recv_timeout(Duration::from_millis(400)).ok().flatten().and_then(|unc| super::parse_remote(&unc));
+                out.push(Drive {
+                    name: match &share {
+                        Some(s) => s.display(&mount),
+                        None => format!("Network Drive ({letter}:)"),
+                    },
+                    remote: share.map(|s| s.remote),
+                    mount,
+                    fs: "network".into(),
+                    total,
+                    available,
+                    media: Media::Network,
+                    removable: false,
+                    read_only: false,
+                    online: ok,
+                });
+                continue;
+            }
+            let removable = kind == DRIVE_REMOVABLE || kind == DRIVE_CDROM;
+            let (label, fs, flags) = info.clone().unwrap_or_default();
+            let generic = match kind {
+                DRIVE_CDROM => "DVD Drive",
+                DRIVE_REMOVABLE => "Removable Disk",
+                _ => "Local Disk",
+            };
             out.push(Drive {
-                name: match &share {
-                    Some(s) => s.display(&mount),
-                    None => format!("Network Drive ({letter}:)"),
-                },
-                remote: share.map(|s| s.remote),
+                name: if label.is_empty() { format!("{generic} ({letter}:)") } else { format!("{label} ({letter}:)") },
+                remote: None,
                 mount,
-                fs: "network".into(),
+                fs: fs.to_lowercase(),
                 total,
                 available,
-                media: Media::Network,
-                removable: false,
-                read_only: false,
-                online,
+                media: if removable { Media::Removable } else { Media::Unknown },
+                removable,
+                read_only: kind == DRIVE_CDROM || flags & FILE_READ_ONLY_VOLUME != 0,
+                // Something readable is in it. An empty drive is listed, as "No media".
+                online: ok || info.is_some(),
             });
         }
         add_unseen_mappings(out, mask);
@@ -396,6 +501,22 @@ mod tests {
         assert_eq!(volume_for(Path::new("/home/x"), &drives).unwrap().mount, "/");
         assert_eq!(media_for(Path::new("/mnt/nas/a"), &drives), Media::Network);
         assert_eq!(media_for(Path::new(r"\\server\share\x"), &drives), Media::Network);
+    }
+
+    #[test]
+    fn reports_what_was_connected_and_removed() {
+        let before = vec![drive("/", Media::Ssd), drive("/media/old", Media::Removable)];
+        let after = vec![drive("/", Media::Ssd), drive("/media/usb", Media::Removable)];
+        let (added, removed) = changes(&before, &after);
+        assert_eq!(added.iter().map(|d| d.mount.as_str()).collect::<Vec<_>>(), ["/media/usb"]);
+        assert_eq!(removed.iter().map(|d| d.mount.as_str()).collect::<Vec<_>>(), ["/media/old"]);
+        let (a, r) = changes(&after, &after);
+        assert!(a.is_empty() && r.is_empty());
+    }
+
+    #[test]
+    fn signature_is_steady_while_nothing_changes() {
+        assert_eq!(signature(), signature());
     }
 
     #[test]

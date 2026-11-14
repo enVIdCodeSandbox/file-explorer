@@ -129,6 +129,18 @@ pub fn likely_app(choices: &Choices) -> Option<App> {
     None
 }
 
+/// True for a command like `"C:\Gone\player.exe" "%1"` whose program is not on disk.
+/// Anything that is not a plain path to a program (a Store app, a `(value not set)`
+/// placeholder, a command found on PATH) is left to Windows.
+#[allow(dead_code)] // the Windows check uses it
+pub fn names_missing_program(cmd: &str) -> bool {
+    let first = split_command(cmd).into_iter().next().unwrap_or_default();
+    let lower = first.to_lowercase();
+    let absolute = first.len() > 3 && first.as_bytes()[1] == b':' && (first.as_bytes()[2] == b'\\' || first.as_bytes()[2] == b'/');
+    absolute && lower.ends_with(".exe") && !Path::new(&first).is_file()
+}
+
+
 pub fn extension_of(path: &Path) -> String {
     path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default()
 }
@@ -547,16 +559,11 @@ mod platform {
             return Check::Ready;
         }
         let Some(prog) = prog_id(&ext) else { return Check::Missing(format!("No app is set to open {}.", what(path))) };
+        // Windows decides. Apps from the Store (Photos, Media Player...) have no plain command to
+        // read here, so only a command that names a program file that is really gone counts as missing.
         match open_command(&prog) {
-            None => Check::Missing(format!("No app is set to open {}.", what(path))),
-            Some(cmd) => {
-                let first = split_command(&expand_env(&cmd)).into_iter().next().unwrap_or_default();
-                if first.is_empty() || first.to_lowercase().ends_with("openwith.exe") || program_exists(&first) {
-                    Check::Ready
-                } else {
-                    Check::Missing(format!("The app set to open {} cannot be found.", what(path)))
-                }
-            }
+            Some(cmd) if names_missing_program(&expand_env(&cmd)) => Check::Missing(format!("The app set to open {} cannot be found.", what(path))),
+            _ => Check::Ready,
         }
     }
 
@@ -579,6 +586,13 @@ mod platform {
                 }
             }
         }
+        // Programs that registered themselves as able to open this type (how VLC, browsers,
+        // viewers and editors say so), and the ones listed for it under OpenWithProgids.
+        for app in registered_apps(&ext) {
+            if seen.insert(app.id.to_lowercase()) {
+                suggested.push(app);
+            }
+        }
         // Everything registered under App Paths.
         let mut others = Vec::new();
         if let Some(o) = reg(&["query", r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths", "/s", "/ve"]) {
@@ -591,6 +605,34 @@ mod platform {
         others.sort_by_key(|a| a.name.to_lowercase());
         let default = prog_id(&ext).and_then(|p| open_command(&p)).and_then(|c| split_command(&expand_env(&c)).into_iter().next()).filter(|e| Path::new(e).is_file()).map(|e| app_from_exe(&e, None));
         Choices { extension: ext, default, suggested, others }
+    }
+
+    /// Programs that say they can open `ext`: each entry under RegisteredApplications points
+    /// at a Capabilities key whose FileAssociations name the ProgId used for that extension.
+    fn registered_apps(ext: &str) -> Vec<App> {
+        let mut out = Vec::new();
+        for hive in ["HKLM", "HKCU"] {
+            let Some(list) = reg(&["query", &format!(r"{hive}\SOFTWARE\RegisteredApplications")]) else { continue };
+            for line in list.lines() {
+                let Some((name, cap)) = line.trim().split_once("REG_SZ") else { continue };
+                let (name, cap) = (name.trim(), cap.trim());
+                if name.is_empty() || cap.is_empty() {
+                    continue;
+                }
+                let Some(assoc) = reg(&["query", &format!(r"{hive}\{cap}\FileAssociations"), "/v", ext]) else { continue };
+                let Some(prog) = value_of(&assoc, ext) else { continue };
+                let Some(exe) = open_command(&prog).and_then(|c| split_command(&expand_env(&c)).into_iter().next()) else { continue };
+                if !exe.to_lowercase().ends_with(".exe") || !Path::new(&exe).is_file() {
+                    continue;
+                }
+                let shown = reg(&["query", &format!(r"{hive}\{cap}"), "/v", "ApplicationName"])
+                    .and_then(|o| value_of(&o, "ApplicationName"))
+                    .filter(|n| !n.starts_with('@') && !n.is_empty())
+                    .unwrap_or_else(|| name.to_string());
+                out.push(App { id: exe, name: shown, icon_url: None });
+            }
+        }
+        out
     }
 
     fn app_path(exe: &str) -> Option<String> {
@@ -692,6 +734,15 @@ mod tests {
         assert_eq!(split_command(r#""C:\Program Files\x.exe" %1"#), vec![r"C:\Program Files\x.exe", "%1"]);
         assert_eq!(split_command(""), Vec::<String>::new());
         assert_eq!(split_command(r#"a "" b"#), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn only_a_program_that_is_really_gone_counts_as_missing() {
+        assert!(names_missing_program(r#""C:\Definitely\Gone\player.exe" "%1""#));
+        assert!(!names_missing_program("(value not set)"), "a Store app has no command to read");
+        assert!(!names_missing_program(r#""%SystemRoot%\system32\mspaint.exe" "%1""#), "left to Windows");
+        assert!(!names_missing_program(""));
+        assert!(!names_missing_program("vlc.exe %1"), "found on PATH, not by this check");
     }
 
     #[test]

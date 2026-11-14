@@ -67,6 +67,7 @@ export default function App() {
       on("dir-updated", (l) => useStore.getState().bumpDirs([l.path])),
       on("index-status", (indexStatus) => useStore.setState({ indexStatus })),
       on("budget-changed", (budget) => useStore.setState({ budget })),
+      on("drives-changed", (p) => useStore.getState().onDrivesChanged(p)),
       on("detached", ({ kind, open }) => {
         const s = useStore.getState();
         if (kind !== "settings" && kind !== "transfers") return;
@@ -164,6 +165,7 @@ export default function App() {
       switch (command) {
         case "newTab": s.newTab(); break;
         case "closeTab": s.closeTab(s.activeTab); break;
+        case "reopenTab": s.reopenTab(); break;
         case "settings": s.openSettings(); break;
         case "nextTab": s.activate(s.tabs[(i + 1) % n].id); break;
         case "prevTab": s.activate(s.tabs[(i + n - 1) % n].id); break;

@@ -165,6 +165,13 @@ pub struct DeleteProgress {
     pub bytes_done: u64,
     #[serde(default)]
     pub bytes_total: u64,
+    /// Files left alone because they were already there (by the setting or the person's answer);
+    /// not a failure.
+    #[serde(default)]
+    pub skipped: u64,
+    /// A file that exists on both sides and is waiting for the person's decision.
+    #[serde(default)]
+    pub conflict: Option<crate::transfer::ConflictInfo>,
 }
 
 const MAX_REPORTED_ERRORS: usize = 50;
@@ -316,6 +323,8 @@ pub fn delete_with_progress(
         result: String::new(),
         bytes_done: 0,
         bytes_total: 0,
+        skipped: 0,
+        conflict: None,
     };
     let finished = AtomicBool::new(false);
 

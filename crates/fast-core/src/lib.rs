@@ -11,6 +11,7 @@ pub mod edit;
 pub mod details;
 pub mod driveio;
 pub mod drives;
+pub mod devices;
 pub mod entry;
 pub mod error;
 pub mod history;

@@ -287,10 +287,18 @@ struct Reporter {
     started: Instant,
     cancel: Arc<AtomicBool>,
     last: parking_lot::Mutex<Instant>,
+    ask: Arc<crate::state::JobAsk>,
+    /// Files left alone so far (shown as "skipped", not as failures).
+    skipped: AtomicU64,
 }
 
 impl Reporter {
     fn emit(&self, phase: DeletePhase, items: (u64, u64), bytes: (u64, u64), current: &str, result: &str, errors: &[(String, String)]) {
+        self.emit_with(phase, items, bytes, current, result, errors, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_with(&self, phase: DeletePhase, items: (u64, u64), bytes: (u64, u64), current: &str, result: &str, errors: &[(String, String)], conflict: Option<fast_core::transfer::ConflictInfo>) {
         let _ = self.app.emit(
             "delete-progress",
             DeleteProgress {
@@ -309,8 +317,67 @@ impl Reporter {
                 result: result.to_string(),
                 bytes_done: bytes.0,
                 bytes_total: bytes.1,
+                skipped: self.skipped.load(Ordering::Relaxed),
+                conflict,
             },
         );
+    }
+
+    /// What to do about a file that is already there: the setting says, or (with "ask") the
+    /// person is asked and this waits for the answer. `None` means the job was cancelled.
+    fn decide(&self, policy: fast_core::transfer::Conflict, sticky: &mut Option<fast_core::browse::Choice>, asked: &mut u64, c: &fast_core::browse::Clash, done: u64, total: u64) -> Option<fast_core::browse::Choice> {
+        use fast_core::browse::Choice;
+        use fast_core::transfer::{Conflict, Resolution};
+        let from = |c: Conflict| match c {
+            Conflict::Skip => Choice::Skip,
+            Conflict::Overwrite => Choice::Replace,
+            Conflict::KeepBoth | Conflict::Ask => Choice::KeepBoth,
+        };
+        let chosen = if policy != Conflict::Ask {
+            Some(from(policy))
+        } else if let Some(c) = *sticky {
+            Some(c)
+        } else {
+            *asked += 1;
+            let info = fast_core::transfer::ConflictInfo {
+                name: c.name.clone(),
+                src: c.src.clone(),
+                dst: c.dst.to_string_lossy().into_owned(),
+                src_size: c.src_size,
+                dst_size: c.dst_size,
+                src_modified: None,
+                dst_modified: c.dst_modified,
+                number: *asked,
+            };
+            *self.ask.answer.lock() = None;
+            let mut last_sent: Option<Instant> = None;
+            loop {
+                if self.cancelled() {
+                    return None;
+                }
+                if let Some((r, all)) = self.ask.answer.lock().take() {
+                    let choice = match r {
+                        Resolution::Skip => Choice::Skip,
+                        Resolution::Replace => Choice::Replace,
+                        Resolution::KeepBoth => Choice::KeepBoth,
+                    };
+                    if all {
+                        *sticky = Some(choice);
+                    }
+                    break Some(choice);
+                }
+                // Say it again now and then: the app only shows one question at a time and retries.
+                if last_sent.map_or(true, |t| t.elapsed() >= Duration::from_millis(300)) {
+                    last_sent = Some(Instant::now());
+                    self.emit_with(DeletePhase::Running, (done, total), (0, 0), &c.name, "", &[], Some(info.clone()));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        };
+        if chosen == Some(Choice::Skip) {
+            self.skipped.fetch_add(1, Ordering::Relaxed);
+        }
+        chosen
     }
 
     fn scanning(&self, found: u64) {
@@ -347,7 +414,9 @@ fn spawn_job(app: AppHandle, st: Shared, action: &'static str, selected: u64, fi
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     let cancel = Arc::new(AtomicBool::new(false));
     st.deletes.lock().insert(id, cancel.clone());
-    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)) };
+    let ask = Arc::new(crate::state::JobAsk::default());
+    st.job_asks.lock().insert(id, ask.clone());
+    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)), ask, skipped: AtomicU64::new(0) };
     std::thread::Builder::new()
         .name(format!("remote-{id}"))
         .spawn(move || {
@@ -365,6 +434,7 @@ fn spawn_job(app: AppHandle, st: Shared, action: &'static str, selected: u64, fi
                 Err(e) => reporter.emit(DeletePhase::Failed, (0, 0), (0, 0), "", "", &[(String::new(), e)]),
             }
             st.deletes.lock().remove(&id);
+            st.job_asks.lock().remove(&id);
             if !dirs.is_empty() {
                 crate::commands::fs_changed(&app, &st, dirs);
             }
@@ -663,8 +733,9 @@ pub fn archive_details(st: &Shared, url: &str) -> CmdResult<fast_core::details::
 }
 
 /// Unpack items from inside archives into a folder (`open` false), or one file into
-/// a temporary place for opening (`open` true; `result` names it). Nothing that is
-/// already in the folder is replaced.
+/// a temporary place for opening (`open` true; `result` names it). A file that is already
+/// in the folder is handled the way "When a file already exists" (File transfers) says:
+/// asked about one by one, replaced, skipped or kept under a second name.
 #[tauri::command]
 pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>, dest: String, open: bool, remove: Option<bool>) -> CmdResult<u64> {
     let remove = remove.unwrap_or(false) && !open;
@@ -677,6 +748,7 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
     let first_target = locs[0].inner.rsplit('/').next().unwrap_or("").to_string();
     let action: &'static str = if open { "open" } else { "unpack" };
     let n = locs.len() as u64;
+    let policy: fast_core::transfer::Conflict = serde_json::from_value(serde_json::Value::String(st.settings.read().transfer.conflict.clone())).unwrap_or(fast_core::transfer::Conflict::Ask);
     let st2 = st.clone();
     spawn_job(app, st, action, n, first, move |rep| {
         let into = if open { st2.paths.remote_tmp.join(format!("archive-{}", rep.id)) } else { PathBuf::from(&dest) };
@@ -689,13 +761,21 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
             }
         }
         let mut out = Outcome::default();
+        // "Replace all" / "Skip all" in an answer holds for the rest of the job.
+        let mut sticky: Option<fast_core::browse::Choice> = None;
+        let mut asked = 0u64;
         for (archive, inners) in groups {
-            let mut report = |done: u64, total: u64, current: &str| rep.running((done, total), (0, 0), current);
-            let r = fast_core::browse::extract_items(&archive, &inners, &into, &rep.cancel, &mut report).map_err(err)?;
+            let seen = std::cell::Cell::new((0u64, 0u64));
+            let mut report = |done: u64, total: u64, current: &str| {
+                seen.set((done, total));
+                rep.running((done, total), (0, 0), current)
+            };
+            let mut decide = |c: &fast_core::browse::Clash| {
+                let (done, total) = seen.get();
+                rep.decide(policy, &mut sticky, &mut asked, c, done, total)
+            };
+            let r = fast_core::browse::extract_items_with(&archive, &inners, &into, &rep.cancel, &mut report, &mut decide).map_err(err)?;
             out.items += r.files;
-            if r.existing > 0 {
-                out.failed.push((archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), format!("{} file(s) were already there and were left as they were.", r.existing)));
-            }
             if r.refused > 0 {
                 out.failed.push((archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), format!("{} item(s) were skipped (links, or names that lead outside the folder).", r.refused)));
             }
@@ -703,7 +783,7 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
                 // A move: what was copied out leaves the archive, but only when all of it arrived.
                 let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if r.existing > 0 || r.refused > 0 {
-                    out.failed.push((name, "Copied, but not removed from the archive because some items were not copied.".into()));
+                    out.failed.push((name, "Copied, but not removed from the archive because some items were not copied (skipped or left alone).".into()));
                 } else if let Err(e) = fast_core::edit::delete(&archive, &inners, &rep.cancel) {
                     out.failed.push((name, format!("Copied, but could not be removed from the archive. {e}")));
                 }

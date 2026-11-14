@@ -37,6 +37,7 @@ pub fn run() {
                 started: std::time::Instant::now(),
                 thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
                 drives: RwLock::new(session.drives.clone()),
+                devices: RwLock::new(Vec::new()),
                 shares: Default::default(),
                 remotes: Mutex::new(HashMap::new()),
                 watcher: {
@@ -50,6 +51,7 @@ pub fn run() {
                 predictor: Mutex::new(Predictor::load(&paths.predictor)),
                 history: Mutex::new(History::load(&paths.history)),
                 deletes: Mutex::new(HashMap::new()),
+                job_asks: Mutex::new(HashMap::new()),
                 elevated: Mutex::new(HashMap::new()),
                 analyses: Mutex::new(HashMap::new()),
                 settings: RwLock::new(settings),
@@ -73,6 +75,7 @@ pub fn run() {
             app.manage(state.clone());
 
             commands::start_indexing(app.handle().clone(), state.clone());
+            commands::start_drive_watch(app.handle().clone(), state.clone());
 
             // Re-evaluate the resource budget periodically: plugging in or
             // unplugging a laptop changes what background work is allowed.
@@ -159,6 +162,9 @@ pub fn run() {
             commands::hash_file,
             commands::thumbnail,
             commands::get_drives,
+            commands::get_devices,
+            commands::connect_device,
+            commands::open_device_in_system,
             commands::known_folders,
             commands::index_status,
             commands::reindex,

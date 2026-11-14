@@ -100,6 +100,7 @@ export const ADVANCED: AdvDef[] = [
   num(200, "tabs.width", "Tabs", "Tab width", 90, 360, "px", "The width tabs have while there is room."),
   num(120, "tabs.minWidth", "Tabs", "Narrowest a tab gets", 40, 240, "px", "Past this, tabs stop shrinking and the bar scrolls with arrows."),
   num(34, "tabs.height", "Tabs", "Tab bar height", 24, 64, "px"),
+  num(25, "tabs.reopenKeep", "Tabs", "Closed tabs that can be brought back", 0, 200, undefined, "Ctrl+Shift+T brings back the last one closed, with its back and forward history. 0 turns it off."),
   num(0, "tabs.max", "Tabs", "Most tabs open at once", 0, 100, undefined, "0 means no limit."),
   sel("end", "tabs.newPosition", "Tabs", "New tabs open", [["end", "At the end"], ["afterCurrent", "Next to the current tab"]]),
   sel("hover", "tabs.closeButton", "Tabs", "Tab close button", [["hover", "On hover and on the active tab"], ["always", "Always"], ["never", "Never (use middle-click)"]]),
@@ -137,6 +138,15 @@ export const ADVANCED: AdvDef[] = [
   yn(false, "thumbs.networkDrives", "Thumbnails", "On network drives", "Off: files on network drives keep their icons, which avoids reading many files over the network."),
   num(64, "thumbs.maxImageMb", "Thumbnails", "Largest picture to preview", 0, 2048, "MB", "Bigger pictures keep their icon. 0 means no limit."),
   num(10, "thumbs.videoPercent", "Thumbnails", "Video frame to show", 0, 95, "%", "How far into the video the frame is taken. With ffmpeg alone (no ffmpegthumbnailer) the frame at two seconds is used."),
+
+  // ---- Drives ----
+  yn(true, "drives.watch", "Files and lists", "Notice drives being connected or removed", "Checks every second or two for USB drives, cards, discs and network drives coming and going, and updates This PC and the navigation pane by itself."),
+  num(1500, "drives.pollMs", "Files and lists", "How often to check for drives", 250, 60000, "ms", "A quick check that costs almost nothing; the drives are only listed again when it finds a change."),
+  num(10, "drives.refreshSecs", "Files and lists", "Refresh free space every", 0, 3600, "s", "How often the used and free figures of the drives are read again. 0 only updates when a drive is connected or removed."),
+  yn(true, "drives.notify", "Files and lists", "Show a notice when a drive is connected or removed"),
+
+  yn(true, "devices.show", "Files and lists", "Show phones, cameras and other devices", "Lists connected phones, cameras and other devices in This PC and the navigation pane, next to the drives. Windows: portable devices; macOS and Linux: USB devices."),
+  yn(true, "devices.showOther", "Files and lists", "Also show printers, keyboards and other USB devices", "Off: only phones and cameras are listed."),
 
   // ---- Disk usage ----
   sel("auto", "usage.liveActivity", "Files and lists", "Live drive activity in Disk usage", [["auto", "Automatic (only on computers with power to spare)"], ["on", "Always"], ["off", "Never"]], "While a scan runs, draws how busy the drive is and how many files per second it is finding. Automatic needs 8 or more cores, 8 GB of memory and mains power."),

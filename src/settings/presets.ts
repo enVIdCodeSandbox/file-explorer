@@ -185,11 +185,11 @@ function perfPatch(l: Level): Patch {
     "advanced.ui.animations": l.animations,
     "advanced.files.folderSizes": l.folderSizes,
     "advanced.files.sizeCache": l.sizeCache,
-    // Pictures come with thumbnails at every level that has them; documents and
-    // videos cost more to render, so they start at Average and Decent.
+    // Every level that has thumbnails has them for pictures, documents and videos. How much
+    // work that is stays down through the level's thread, size and cache limits instead.
     "advanced.thumbs.images": l.thumbs,
-    "advanced.thumbs.documents": l.thumbs && LEVELS.indexOf(l) >= 4,
-    "advanced.thumbs.videos": l.thumbs && LEVELS.indexOf(l) >= 6,
+    "advanced.thumbs.documents": l.thumbs,
+    "advanced.thumbs.videos": l.thumbs,
     "advanced.cache.thumbnails": l.thumbs,
     "advanced.cache.thumbnailsMaxMb": l.thumbDiskMb,
     "advanced.cache.usageSnapshots": l.keepUsage,

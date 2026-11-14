@@ -88,8 +88,8 @@ function Bar({ fraction, indeterminate }: { fraction: number; indeterminate?: bo
 }
 
 function Issues({ p, retry }: { p: Progress | DeleteProgress; retry?: () => void }) {
-  if (p.errorCount === 0 && !("skipped" in p && p.skipped > 0)) return null;
-  const skipped = "skipped" in p ? p.skipped : 0;
+  if (p.errorCount === 0 && !("skipped" in p && (p.skipped ?? 0) > 0)) return null;
+  const skipped = ("skipped" in p ? p.skipped : 0) ?? 0;
   return (
     <div className="transfer-issues">
       {skipped > 0 && <span>{formatCount(skipped)} skipped</span>}

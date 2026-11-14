@@ -12,6 +12,7 @@ export interface KeyCommand {
 export const KEY_COMMANDS: KeyCommand[] = [
   { id: "newTab", label: "New tab", default: "Ctrl+T" },
   { id: "closeTab", label: "Close tab", default: "Ctrl+W" },
+  { id: "reopenTab", label: "Bring back the tab you closed", default: "Ctrl+Shift+T" },
   { id: "nextTab", label: "Next tab", default: "Ctrl+Tab" },
   { id: "prevTab", label: "Previous tab", default: "Ctrl+Shift+Tab" },
   { id: "settings", label: "Open settings", default: "Ctrl+," },

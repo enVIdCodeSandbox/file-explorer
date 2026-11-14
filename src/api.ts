@@ -41,6 +41,23 @@ export interface ForgetReport {
   bytes: number;
 }
 
+export type DeviceKind = "phone" | "camera" | "printer" | "audio" | "input" | "bluetooth" | "other";
+
+/** A phone, camera or other connected device that is not a drive. */
+export interface Device {
+  id: string;
+  name: string;
+  maker: string;
+  kind: DeviceKind;
+  /** A folder the app can browse itself. */
+  path: string | null;
+  /** Can be mounted on request, after which `path` appears. */
+  connectable: boolean;
+  /** What the system's own tool opens it with when the app cannot browse it. */
+  open: string | null;
+  note: string;
+}
+
 export interface Drive {
   name: string;
   mount: string;
@@ -289,6 +306,10 @@ export interface DeleteProgress {
   /** Server jobs: bytes moved so far and expected in total. */
   bytesDone: number;
   bytesTotal: number;
+  /** Files left alone because they were already there (not failures). */
+  skipped?: number;
+  /** A file that exists on both sides, waiting for an answer. */
+  conflict?: ConflictInfo | null;
 }
 
 export type ServerProtocol = "ftp" | "sftp" | "dav";
@@ -599,6 +620,9 @@ export const api = {
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
   thumbnail: (path: string, size: number) => invoke<ArrayBuffer>("thumbnail", { path, size }),
   getDrives: () => invoke<Drive[]>("get_drives"),
+  getDevices: () => invoke<Device[]>("get_devices"),
+  connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),
+  openDeviceInSystem: (open: string) => invoke<void>("open_device_in_system", { open }),
   knownFolders: () => invoke<{ label: string; path: string }[]>("known_folders"),
   indexStatus: () => invoke<IndexStatus>("index_status"),
   reindex: () => invoke<void>("reindex"),
@@ -716,6 +740,8 @@ export interface BackendEvents {
   "fs-changed": string[];
   "index-status": IndexStatus;
   "budget-changed": Budget;
+  /** A drive was connected or removed, or the free space moved. */
+  "drives-changed": { drives: Drive[]; devices: Device[]; added: string[]; removed: string[] };
   "search-hits": { id: number; hits: Hit[]; scanned: number; done: boolean };
   detached: { kind: "settings" | "transfers" | string; open: boolean };
   reattach: { kind: "settings" | "transfers" | string; payload?: unknown };

@@ -63,6 +63,9 @@ const PATHS: Record<string, string> = {
   preset: "M2 4.5h12M2 8h12M2 11.5h12M10 3v3M5 6.5v3M11 10v3",
   memory: "M2 5h12v6H2zM4.5 11v2M8 11v2M11.5 11v2M5 7.5h.01M8 7.5h.01M11 7.5h.01",
   eject: "M8 3l5 6H3zM3 12h10",
+  phone: "M5 1.5h6a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM7 12.5h2",
+  camera: "M2 5h3l1-1.5h4L11 5h3v8H2zM8 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+  usb: "M8 14V3M8 3 6.5 4.5M8 3l1.5 1.5M8 9.5 5 8V6.5M8 11.5l3-1.5V8.5M4 5h2v1.5H4zM10 7h2v1.5h-2z",
 };
 
 export function Icon({ name, size = 16, style }: { name: string; size?: number; style?: CSSProperties }) {
