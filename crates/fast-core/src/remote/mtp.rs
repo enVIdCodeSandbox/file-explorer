@@ -170,6 +170,8 @@ struct Mtp {
     nodes: HashMap<String, Node>,
     offset: UtcOffset,
     dead: bool,
+    /// Set when the device said a handle it was given is no longer valid (see `retrying`).
+    stale: bool,
 }
 
 impl Mtp {
@@ -189,7 +191,7 @@ impl Mtp {
         unique_names(&mut names);
         let minutes = chrono::Local::now().offset().local_minus_utc() / 60;
         let offset = i16::try_from(minutes).ok().and_then(UtcOffset::from_minutes).unwrap_or_else(|| UtcOffset::from_minutes(0).expect("zero is a valid offset"));
-        Ok(Box::new(Mtp { rt, _device: device, storages, storage_names: names, nodes: HashMap::new(), offset, dead: false }))
+        Ok(Box::new(Mtp { rt, _device: device, storages, storage_names: names, nodes: HashMap::new(), offset, dead: false, stale: false }))
     }
 
     fn note<T>(&mut self, r: std::result::Result<T, MtpError>) -> Result<T> {
@@ -197,8 +199,24 @@ impl Mtp {
             if e.is_disconnected() || matches!(e, MtpError::DeviceReset) {
                 self.dead = true;
             }
+            self.stale |= e.is_stale_handle();
             explain(e)
         })
+    }
+
+    /// Runs one action; when the device answers that a handle is stale (Android hands out new
+    /// ids for items after it rescans its media, so an id remembered from an earlier listing can
+    /// stop working), forgets everything remembered and runs it once more from the paths, which
+    /// looks each item up again. Only one more try: a second failure is a real one.
+    fn retrying<T>(&mut self, mut action: impl FnMut(&mut Self) -> Result<T>) -> Result<T> {
+        self.stale = false;
+        let first = action(self);
+        if first.is_ok() || !self.stale {
+            return first;
+        }
+        self.stale = false;
+        self.nodes.clear();
+        action(self)
     }
 
     fn entry_of(&self, o: &ObjectInfo) -> Entry {
@@ -229,6 +247,7 @@ impl Mtp {
                     if e.is_disconnected() || matches!(e, MtpError::DeviceReset) {
                         self.dead = true;
                     }
+                    self.stale |= e.is_stale_handle();
                     explain_at("listing this folder", e)
                 })?;
                 let mut names: Vec<String> = objects.iter().map(|o| o.filename.clone()).collect();
@@ -315,15 +334,8 @@ impl Iterator for Chunks<'_> {
     }
 }
 
-impl Session for Mtp {
-    fn home(&mut self) -> Result<String> {
-        if self.dead {
-            return Err(fail("The device was disconnected."));
-        }
-        Ok("/".into())
-    }
-
-    fn list(&mut self, path: &str) -> Result<Vec<Entry>> {
+impl Mtp {
+    fn list_once(&mut self, path: &str) -> Result<Vec<Entry>> {
         let node = self.resolve(path)?;
         let base = if matches!(node, Node::Root) { String::new() } else { path.trim_end_matches('/').to_string() };
         let kids = self.children(node)?;
@@ -335,7 +347,7 @@ impl Session for Mtp {
         Ok(out)
     }
 
-    fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
+    fn download_once(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
         let Node::Object { storage, handle, dir: false } = self.resolve(remote)? else {
             return Err(fail("That is not a file."));
         };
@@ -367,7 +379,7 @@ impl Session for Mtp {
         result.map(|_| total)
     }
 
-    fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
+    fn upload_once(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
         let (parent, name) = split(remote)?;
         let (storage, parent_handle) = self.place(&parent)?;
         // Replacing: the device would otherwise keep two items with one name.
@@ -391,7 +403,7 @@ impl Session for Mtp {
         }
     }
 
-    fn mkdir(&mut self, path: &str) -> Result<()> {
+    fn mkdir_once(&mut self, path: &str) -> Result<()> {
         let (parent, name) = split(path)?;
         let (storage, parent_handle) = self.place(&parent)?;
         let r = self.rt.block_on(self.storages[storage].create_folder(parent_handle, &name));
@@ -399,7 +411,7 @@ impl Session for Mtp {
         self.note(r).map(|_| ())
     }
 
-    fn remove(&mut self, path: &str, _is_dir: bool) -> Result<()> {
+    fn remove_once(&mut self, path: &str, _is_dir: bool) -> Result<()> {
         let Node::Object { storage, handle, .. } = self.resolve(path)? else {
             return Err(fail("A storage cannot be deleted."));
         };
@@ -408,7 +420,7 @@ impl Session for Mtp {
         self.note(r)
     }
 
-    fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+    fn rename_once(&mut self, from: &str, to: &str) -> Result<()> {
         let (p1, old_name) = split(from)?;
         let (p2, new_name) = split(to)?;
         let Node::Object { storage, handle, .. } = self.resolve(from)? else {
@@ -421,13 +433,59 @@ impl Session for Mtp {
             }
             let r = self.rt.block_on(self.storages[storage].move_object(handle, dest.unwrap_or(ObjectHandle::ROOT), None));
             self.note(r)?;
+            // Some devices give a moved item a new id, and a retry from the old path would no
+            // longer find it, so the second step finds it again at its new place.
+            self.nodes.clear();
+            if old_name != new_name {
+                let moved = format!("{}/{old_name}", p2.trim_end_matches('/'));
+                if let Node::Object { handle, .. } = self.resolve(&moved)? {
+                    let r = self.rt.block_on(self.storages[storage].rename(handle, &new_name));
+                    self.nodes.clear();
+                    return self.note(r);
+                }
+            }
+            return Ok(());
         }
         if old_name != new_name {
             let r = self.rt.block_on(self.storages[storage].rename(handle, &new_name));
+            self.nodes.clear();
             self.note(r)?;
         }
         self.nodes.clear();
         Ok(())
+    }
+}
+
+impl Session for Mtp {
+    fn home(&mut self) -> Result<String> {
+        if self.dead {
+            return Err(fail("The device was disconnected."));
+        }
+        Ok("/".into())
+    }
+
+    fn list(&mut self, path: &str) -> Result<Vec<Entry>> {
+        self.retrying(|s| s.list_once(path))
+    }
+
+    fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
+        self.retrying(|s| s.download_once(remote, local, ctl))
+    }
+
+    fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
+        self.retrying(|s| s.upload_once(local, remote, ctl))
+    }
+
+    fn mkdir(&mut self, path: &str) -> Result<()> {
+        self.retrying(|s| s.mkdir_once(path))
+    }
+
+    fn remove(&mut self, path: &str, is_dir: bool) -> Result<()> {
+        self.retrying(|s| s.remove_once(path, is_dir))
+    }
+
+    fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        self.retrying(|s| s.rename_once(from, to))
     }
 }
 
@@ -459,17 +517,29 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     fn phone(dirs: &[&Path]) -> Box<dyn Session> {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        phone_with_serial(dirs, &format!("virtual-{n:03}"))
+    }
+
+    /// The serial names the pretend phone, which is how a test reaches it from outside.
+    fn phone_with_serial(dirs: &[&Path], serial: &str) -> Box<dyn Session> {
         let rt = runtime().unwrap();
         let cfg = VirtualDeviceConfig {
             manufacturer: "Test".into(),
             model: "Pretend Phone".into(),
-            serial: "virtual-001".into(),
+            serial: serial.into(),
             storages: dirs
                 .iter()
                 .enumerate()
                 .map(|(i, d)| VirtualStorageConfig { description: if i == 0 { "Internal storage".into() } else { "SD card".into() }, capacity: 1 << 30, backing_dir: d.to_path_buf(), read_only: false })
                 .collect(),
             supports_rename: true,
+            // The pretend phone normally watches its folder for outside changes. Those
+            // notices arrive late and in batches on macOS and Windows, and can re-key a
+            // file between a listing and the next step. These tests change the folder
+            // only through the phone, so they have nothing to learn from the watcher.
+            watch_backing_dirs: false,
             ..Default::default()
         };
         let device = rt.block_on(MtpDevice::builder().open_virtual(cfg)).expect("the virtual phone opens");
@@ -533,6 +603,66 @@ mod tests {
         let left: Vec<String> = s.list("/SD card").unwrap().into_iter().map(|e| e.name).collect();
         assert_eq!(left, ["notes.txt"]);
         assert!(s.upload(&out.path().join("up.bin"), "/up.bin", &ctl).is_err(), "files go inside a storage");
+    }
+
+    #[test]
+    fn items_the_device_renumbered_are_looked_up_again() {
+        use mtp_rs::virtual_device::rekey_virtual_object;
+        let internal = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(internal.path().join("Pictures")).unwrap();
+        std::fs::write(internal.path().join("Pictures/a.jpg"), b"aaa").unwrap();
+        std::fs::write(internal.path().join("Pictures/b.jpg"), b"bbbb").unwrap();
+        std::fs::write(internal.path().join("note.txt"), b"hello").unwrap();
+        let serial = "virtual-rekey-test";
+        let mut s = phone_with_serial(&[internal.path()], serial);
+        let cancel = AtomicBool::new(false);
+        let on_bytes = |_n: u64| {};
+        let ctl = Control { cancel: &cancel, on_bytes: &on_bytes };
+        let out = tempfile::tempdir().unwrap();
+        let renumber = |p: &str| {
+            assert!(rekey_virtual_object(serial, Path::new(p)).is_some(), "{p} was listed, so it can be renumbered");
+        };
+
+        // Listing a folder whose number changed since it was last opened.
+        s.list("/Internal storage").unwrap();
+        s.list("/Internal storage/Pictures").unwrap();
+        renumber("Pictures");
+        let mut names: Vec<String> = s.list("/Internal storage/Pictures").unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        assert_eq!(names, ["a.jpg", "b.jpg"]);
+
+        // Reading, renaming, moving, and deleting an item that was renumbered.
+        renumber("Pictures/a.jpg");
+        assert_eq!(s.download("/Internal storage/Pictures/a.jpg", &out.path().join("a.jpg"), &ctl).unwrap(), 3);
+        s.list("/Internal storage/Pictures").unwrap();
+        renumber("Pictures/a.jpg");
+        s.rename("/Internal storage/Pictures/a.jpg", "/Internal storage/Pictures/c.jpg").unwrap();
+        assert!(s.exists("/Internal storage/Pictures/c.jpg").unwrap());
+        s.list("/Internal storage/Pictures").unwrap();
+        renumber("Pictures/c.jpg");
+        s.rename("/Internal storage/Pictures/c.jpg", "/Internal storage/d.jpg").unwrap();
+        assert!(s.exists("/Internal storage/d.jpg").unwrap());
+        assert!(!s.exists("/Internal storage/Pictures/c.jpg").unwrap());
+        s.list("/Internal storage").unwrap();
+        renumber("d.jpg");
+        s.remove("/Internal storage/d.jpg", false).unwrap();
+        assert!(!s.exists("/Internal storage/d.jpg").unwrap());
+
+        // Putting something into, and making a folder inside, a folder that was renumbered.
+        s.list("/Internal storage/Pictures").unwrap();
+        renumber("Pictures");
+        std::fs::write(out.path().join("new.bin"), b"12345").unwrap();
+        assert_eq!(s.upload(&out.path().join("new.bin"), "/Internal storage/Pictures/new.bin", &ctl).unwrap(), 5);
+        s.list("/Internal storage/Pictures").unwrap();
+        renumber("Pictures");
+        s.mkdir("/Internal storage/Pictures/Trips").unwrap();
+        let mut names: Vec<String> = s.list("/Internal storage/Pictures").unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        assert_eq!(names, ["Trips", "b.jpg", "new.bin"]);
+        assert_eq!(std::fs::read(internal.path().join("Pictures/new.bin")).unwrap(), b"12345");
+
+        // An item that really is gone is still reported, not retried forever.
+        assert!(s.remove("/Internal storage/nothing.txt", false).is_err());
     }
 
     #[test]
