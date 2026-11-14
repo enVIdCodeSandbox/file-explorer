@@ -202,7 +202,7 @@ fn list_all() -> Vec<Device> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    let mut devices = parse_system_profiler(&json, |app| Path::new("/Applications").join(format!("{app}.app")).exists());
+    let mut devices = parse_system_profiler(&json, |app| std::path::Path::new("/Applications").join(format!("{app}.app")).exists());
     attach_mtp(&mut devices, &crate::remote::mtp::found_devices());
     devices
 }

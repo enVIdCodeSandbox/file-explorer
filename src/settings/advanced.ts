@@ -76,6 +76,7 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "files.sortAsc", "Files and lists", "Sort ascending", "A to Z, oldest first, smallest first. Off reverses it."),
   yn(true, "files.keepFilter", "Files and lists", "Use the same filter in every folder", "What is typed or ticked in the Filter menu stays when you open another folder, until you clear it. The Filter button shows a dot while one is on. Turn off to start every folder unfiltered."),
   yn(true, "files.rememberView", "Files and lists", "Use the same view in every folder", "The view you pick in the View menu (Details, List, icons of any size) stays when you open another folder, and is still there next time you start the app. Turn off to have a view you pick apply only to the folder you are in; every other folder opens in the view chosen under Appearance > Folder view."),
+  yn(true, "files.sortAfterJobs", "Files and lists", "Sort and filter when a job finishes", "When copying, moving or deleting is done, the folders it touched are reloaded and the current sort and filter are applied straight away, so new files land in their sorted place and hidden ones stay hidden. Turn off to leave folders as they are until you refresh."),
   yn(true, "files.naturalSort", "Files and lists", "Sort numbers naturally", "file2 comes before file10."),
   yn(false, "files.caseSensitive", "Files and lists", "Sort capital letters first"),
   num(700, "files.typeAheadMs", "Files and lists", "Type-to-select pause", 200, 3000, "ms", "How long typing keeps extending what you typed."),

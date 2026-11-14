@@ -302,6 +302,8 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let nextNoticeId = 1;
 /** Deletes that went to the Trash, by job id, so a finished one can be undone. */
 const trashedBy = new Map<number, string[]>();
+/** Where each running delete is taking items from, to reload those folders when it ends. */
+const deletedFrom = new Map<number, string[]>();
 /** Jobs let go with "Force stop": whatever they report later is ignored. */
 const forcedJobs = new Set<number>();
 
@@ -809,6 +811,11 @@ export const useStore = create<State>((set, get) => ({
       if (secs > 0 && p.elapsedSecs < 3) secs = Math.min(secs, 1.5);
       if (secs > 0) setTimeout(() => get().dismissTransfer(p.id), secs * 1000);
       const spec = get().specs[p.id];
+      // Reload what the job touched, so the sort and filter apply to the finished result.
+      if (adv<boolean>(get().settings, "files.sortAfterJobs")) {
+        const touched = [p.destDir, ...(spec?.op === "move" ? spec.sources.map((x) => parentPath(x) ?? "") : [])].filter(Boolean);
+        get().bumpDirs(touched);
+      }
       // The window that started the job reports it; the transfers window only displays.
       if (detachedView) return;
       if (spec) {
@@ -844,6 +851,9 @@ export const useStore = create<State>((set, get) => ({
       const where = p.permanent ? "permanently" : `to the ${get().info?.os === "windows" ? "Recycle Bin" : "Trash"}`;
       const trashed = trashedBy.get(p.id);
       trashedBy.delete(p.id);
+      const from = deletedFrom.get(p.id);
+      deletedFrom.delete(p.id);
+      if (from && adv<boolean>(get().settings, "files.sortAfterJobs")) get().bumpDirs([...new Set(from.map((x) => parentPath(x) ?? "").filter(Boolean))]);
       if (p.phase === "done" && p.errorCount === 0 && trashed) get().pushUndo({ kind: "trash", paths: trashed });
       if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`, {
         facts: [
@@ -1303,6 +1313,7 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
     else {
       const id = await api.deleteStart(paths, permanent);
       if (!permanent) trashedBy.set(id, paths);
+      deletedFrom.set(id, paths);
     }
     return true;
   } catch (e) {
