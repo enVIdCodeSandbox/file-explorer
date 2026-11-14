@@ -118,7 +118,7 @@ jobs:
           npx tauri ios init --ci
           node scripts/mobile-setup.mjs ios
       - name: Build the unsigned .ipa
-        run: scripts/ios-unsigned.sh
+        run: bash scripts/ios-unsigned.sh
       - uses: actions/upload-artifact@v4
         with:
           name: fast-file-explorer-ios-unsigned

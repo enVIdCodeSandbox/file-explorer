@@ -4,7 +4,7 @@
 # sideloading tool (AltStore, Sideloadly, TrollStore where it applies) signs it
 # with a free Apple ID while installing. See docs/MOBILE.md.
 #
-#   npx tauri ios init --ci && node scripts/mobile-setup.mjs ios && scripts/ios-unsigned.sh
+#   npx tauri ios init --ci && node scripts/mobile-setup.mjs ios && bash scripts/ios-unsigned.sh
 #
 # Newer Tauri versions can do this themselves (`tauri ios build --no-sign`);
 # that is tried first. If this version does not know the option, or produces no
