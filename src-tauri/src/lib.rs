@@ -25,6 +25,10 @@ pub fn run() {
             let config = app.path().app_config_dir()?;
             let cache = app.path().app_cache_dir()?;
             let paths = Paths::new(&config, &cache);
+            // Nothing can be reading staged files yet, so leftovers from the last run go.
+            for prefix in ["paste-", "clip-", "stage-"] {
+                remote::sweep_staging(&paths.remote_tmp, prefix, None);
+            }
 
             // Only small JSON files are read before the window appears; the
             // index and drive list load on background threads.

@@ -28,7 +28,7 @@ import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind 
 import { adv } from "./settings/advanced";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
-import { HOME, THIS_PC, baseName, insideArchive, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
+import { HOME, THIS_PC, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
@@ -149,6 +149,9 @@ interface State {
   clipboard: Clipboard | null;
   /** Bumped per folder path whenever its contents change on disk. */
   dirVersion: Record<string, number>;
+  /** Pastes waiting for a delete they would collide with. */
+  queuedJobs: Record<number, { title: string; detail: string }>;
+  unqueue: (id: number) => void;
   /** Paths selected in the active tab (drives the details pane). */
   selection: string[];
   deletes: Record<number, DeleteProgress>;
@@ -304,6 +307,56 @@ let nextNoticeId = 1;
 const trashedBy = new Map<number, string[]>();
 /** Where each running delete is taking items from, to reload those folders when it ends. */
 const deletedFrom = new Map<number, string[]>();
+/** What a running delete or copy is about to take away or put down, for ordering later jobs after it. */
+interface Footprint {
+  removes: string[];
+  writes?: { dir: string; names: string[] };
+}
+/** Running jobs by key: "d" + id for deletes, "t" + id for copies and moves. */
+const inFlight = new Map<string, Footprint>();
+/** Jobs waiting for others to end: each wakes when none of the jobs it waits for is left. */
+const waiters: { ids: Set<string>; queue: number; wake: () => void }[] = [];
+let queueSeq = 0;
+const ended = (key: string): boolean => {
+  const st = useStore.getState();
+  const p = key[0] === "d" ? st.deletes[Number(key.slice(1))] : st.transfers[Number(key.slice(1))];
+  return !!p && (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed");
+};
+function wake() {
+  for (const k of [...inFlight.keys()]) if (ended(k)) inFlight.delete(k);
+  const open = new Set(Object.keys(useStore.getState().queuedJobs).map(Number));
+  for (let i = waiters.length - 1; i >= 0; i--) {
+    const w = waiters[i];
+    for (const id of [...w.ids]) if (!inFlight.has(id)) w.ids.delete(id);
+    if (w.ids.size === 0 || !open.has(w.queue)) {
+      waiters.splice(i, 1);
+      w.wake();
+    }
+  }
+}
+const fold = (x: string) => (/^[A-Za-z]:|^\\\\/.test(x) ? x.toLowerCase() : x).replace(/[\\/]+$/, "");
+/** Running jobs that a copy or move of `sources` into `dest` would run into, in the order they began. */
+function jobsInTheWay(sources: string[], dest: string): string[] {
+  const d = fold(dest);
+  const names = new Set(sources.map((s) => baseName(s).toLowerCase()));
+  const out: string[] = [];
+  for (const [key, fp] of inFlight) {
+    const removed = fp.removes.some((raw) => {
+      const p = fold(raw);
+      if (isInside(d, p)) return true; // the destination is being removed, or is inside what is
+      const up = parentPath(p);
+      if (up !== null && fold(up) === d && names.has(baseName(p).toLowerCase())) return true; // would land where it was
+      return sources.some((s) => isInside(fold(s), p) || isInside(p, fold(s))); // copying from what is being removed
+    });
+    // Another copy putting the same names in the same folder, or making the folder this goes into.
+    const written =
+      !!fp.writes &&
+      ((fold(fp.writes.dir) === d && fp.writes.names.some((n) => names.has(n.toLowerCase()))) ||
+        fp.writes.names.some((n) => isInside(d, fold(`${fp.writes!.dir}${fp.writes!.dir.includes("\\") ? "\\" : "/"}${n}`))));
+    if (removed || written) out.push(key);
+  }
+  return out;
+}
 /** Jobs let go with "Force stop": whatever they report later is ignored. */
 const forcedJobs = new Set<number>();
 
@@ -351,6 +404,13 @@ export const useStore = create<State>((set, get) => ({
   cancelling: {},
   clipboard: null,
   dirVersion: {},
+  queuedJobs: {},
+  unqueue: (id) => {
+    const q = { ...get().queuedJobs };
+    delete q[id];
+    set({ queuedJobs: q });
+    wake();
+  },
   selection: [],
   deletes: {},
   series: {},
@@ -798,6 +858,10 @@ export const useStore = create<State>((set, get) => ({
       series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
     }
     set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
+    if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
+      inFlight.delete(`t${p.id}`);
+      wake();
+    }
     // Let files appear in the destination folder while they are being copied in.
     if (p.phase === "running" && !detachedView && Date.now() - (lastDestRefresh[p.id] ?? 0) > 1200) {
       lastDestRefresh[p.id] = Date.now();
@@ -839,6 +903,11 @@ export const useStore = create<State>((set, get) => ({
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
     if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);
+    if (p.action === "delete" && p.phase === "failed") {
+      deletedFrom.delete(p.id);
+      inFlight.delete(`d${p.id}`);
+      wake();
+    }
     if (p.action !== "delete") {
       if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
         if (p.action === "compress" || p.action === "extract") archiveFinished(p);
@@ -853,6 +922,8 @@ export const useStore = create<State>((set, get) => ({
       trashedBy.delete(p.id);
       const from = deletedFrom.get(p.id);
       deletedFrom.delete(p.id);
+      inFlight.delete(`d${p.id}`);
+      wake();
       if (from && adv<boolean>(get().settings, "files.sortAfterJobs")) get().bumpDirs([...new Set(from.map((x) => parentPath(x) ?? "").filter(Boolean))]);
       if (p.phase === "done" && p.errorCount === 0 && trashed) get().pushUndo({ kind: "trash", paths: trashed });
       if (p.phase === "done") get().notify("delete", `Deleted ${what}`, p.errorCount ? `${p.errorCount} could not be deleted` : p.permanent ? "Permanently" : `Moved ${where}`, {
@@ -943,7 +1014,24 @@ export const useStore = create<State>((set, get) => ({
     // "Ask" is answered file by file while the transfer runs (see askAboutConflict), so
     // that files inside merged folders get asked about too, as in Windows.
     const conflict: Conflict = s.settings.transfer.conflict;
-    const spec: TransferSpec = { sources, destDir, op, conflict };
+    const spec: TransferSpec = { sources, destDir, op, conflict, skipIdentical: adv<boolean>(s.settings, "transfers.skipIdentical") };
+    // A job begun earlier that is still working on these folders goes first, so things happen
+    // in the order they were asked for: this waits in line, shown with the other jobs, and
+    // starts by itself when that job is over.
+    const blockers = jobsInTheWay(sources, destDir);
+    if (blockers.length) {
+      const qid = ++queueSeq;
+      set({
+        queuedJobs: { ...get().queuedJobs, [qid]: { title: `${op === "move" ? "Move" : "Copy"} ${describeItems(sources)} to ${baseName(destDir) || destDir}`, detail: "Waiting for an earlier job on these folders to finish" } },
+        transfersOpen: true,
+      });
+      await new Promise<void>((resolve) => {
+        waiters.push({ ids: new Set(blockers), queue: qid, wake: resolve });
+        wake();
+      });
+      if (!get().queuedJobs[qid]) return; // taken out of the line
+      get().unqueue(qid);
+    }
     if (isArchiveLoc(destDir)) {
       // Into an archive: from disk, from inside it (a move rearranges it) or from another archive.
       if (isRemote(destDir) || sources.some(isRemote)) {
@@ -987,6 +1075,8 @@ export const useStore = create<State>((set, get) => ({
       if (mode === "cancel") return;
       const id = mode === "elevated" ? await api.elevatedStart(job) : await api.transferStart(spec);
       set({ specs: { ...get().specs, [id]: spec } });
+      inFlight.set(`t${id}`, { removes: op === "move" ? sources : [], writes: { dir: destDir, names: sources.map(baseName) } });
+      wake();
       const landed = sources.map((src) => ({ from: src, to: joinPath(destDir, baseName(src)) }));
       get().pushUndo(op === "move" ? { kind: "move", pairs: landed } : { kind: "copy", created: landed.map((l) => l.to) });
     } catch (e) {
@@ -1314,6 +1404,7 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
       const id = await api.deleteStart(paths, permanent);
       if (!permanent) trashedBy.set(id, paths);
       deletedFrom.set(id, paths);
+      inFlight.set(`d${id}`, { removes: paths });
     }
     return true;
   } catch (e) {

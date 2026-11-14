@@ -102,6 +102,10 @@ pub struct TransferSpec {
     /// Which way to move the bytes; automatic by default.
     #[serde(default)]
     pub method: MethodPref,
+    /// A file already at the destination with the same size and modified time is the same file:
+    /// it is kept as it is and skipped, whatever the conflict choice, and never asked about.
+    #[serde(default = "yes")]
+    pub skip_identical: bool,
 }
 
 fn yes() -> bool {
@@ -998,8 +1002,44 @@ fn scan_dir(src: &Path, dst: &Path, shared: &Shared) -> Scanned {
     out
 }
 
+/// Whether `dst` is, as far as its size and modified time say, the very file `src` is.
+/// File systems keep times to different precision (FAT only to two seconds), hence the margin.
+fn same_file(src: &Path, dst: &Path) -> bool {
+    let (Ok(a), Ok(b)) = (fs::metadata(src), fs::metadata(dst)) else { return false };
+    if !a.is_file() || !b.is_file() || a.len() != b.len() {
+        return false;
+    }
+    let close = match (a.modified(), b.modified()) {
+        (Ok(x), Ok(y)) => x.duration_since(y).unwrap_or_else(|e| e.duration()) <= std::time::Duration::from_secs(2),
+        _ => false,
+    };
+    // Small files are also compared byte for byte, which is cheap; big ones go by size and time.
+    close && (a.len() > 8 * 1024 * 1024 || same_bytes(src, dst))
+}
+
+/// Byte-for-byte comparison of two files already known to be the same length.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let Ok(len) = fs::metadata(a).map(|m| m.len()) else { return false };
+    let (Ok(mut x), Ok(mut y)) = (fs::File::open(a), fs::File::open(b)) else { return false };
+    let (mut bx, mut by) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    let mut left = len;
+    while left > 0 {
+        let n = left.min(bx.len() as u64) as usize;
+        if x.read_exact(&mut bx[..n]).is_err() || y.read_exact(&mut by[..n]).is_err() || bx[..n] != by[..n] {
+            return false;
+        }
+        left -= n as u64;
+    }
+    true
+}
+
 fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
     let mut dst = item.dst.clone();
+    if spec.skip_identical && same_file(&item.src, &dst) {
+        shared.skipped.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     if dst.exists() {
         let Some(choice) = shared.resolve(spec.conflict, &item.src, &dst) else { return };
         match choice {
@@ -1264,7 +1304,7 @@ mod tests {
     fn spec(sources: Vec<PathBuf>, dest: &Path, op: Op, conflict: Conflict) -> TransferSpec {
         TransferSpec {
             sources, dest_dir: dest.to_path_buf(), op, conflict,
-            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native,
+            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native, skip_identical: true,
         }
     }
 
@@ -1339,6 +1379,25 @@ mod tests {
         assert_eq!(dirs[0], Path::new("/dst"));
         assert_eq!(moved[0], src.path());
         assert!(items.iter().all(|i| i.dst.starts_with("/dst")));
+    }
+
+    #[test]
+    fn copying_the_same_files_again_keeps_and_skips_them() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        make_tree(src.path());
+        let first = run_job(spec(vec![src.path().to_path_buf()], dst.path(), Op::Copy, Conflict::KeepBoth));
+        assert_eq!(first.error_count, 0);
+        // Same again with "keep both": nothing new is made, nothing is asked, nothing fails.
+        let second = run_job(spec(vec![src.path().to_path_buf()], dst.path(), Op::Copy, Conflict::KeepBoth));
+        assert_eq!((second.error_count, second.phase), (0, Phase::Done));
+        assert_eq!(second.skipped, 42, "every file was already there");
+        let names: Vec<_> = fs::read_dir(dst.path().join(src.path().file_name().unwrap())).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(!names.iter().any(|n| n.contains("(2)")), "{names:?}");
+        // A file that changed is not the same file.
+        fs::write(src.path().join("top.txt"), b"changed!").unwrap();
+        let third = run_job(spec(vec![src.path().to_path_buf()], dst.path(), Op::Copy, Conflict::Overwrite));
+        assert_eq!(third.skipped, 41);
     }
 
     fn make_tree(root: &Path) {

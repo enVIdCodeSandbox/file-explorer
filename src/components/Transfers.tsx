@@ -530,14 +530,41 @@ export function DetachedTransfers() {
   return <Window jobs={jobs} detached />;
 }
 
+/** Pastes waiting for a delete they would collide with. */
+function Waiting() {
+  const queued = useStore((s) => s.queuedJobs);
+  const entries = Object.entries(queued);
+  if (!entries.length) return null;
+  return (
+    <div className="transfer-window transfer-queued" role="status">
+      {entries.map(([id, q]) => (
+        <section key={id} className="transfer-section">
+          <div className="transfer-row">
+            <Icon name="info" size={12} />
+            <span className="grow file-name">
+              {q.title}
+              <span className="muted"> · {q.detail}</span>
+            </span>
+            <button className="icon-button" aria-label="Remove from the line" title="Remove from the line" onClick={() => useStore.getState().unqueue(Number(id))}>
+              <Icon name="close" size={12} />
+            </button>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function Transfers() {
   const open = useStore((s) => s.transfersOpen);
   const detached = useStore((s) => s.detached.transfers);
+  const waiting = useStore((s) => Object.keys(s.queuedJobs).length > 0);
   const jobs = useJobs();
-  if (!jobs.length || detached) return null;
+  if ((!jobs.length && !waiting) || detached) return null;
   return (
     <div className="transfers" data-open={open || undefined} aria-live="polite">
-      {open ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />)}
+      {waiting && <Waiting />}
+      {!jobs.length ? null : open ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />)}
     </div>
   );
 }

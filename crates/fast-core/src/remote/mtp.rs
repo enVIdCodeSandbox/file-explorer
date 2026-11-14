@@ -120,12 +120,21 @@ pub fn connect(key: &str) -> Result<Box<dyn Session>> {
                 None => MtpDevice::open_by_location(info.location_id).await,
             }
         })
-        .map_err(explain)?;
+        .map_err(|e| explain_at("opening the device", e))?;
     Mtp::new(rt, device)
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().map_err(fail)
+}
+
+/// As [`explain`], for a step whose failure is not obvious: says which step it was and keeps
+/// the library's own wording, so a device that refuses something unusual can be recognised.
+fn explain_at(step: &str, e: MtpError) -> CoreError {
+    match e {
+        MtpError::Unsupported | MtpError::Other { .. } => fail(format!("The device refused \"{step}\" ({e}; {e:?}). Unlock it, choose \"File transfer\" in its USB options, and try again.")),
+        other => explain(other),
+    }
 }
 
 /// A device's own error, in words a person can act on.
@@ -165,7 +174,7 @@ struct Mtp {
 
 impl Mtp {
     fn new(rt: tokio::runtime::Runtime, device: MtpDevice) -> Result<Box<dyn Session>> {
-        let storages = rt.block_on(device.storages()).map_err(explain)?;
+        let storages = rt.block_on(device.storages()).map_err(|e| explain_at("reading the list of storages", e))?;
         if storages.is_empty() {
             return Err(fail(LOCKED_HINT));
         }
@@ -216,7 +225,12 @@ impl Mtp {
                     _ => None,
                 };
                 let listed = self.rt.block_on(self.storages[i].list_objects(parent));
-                let objects = self.note(listed)?;
+                let objects = listed.map_err(|e| {
+                    if e.is_disconnected() || matches!(e, MtpError::DeviceReset) {
+                        self.dead = true;
+                    }
+                    explain_at("listing this folder", e)
+                })?;
                 let mut names: Vec<String> = objects.iter().map(|o| o.filename.clone()).collect();
                 unique_names(&mut names);
                 Ok(objects

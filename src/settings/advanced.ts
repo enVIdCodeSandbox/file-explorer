@@ -118,6 +118,7 @@ export const ADVANCED: AdvDef[] = [
   yn(false, "notify.sound", "Notifications", "Play a soft beep with each notice"),
 
   // ---- Transfers ----
+  yn(true, "transfers.skipIdentical", "Transfers", "Skip files that are already there", "A file at the destination with the same name, size and modified time (and, for files up to 8 MB, the same contents) is the same file: it is kept as it is and skipped, without asking, whatever \"When a file already exists\" says. Turn off to treat it like any other clash."),
   num(4, "transfers.dismissSecs", "Transfers", "Hide a finished transfer after", 0, 120, "sec", "0 keeps it until you close it."),
   yn(false, "transfers.openWindow", "Transfers", "Open the larger transfer window automatically"),
 

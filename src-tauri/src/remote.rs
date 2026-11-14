@@ -941,6 +941,25 @@ pub async fn archive_create(state: State<'_, Shared>, dir: String, name: String,
     .await
 }
 
+/// Remove staging folders under `root` whose names start with `prefix`. With `older_than`, only
+/// those not touched for that long (so one a transfer is still reading from stays); with
+/// `None`, all of them (at startup, when no transfer can be running).
+pub fn sweep_staging(root: &std::path::Path, prefix: &str, older_than: Option<std::time::Duration>) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        if !e.file_name().to_string_lossy().starts_with(prefix) {
+            continue;
+        }
+        if let Some(age) = older_than {
+            let modified = e.metadata().and_then(|m| m.modified()).ok();
+            if modified.and_then(|m| m.elapsed().ok()).is_none_or(|el| el < age) {
+                continue;
+            }
+        }
+        let _ = std::fs::remove_dir_all(e.path());
+    }
+}
+
 /// Unpack items from archives into a staging folder, so that real files can be put on
 /// the system clipboard for other programs. Returns the staged paths, one per source.
 /// The previous staging is removed.
@@ -949,13 +968,7 @@ pub async fn archive_stage(state: State<'_, Shared>, sources: Vec<String>) -> Cm
     let st = state.inner().clone();
     blocking(move || {
         let root = st.paths.remote_tmp.clone();
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten() {
-                if e.file_name().to_string_lossy().starts_with("clip-") {
-                    let _ = std::fs::remove_dir_all(e.path());
-                }
-            }
-        }
+        sweep_staging(&root, "clip-", Some(std::time::Duration::from_secs(6 * 3600)));
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         let stage = root.join(format!("clip-{stamp}"));
         let cancel = std::sync::atomic::AtomicBool::new(false);

@@ -289,19 +289,18 @@ pub async fn clipboard_clear() -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking(imp::clear).await.map_err(|e| e.to_string())?
 }
 
+/// How long staged files are kept before a later paste may remove them.
+const STAGING_KEEP: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
 /// Save files that another program copied from inside itself (a zip, a phone) as real files,
 /// and return where. Earlier staged pastes are removed.
 #[tauri::command]
 pub async fn clipboard_stage_virtual(state: State<'_, Shared>) -> CmdResult<Vec<String>> {
     let root = state.paths.remote_tmp.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten() {
-                if e.file_name().to_string_lossy().starts_with("paste-") {
-                    let _ = std::fs::remove_dir_all(e.path());
-                }
-            }
-        }
+        // Older staged pastes go, but never one a copy may still be reading from: a second
+        // paste while the first is running used to delete the first one's files from under it.
+        crate::remote::sweep_staging(&root, "paste-", Some(STAGING_KEEP));
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         let made = fast_core::virtual_clip::extract_virtual_files(&root.join(format!("paste-{stamp}"))).map_err(|e| e.to_string())?;
         Ok(made.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())

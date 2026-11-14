@@ -217,6 +217,8 @@ export interface TransferSpec {
   destDir: string;
   op: TransferOp;
   conflict: Conflict;
+  /** Keep and skip a file already at the destination with the same size, time and content. */
+  skipIdentical?: boolean;
 }
 
 export interface TransferError {
