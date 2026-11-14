@@ -212,11 +212,17 @@ export function analyzeLocation(path: string): string {
   return `fast://analyze?${new URLSearchParams({ path })}`;
 }
 
+/** The Smart Clear page for one drive (its mount point), or for the whole device. */
+export function clearLocation(drive: string | null): string {
+  return `fast://clear?${new URLSearchParams(drive ? { drive } : {})}`;
+}
+
 export type Location =
   | { kind: "home" }
   | { kind: "thispc" }
   | { kind: "search"; query: string; scope: string | null }
   | { kind: "analyze"; path: string }
+  | { kind: "clear"; drive: string | null }
   | { kind: "folder"; path: string };
 
 export function parseLocation(loc: string): Location {
@@ -229,6 +235,10 @@ export function parseLocation(loc: string): Location {
   if (loc.startsWith("fast://analyze?")) {
     const p = new URLSearchParams(loc.slice("fast://analyze?".length));
     return { kind: "analyze", path: p.get("path") ?? "" };
+  }
+  if (loc.startsWith("fast://clear")) {
+    const p = new URLSearchParams(loc.slice("fast://clear?".length));
+    return { kind: "clear", drive: p.get("drive") };
   }
   return { kind: "folder", path: loc };
 }
@@ -244,6 +254,8 @@ export function locationTitle(loc: string, thisPcLabel: string): string {
       return `Search: ${l.query}`;
     case "analyze":
       return `Disk usage: ${baseName(l.path)}`;
+    case "clear":
+      return "Smart Clear";
     default:
       return baseName(l.path);
   }

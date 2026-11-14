@@ -237,10 +237,13 @@ export function FileView({ path }: { path: string }) {
 
   useEffect(() => {
     if (!pendingSelect || !current) return;
-    const name = pendingSelect.slice(path.length).replace(/^[\\/]/, "");
+    const nameOf = (p: string) => p.slice(path.length).replace(/^[\\/]/, "");
+    const name = nameOf(pendingSelect);
     if (current.entries.some((e) => e.name === name)) {
-      setSelected(new Set([name]));
-      useStore.setState({ pendingSelect: null });
+      // Several items can be asked for at once ("Show in folder" for a batch of downloads).
+      const more = useStore.getState().pendingSelectMore.map(nameOf).filter((n) => current.entries.some((e) => e.name === n));
+      setSelected(new Set([name, ...more]));
+      useStore.setState({ pendingSelect: null, pendingSelectMore: [] });
     }
   }, [pendingSelect, current, path]);
 

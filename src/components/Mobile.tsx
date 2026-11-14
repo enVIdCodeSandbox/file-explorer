@@ -15,12 +15,14 @@ import { useStore, VIEW_LEVELS, type SortKey } from "../store";
 import { usePhoneChrome, type PhoneChrome } from "../util/chrome";
 import { askStorageAccess, colorSystemBars, storageAccess } from "../util/device";
 import { driveName } from "../util/drives";
+import { takeOpenRequest } from "../util/native";
 import { formatDate, formatSize, kindOf } from "../util/format";
-import { HOME, THIS_PC, analyzeLocation, baseName, isArchiveLoc, isRemote, parseLocation, remoteLabel, searchLocation } from "../util/path";
+import { HOME, THIS_PC, analyzeLocation, clearLocation, baseName, isArchiveLoc, isRemote, parseLocation, remoteLabel, searchLocation } from "../util/path";
 import { phoneCrumbs, phoneParent, phoneTitle, type Root } from "../util/phonePath";
 import { viewLevelOf } from "../util/viewLevel";
 import { openFile } from "../store";
 import { AnalyzerView } from "./Analyzer";
+import { SmartClearView } from "./SmartClear";
 import { serverUrl } from "./Chrome";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileView } from "./FileView";
@@ -195,6 +197,10 @@ function Browse({ chrome }: { chrome: PhoneChrome }) {
               </span>
             </button>
           )}
+          <button className="m-item" onClick={() => navigate(clearLocation(null))}>
+            <span className="m-item-icon" data-tint><Icon name="broom" size={22} /></span>
+            <span className="m-item-text"><strong>Smart Clear</strong><span>Find what can go and free up space</span></span>
+          </button>
           <button className="m-item" onClick={() => useStore.setState({ transfersOpen: true })}>
             <span className="m-item-icon" data-tint><Icon name="forward" size={22} /></span>
             <span className="m-item-text"><strong>Transfers</strong><span>Copies and moves in progress</span></span>
@@ -405,6 +411,17 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
     };
   }, [os]);
 
+  // Another app opened a folder, the downloads, or a file with this one (Android).
+  useEffect(() => {
+    const collect = () => {
+      const asked = takeOpenRequest();
+      if (asked) useStore.getState().showLaunches([{ folder: asked.folder, select: asked.file ? [asked.file] : [] }]);
+    };
+    collect();
+    window.addEventListener("fast-open", collect);
+    return () => window.removeEventListener("fast-open", collect);
+  }, []);
+
   // Android draws the app under the status and navigation bars; color those strips like the page.
   useEffect(() => {
     const t = setTimeout(() => {
@@ -429,6 +446,8 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
         ? `“${loc.query}”`
         : loc.kind === "analyze"
           ? "Storage"
+          : loc.kind === "clear"
+            ? "Smart Clear"
           : loc.kind === "home"
             ? "Recents"
             : chrome === "samsung"
@@ -590,6 +609,7 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
             {loc.kind === "folder" && <AccessCard />}
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
+            {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}
             {loc.kind === "folder" && <FileView path={loc.path} />}
           </>
         )}

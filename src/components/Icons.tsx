@@ -25,6 +25,7 @@ const PATHS: Record<string, string> = {
   grid: "M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z",
   list: "M2 4h12M2 8h12M2 12h12",
   chart: "M2 2h12v12H2zM2 9h6V2M8 9v5M8 6h6",
+  broom: "M13.5 2.5 8 8M9.5 9.5 6.5 6.5 4 8l4 4zM4 8c-.5 2-1.2 3.6-2.5 5.5 2.6.3 4.9-.2 6.5-1.5",
   pause: "M5 3v10M11 3v10",
   play: "M4 3l9 5-9 5z",
   trash: "M3 4h10M6 4V2.5h4V4M4.5 4l.5 9.5h6l.5-9.5",

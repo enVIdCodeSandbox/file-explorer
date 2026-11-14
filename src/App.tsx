@@ -18,6 +18,7 @@ import { SettingsView } from "./components/SettingsView";
 import { Notices } from "./components/Notices";
 import { DetachedTransfers, Transfers } from "./components/Transfers";
 import { AnalyzerView } from "./components/Analyzer";
+import { SmartClearView } from "./components/SmartClear";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
 import { onJobFinished, redoLast, undoLast, useStore } from "./store";
@@ -81,6 +82,8 @@ export default function App() {
         // The main window notes what is detached, for "remember detached windows".
         if (!s.isSecondary) rememberDetached({ ...s.detached, [kind]: open });
       }),
+      // Another app (or a second start of this one) asked for a folder.
+      on("launch", () => void api.takeLaunch().then((l) => useStore.getState().showLaunches(l)).catch(() => {})),
       on("reattach", ({ kind }) => {
         if (kind === "settings") useStore.setState({ settingsOpen: true });
         else if (kind === "transfers") useStore.setState({ transfersOpen: true });
@@ -274,6 +277,7 @@ export default function App() {
             {loc.kind === "thispc" && <DrivesView />}
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
+            {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}
             {loc.kind === "folder" && <FileView path={loc.path} />}
             {/* Finder shows the path of the folder along the bottom, under the item count. */}
             {chrome === "macos" && loc.kind === "folder" && <Toolbar parts={["address"]} />}

@@ -821,3 +821,9 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .perf-actions > button:not(.primary):not(.link-button) { height: 30px; padding: 0 12px; border-radius: var(--radius-small); border: 1px solid var(--border-strong); }
 .perf-ticks i[data-used] { height: 14px; margin-top: -2px; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text-muted); }
 .perf-now h3 { color: var(--text); }
+
+/* Settings > General > Default file manager */
+.default-fm .button-row { margin-top: 8px; }
+.default-fm p[data-on] { color: var(--text); }
+.default-fm-limits { margin: 4px 0 0; padding-left: 18px; }
+.default-fm-limits li { margin: 2px 0; }

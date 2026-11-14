@@ -577,6 +577,62 @@ export interface IndexStatus {
   drivesTotal: number;
 }
 
+/** Why Smart Clear lists something, from the plainly disposable to what only the person can judge. */
+export type ClearKind = "temp" | "cache" | "thumbnails" | "trash" | "partial" | "logs" | "installers" | "buildLeftovers" | "duplicates" | "oldDownloads" | "largeOld";
+
+export interface ClearItem {
+  path: string;
+  /** Deleted together with `path`. */
+  also: string[];
+  name: string;
+  size: number;
+  /** Last changed or opened, seconds since 1970 (0 when unknown). */
+  used: number;
+  kind: ClearKind;
+  isDir: boolean;
+  /** Copies of one file share a number. */
+  group: number | null;
+  note: string;
+}
+
+export interface ClearReport {
+  items: ClearItem[];
+  totals: { kind: ClearKind; count: number; bytes: number; listed: number }[];
+  scanned: number;
+  cancelled: boolean;
+  lookedIn: string[];
+}
+
+export interface ClearOptions {
+  oldDays: number;
+  largeMb: number;
+  duplicates: boolean;
+}
+
+export interface ClearProgress {
+  scanned: number;
+  found: number;
+  bytes: number;
+  step: string;
+}
+
+/** A folder another app (or the command line) asked the app to show, and what to highlight in it. */
+export interface Launch {
+  folder: string;
+  select: string[];
+}
+
+/** Where the app stands as the system's file manager. */
+export interface DefaultFmStatus {
+  supported: boolean;
+  active: boolean;
+  /** What handled folders before, when known. */
+  previous: string | null;
+  detail: string;
+  /** What still goes to the system's own file manager. */
+  limits: string[];
+}
+
 export interface AppInfo {
   os: "windows" | "macos" | "linux" | string;
   version: string;
@@ -683,6 +739,11 @@ export const api = {
   getSession: () => invoke<Session>("get_session"),
   saveSession: (session: Session) => invoke<void>("save_session", { session }),
   appInfo: () => invoke<AppInfo>("app_info"),
+  smartClearScan: (drive: string | null, options: ClearOptions) => invoke<ClearReport>("smart_clear_scan", { drive, options }),
+  smartClearCancel: () => invoke<void>("smart_clear_cancel"),
+  takeLaunch: () => invoke<Launch[]>("take_launch"),
+  defaultFmStatus: () => invoke<DefaultFmStatus>("default_fm_status"),
+  defaultFmSet: (on: boolean) => invoke<DefaultFmStatus>("default_fm_set", { on }),
   shellMenu: (paths: string[], background: boolean) => invoke<ShellItem[]>("shell_menu", { paths, background }),
   shellInvoke: (id: number) => invoke<void>("shell_invoke", { id }),
   createShortcut: (path: string) => invoke<string>("create_shortcut", { path }),
@@ -761,6 +822,9 @@ export interface BackendEvents {
   /** Another window is dragging a tab over this one (x is null once it leaves). */
   "tab-hover": { x: number | null; w: number };
   "settings-changed": Settings;
+  "smart-clear-progress": ClearProgress;
+  /** Another app asked for a folder; collect it with `takeLaunch`. */
+  launch: null;
 }
 
 export function on<K extends keyof BackendEvents>(

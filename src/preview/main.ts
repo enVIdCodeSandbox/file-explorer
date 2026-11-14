@@ -108,10 +108,44 @@ const info: AppInfo = {
   thumbnailTypes: [],
 };
 
+let fm = { supported: true, active: false, previous: null as string | null, detail: "Folders opened from other apps go to File Explorer.", limits: ["\"Show in folder\" in browsers and many apps asks File Explorer directly and still opens there."] };
+
 const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   get_settings: () => settings,
   set_settings: (a) => void (settings = a.settings as Settings),
   get_session: () => session,
+  take_launch: () => [],
+  smart_clear_cancel: () => null,
+  smart_clear_scan: () => {
+    const day = 86_400;
+    const now = Math.floor(Date.now() / 1000);
+    const it = (name: string, dir: string, kind: string, mb: number, days: number, isDir = false, note = "") => ({ path: `${dir}/${name}`, also: [], name, size: Math.round(mb * 1024 * 1024), used: now - days * day, kind, isDir, group: null, note });
+    const items = [
+      it("pip-build-x81", "/tmp", "temp", 412, 12, true),
+      it("~$Budget.xlsx", "/home/me/Documents", "temp", 0.2, 40),
+      it("google-chrome", "/home/me/.cache", "cache", 1840, 1, true),
+      it("spotify", "/home/me/.cache", "cache", 920, 2, true),
+      it("mesa_shader_cache", "/home/me/.cache", "cache", 310, 5, true),
+      it("thumbnails", "/home/me/.cache", "thumbnails", 265, 1, true),
+      it("old-project.zip", "/home/me/.local/share/Trash/files", "trash", 730, 20),
+      it("ubuntu-24.04.iso.crdownload", "/home/me/Downloads", "partial", 2100, 75),
+      it("app-debug.log", "/home/me/Projects/site", "logs", 88, 200),
+      it("ubuntu-24.04-desktop.iso", "/home/me/Downloads", "installers", 5900, 140),
+      it("GIMP-3.0.AppImage", "/home/me/Downloads", "installers", 230, 300),
+      it("node_modules", "/home/me/Projects/old-site", "buildLeftovers", 640, 500, true),
+      it("holiday (1).mp4", "/home/me/Downloads", "duplicates", 1400, 220, false, "Same contents as /home/me/Videos/holiday.mp4"),
+      it("lecture-recordings.zip", "/home/me/Downloads", "oldDownloads", 3200, 420),
+      it("vm-backup.qcow2", "/home/me/Documents", "largeOld", 18400, 610),
+    ];
+    const totals = Object.values(items.reduce<Record<string, { kind: string; count: number; bytes: number; listed: number }>>((acc, i) => {
+      const t = (acc[i.kind] ??= { kind: i.kind, count: 0, bytes: 0, listed: 0 });
+      t.count++; t.listed++; t.bytes += i.size;
+      return acc;
+    }, {}));
+    return { items, totals, scanned: 184_203, cancelled: false, lookedIn: ["/home/me"] };
+  },
+  default_fm_status: () => fm,
+  default_fm_set: (a) => (fm = { ...fm, active: Boolean(a.on), detail: a.on ? "Folders opened from other apps open here." : "Folders opened from other apps go to File Explorer." }),
   app_info: () => info,
   get_drives: () => drives,
   known_folders: () => places,

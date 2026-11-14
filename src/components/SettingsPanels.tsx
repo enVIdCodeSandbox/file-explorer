@@ -3,10 +3,11 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { api, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
+import { api, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
 import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
+import { isMobileOs, openAppDefaults } from "../util/native";
 import { pickFolder } from "../util/pickFile";
 import { RULES_KEY, cacheRules } from "../util/cacheRules";
 import { DOCK_LABEL, PANELS, PRESETS, moveTo, nudge, panelsAt, type Dock } from "../util/layout";
@@ -663,6 +664,100 @@ export function MaintenancePanel() {
               Apply
             </button>
           </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Default file manager
+// ---------------------------------------------------------------------------
+
+/** What the system's own file manager is called, for the wording here. */
+const SYSTEM_FM: Record<string, string> = { windows: "File Explorer", macos: "Finder", linux: "the system's file manager" };
+
+/** The switch that makes the app what the system starts for folders, and puts things back. */
+export function DefaultFileManagerPanel() {
+  const os = useStore((s) => s.info?.os) ?? "";
+  const { showToast } = useStore.getState();
+  const [status, setStatus] = useState<DefaultFmStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isMobileOs(os)) void api.defaultFmStatus().then(setStatus).catch(() => setStatus(null));
+  }, [os]);
+
+  // Phones have no single switch: the system asks which app to use, and remembers "Always".
+  if (os === "android") {
+    return (
+      <div className="default-fm">
+        <p className="muted">
+          Android has no setting that names one file manager. Instead, the app is offered whenever another app opens a folder, taps "Open downloads", or opens a file with "Open with". Choose
+          FAST File Explorer there and tap "Always" to make it the default for that kind of thing.
+        </p>
+        <div className="button-row">
+          <button className="secondary" onClick={() => void (openAppDefaults() || showToast("This device has no such page."))}>
+            Open this app's "Open by default" page
+          </button>
+        </div>
+        <p className="muted">That page is also where a choice of "Always" is cleared again. The system's own Files app stays installed.</p>
+      </div>
+    );
+  }
+  if (os === "ios") {
+    return (
+      <div className="default-fm">
+        <p className="muted">
+          iPhone and iPad do not let any app take the place of Files. The app is listed under Share &gt; "Open in" for files other apps hand over, and its own folder appears inside Files.
+        </p>
+      </div>
+    );
+  }
+  if (!status) return <p className="muted">Checking…</p>;
+  const system = SYSTEM_FM[os] ?? "the system's file manager";
+
+  const change = async (on: boolean) => {
+    setBusy(true);
+    try {
+      const next = await api.defaultFmSet(on);
+      setStatus(next);
+      if (on && !next.active) showToast("The system did not take the change. Nothing was altered.");
+      else showToast(on ? "Folders now open here." : `Folders open in ${system} again.`);
+    } catch (e) {
+      showToast(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="default-fm">
+      <p className="muted" data-on={status.active || undefined}>
+        {status.active ? "On. " : status.supported ? "Off. " : ""}
+        {status.detail}
+      </p>
+      {status.supported && (
+        <div className="button-row">
+          {status.active ? (
+            <button className="secondary" disabled={busy} onClick={() => void change(false)}>
+              Give folders back to {status.previous ? "what was set before" : system}
+            </button>
+          ) : (
+            <button className="primary" disabled={busy} onClick={() => void change(true)}>
+              Make this the default file manager
+            </button>
+          )}
+        </div>
+      )}
+      {status.limits.length > 0 && (
+        <>
+          <p className="muted">What stays with {system}:</p>
+          <ul className="muted default-fm-limits">
+            {status.limits.map((l) => (
+              <li key={l}>{l}</li>
+            ))}
+          </ul>
         </>
       )}
     </div>

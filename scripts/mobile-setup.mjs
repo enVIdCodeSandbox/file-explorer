@@ -10,7 +10,8 @@
 // Android: storage permissions, the activity that asks for "All files access"
 // and opens and shares files, a rule that keeps its methods through code
 // shrinking, and release signing from keystore.properties when that file exists.
-// iOS: shows the app's folder in the Files app.
+// It also offers the app for folders, "open downloads" and "Open with".
+// iOS: shows the app's folder in the Files app, and lists the app under "Open in".
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -59,6 +60,13 @@ function android() {
       if (at < 0) fail("AndroidManifest.xml has no <application> element.");
       xml = `${xml.slice(0, at)}${permissions.trimStart()}\n\n    ${xml.slice(at)}`;
     }
+    // Folders, "open downloads" and "Open with" from other apps arrive at the activity.
+    if (!xml.includes("android.intent.action.VIEW_DOWNLOADS")) {
+      const end = xml.indexOf("</activity>");
+      if (end < 0) fail("AndroidManifest.xml has no activity; the Tauri template changed.");
+      const filters = readFileSync(join(extras, "android", "intent-filters.xml"), "utf8").trimEnd();
+      xml = `${xml.slice(0, end).trimEnd()}\n${filters}\n        ${xml.slice(end)}`;
+    }
     if (!xml.includes("requestLegacyExternalStorage")) xml = xml.replace("<application", '<application\n        android:requestLegacyExternalStorage="true"');
     return xml;
   });
@@ -104,6 +112,11 @@ function ios() {
   const additions = JSON.parse(readFileSync(join(extras, "ios", "Info.plist.additions.json"), "utf8"));
   const buddy = (command) => execFileSync("/usr/libexec/PlistBuddy", ["-c", command, plist], { stdio: ["ignore", "pipe", "pipe"] });
   for (const [key, value] of Object.entries(additions)) {
+    // Lists and groups (the kinds of file the app offers to open) go in whole.
+    if (typeof value === "object") {
+      execFileSync("/usr/bin/plutil", ["-replace", key, "-json", JSON.stringify(value), plist]);
+      continue;
+    }
     const kind = typeof value === "boolean" ? "bool" : "string";
     try {
       buddy(`Set :${key} ${value}`);

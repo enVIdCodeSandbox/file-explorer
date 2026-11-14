@@ -53,6 +53,8 @@ nothing has been run on those systems yet, so expect platform bugs there first.
 
 | Area | State | Notes |
 |---|---|---|
+| Smart Clear | Working on Linux | Finds temporary files, caches, Trash, unfinished downloads, old installers, exact copies, old downloads and large unused files on a drive or the whole device; says how much clearing gives back; clear by tick box, filter or percentage. Rules are unit-tested; the Windows and macOS lists of places were never run |
+| Default file manager | Working on Linux | One switch in Settings, reversible. Linux run end to end (folders and "Show in folder"). Windows and macOS written and type-checked, never run. Single window: starting the app again, or with a folder, goes to the running copy |
 | Folder browsing | Working | Virtualized details and thumbnail views, sorting, multi-select, keyboard, type-ahead, inline rename |
 | Tabs | Working | Duplicate, groups with names and colors, collapse, restored at launch; drag a tab to reorder, drag a group chip to move the whole group |
 | Right-click menu | Working | Flat Windows 10-style list; every entry can be hidden in settings. No "Open with" or shell extensions yet |

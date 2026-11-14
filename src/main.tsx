@@ -6,6 +6,7 @@ import "./styles/app.css";
 import "./styles/shell.css";
 import "./styles/analyzer.css";
 import "./styles/mobile.css";
+import "./styles/smartclear.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

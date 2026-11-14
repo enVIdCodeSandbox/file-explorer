@@ -14,6 +14,7 @@ import {
   type IndexStatus,
   type Job,
   type JobFinished,
+  type Launch,
   type Pin,
   type Progress,
   type Recent,
@@ -202,6 +203,10 @@ interface State {
   facets: { kinds: [string, number][]; extensions: [string, number][] };
   /** A path to select once the listing has loaded (after New folder, say). */
   pendingSelect: string | null;
+  /** More items to highlight together with `pendingSelect`. */
+  pendingSelectMore: string[];
+  /** Show folders another app (or the command line) asked for, highlighting items in them. */
+  showLaunches: (launches: Launch[]) => void;
   /** The window layout is being edited on screen. */
   layoutEdit: boolean;
   /** The popped-out panel that is open, if any. */
@@ -454,6 +459,27 @@ export const useStore = create<State>((set, get) => ({
   redo: [],
   facets: { kinds: [], extensions: [] },
   pendingSelect: null,
+  pendingSelectMore: [],
+  showLaunches: (launches) => {
+    for (const l of launches) {
+      const s = get();
+      if (isMobileOs(s.info?.os)) {
+        // A phone has one folder on screen; a file handed over is shown in the app's own viewer.
+        if (l.folder) s.navigate(l.folder);
+        set({ pendingSelect: l.select[0] ?? null, pendingSelectMore: l.select.slice(1), viewing: l.select[0] ?? null });
+        continue;
+      }
+      const open = s.tabs.find((t) => t.location === l.folder);
+      if (open) s.activate(open.id);
+      else {
+        s.newTab(l.folder);
+        // At the tab limit the folder takes over the current tab instead.
+        const now = get();
+        if (now.tabs.find((t) => t.id === now.activeTab)?.location !== l.folder) now.navigate(l.folder);
+      }
+      set(l.select.length ? { pendingSelect: l.select[0], pendingSelectMore: l.select.slice(1) } : { pendingSelect: null, pendingSelectMore: [] });
+    }
+  },
   layoutEdit: false,
   popout: null,
   selecting: false,
@@ -469,6 +495,10 @@ export const useStore = create<State>((set, get) => ({
 
   init: async () => {
     const [settings, session, info] = await Promise.all([api.getSettings(), api.getSession(), api.appInfo()]);
+    const isView = typeof (window as unknown as { __VIEW__?: string }).__VIEW__ === "string";
+    const isExtra = typeof (window as unknown as { __OPEN__?: string }).__OPEN__ === "string";
+    // Folders the app was started with (a folder on the command line, or another app's "Show in folder").
+    const launches = isView || isExtra ? [] : await api.takeLaunch().catch(() => [] as Launch[]);
     const start = settings.general.startPage === "thisPc" ? THIS_PC : HOME;
     // A window made by dragging a tab out starts with just that tab and does
     // not touch the saved session of the main window.
@@ -476,7 +506,8 @@ export const useStore = create<State>((set, get) => ({
     detachedView = (window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers";
     secondary = typeof opened === "string" || detachedView;
     let tabs = secondary ? [makeTab(opened!)] : settings.general.restoreSession ? session.tabs : [];
-    if (!tabs.length) tabs = [makeTab(start)];
+    // Started for particular folders without tabs to restore: show just those.
+    if (!tabs.length) tabs = [makeTab(launches[0]?.folder ?? start)];
     const activeTab = tabs.some((t) => t.id === session.activeTab) ? session.activeTab! : tabs[0].id;
     set({
       ready: true,
@@ -497,6 +528,7 @@ export const useStore = create<State>((set, get) => ({
       // The list from the previous run paints immediately; live data follows.
       drives: session.drives,
     });
+    get().showLaunches(launches);
     get().refreshDrives();
     get().refreshFrequent();
     void api.serversList().then((servers) => set({ servers })).catch(() => {});
@@ -1176,6 +1208,8 @@ export function tabTitle(location: string): string {
       return `Search: ${l.query}`;
     case "analyze":
       return `Disk usage: ${baseName(l.path)}`;
+    case "clear":
+      return "Smart Clear";
     default:
       return baseName(l.path);
   }

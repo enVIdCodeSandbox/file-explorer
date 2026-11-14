@@ -60,6 +60,14 @@ reflink-copy = "0.1"
 starship-battery = "0.10"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
+# "Show in folder" requests from other apps (org.freedesktop.FileManager1).
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
+# Launch Services: being the app that opens folders.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

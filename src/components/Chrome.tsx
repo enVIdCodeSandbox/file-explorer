@@ -28,6 +28,7 @@ import {
   HOME,
   THIS_PC,
   analyzeLocation,
+  clearLocation,
   archiveDisplay,
   archiveFromTyped,
   archiveUrl,
@@ -1261,6 +1262,7 @@ export function Sidebar() {
       {item("home", "Home", HOME, <Icon name="home" />)}
       {item("thispc", thisPcLabel(info?.os), THIS_PC, <Icon name="pc" />)}
       {info?.home && item("analyze", "Disk usage", analyzeLocation(info.home), <Icon name="chart" />, { tip: "Disk usage" })}
+      {item("clear", "Smart Clear", clearLocation(null), <Icon name="broom" />, { tip: "Smart Clear: free up space" })}
 
       {sidebarOrder(settings).map((id) => blocks[id])}
 

@@ -118,9 +118,26 @@ mod engine {
             .find(|d| device_key(&identity(d.vendor_id, d.product_id, &d.serial_number, d.location_id)) == key)
             .ok_or_else(|| fail("That device is not connected any more."))?;
         let rt = runtime()?;
+        let serial = info.serial_number.as_deref().filter(|s| !s.is_empty());
         let device = rt
             .block_on(async {
-                match info.serial_number.as_deref().filter(|s| !s.is_empty()) {
+                // Windows keeps a phone behind its own portable-device service, and that service
+                // can know the phone by a different serial number than the USB port reports
+                // (Samsung and Pixel phones do this). Asking by serial then finds nothing there,
+                // falls back to plain USB, and Windows refuses that ("not supported"). Asking by
+                // port lets the library match the phone by its model instead, so that comes first.
+                if cfg!(windows) {
+                    match MtpDevice::open_by_location(info.location_id).await {
+                        Ok(device) => return Ok(device),
+                        Err(by_port) => {
+                            return match serial {
+                                Some(serial) => MtpDevice::open_by_serial(serial).await.map_err(|_| by_port),
+                                None => Err(by_port),
+                            }
+                        }
+                    }
+                }
+                match serial {
                     Some(serial) => MtpDevice::open_by_serial(serial).await,
                     None => MtpDevice::open_by_location(info.location_id).await,
                 }

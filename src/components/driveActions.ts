@@ -3,7 +3,7 @@
 
 import { api, type Drive } from "../api";
 import { ask, useStore } from "../store";
-import { analyzeLocation } from "../util/path";
+import { analyzeLocation, clearLocation } from "../util/path";
 import { driveName, hidesAddress } from "../util/drives";
 import type { MenuItem } from "./ContextMenu";
 
@@ -80,6 +80,9 @@ export function driveMenuItems(d: Drive, extra: { os: string | undefined; drives
   const items: MenuItem[] = [
     { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => useStore.getState().navigate(analyzeLocation(d.mount)) },
   ];
+  if (d.online && !d.readOnly && d.media !== "network") {
+    items.push({ id: "smartClear", label: "Smart Clear: free up space", icon: "broom", run: () => useStore.getState().navigate(clearLocation(d.mount)) });
+  }
   if (isDetachable(d)) {
     items.push({ id: "eject", label: windows ? "Eject" : "Safely remove", icon: "drive", separatorBefore: true, disabled: !d.online, run: () => void ejectDrive(d) });
   }

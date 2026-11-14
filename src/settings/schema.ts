@@ -22,7 +22,8 @@ export type Control =
   | { type: "uiPresets" }
   | { type: "profiles" }
   | { type: "resources" }
-  | { type: "locks" };
+  | { type: "locks" }
+  | { type: "defaultFm" };
 
 export interface SettingDef {
   /** Dotted path into the Settings object, e.g. "general.showHidden". */
@@ -64,6 +65,7 @@ export const SETTINGS: SettingDef[] = [
   // ---- General ----
   { key: "general.startPage", section: "General", label: "Open new tabs to", control: { type: "select", options: [{ value: "home", label: "Home" }, { value: "thisPc", label: "This PC (drives)" }] } },
   { key: "general.restoreSession", section: "General", label: "Reopen tabs from last time", description: "Tabs and tab groups are saved as you work and restored at launch.", control: toggle, keywords: "session remember startup" },
+  { key: "general.defaultFileManager", section: "General", label: "Default file manager", description: "Folders opened from other apps open here instead of in the system's file manager. Can be turned off again at any time.", control: { type: "defaultFm" }, keywords: "replace explorer finder nautilus dolphin show in folder reveal downloads open folder system default handler" },
   { key: "general.showHidden", section: "General", label: "Show hidden files and folders", control: toggle, keywords: "dotfiles" },
   { key: "general.showExtensions", section: "General", label: "Show file name extensions", control: toggle },
   { key: "general.liveRefresh", section: "General", label: "Refresh folders when they change", description: "A folder that is open updates by itself when another program adds, renames or deletes files in it.", control: toggle, keywords: "watch auto update live" },

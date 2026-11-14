@@ -14,7 +14,7 @@ import { MENU_CATALOG } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
-import { CustomActionsPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
+import { CustomActionsPanel, DefaultFileManagerPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
   const t = useT();
@@ -118,6 +118,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <ResourcesPanel />;
     case "locks":
       return <LocksPanel />;
+    case "defaultFm":
+      return <DefaultFileManagerPanel />;
     case "menuItems": {
       const hidden = new Set(value as string[]);
       return (

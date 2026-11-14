@@ -126,6 +126,62 @@ Right-click a folder or drive → Analyze disk usage. Folders are drawn as frame
 
 On a computer with power to spare (8 or more cores, 8 GB of memory, on mains power), the banner shown during a scan also draws two small graphs: how busy the drive is (bytes per second, against the busiest it has been during this scan) and how many files per second are being found, with the pace expected for that kind of drive. When the whole drive is being scanned it also estimates how many items there are in all and how long is left. This is an estimate from used space and the average size of what has been found so far, so it can jump around early on. Turn it on or off in Settings > Advanced > *Live drive activity in Disk usage* (Automatic, Always, Never).
 
+## Smart Clear
+
+Frees up space. Open it from the navigation pane, or right-click a drive → Smart Clear. Pick one drive or the whole device at the top.
+
+It looks for things that can probably go and sorts them into groups, safest first:
+
+| Group | What it is | Ticked to begin with |
+| --- | --- | --- |
+| Temporary files | Leftovers in the system's temporary folders, and files named like temporary files | Yes |
+| App caches | What apps keep to start faster; rebuilt when needed | Yes |
+| Picture previews | Thumbnail folders | Yes |
+| Trash | What you already deleted | Yes |
+| Unfinished downloads | `.crdownload`, `.part` and similar, more than two days old | Yes |
+| Old logs and crash reports | Logs over 1 MB not touched for a month; crash dumps | No |
+| Installers in Downloads | Setup files and disk images more than a month old | No |
+| Project build folders | `node_modules`, `__pycache__`, Rust's `target`, in projects not touched for six months | No |
+| Exact copies | Files with the same contents as another file; one copy is always kept | No |
+| Old downloads | In Downloads, not changed or opened for six months | No |
+| Large files not used for a long time | 200 MB or more, not changed or opened for six months | No |
+
+The large figure at the top is how much space clearing the ticked items gives back. Change what is ticked in any of these ways:
+
+* **The slider** clears a share of what was found, starting with the safest groups and, within a group, with what has been left alone the longest. Your own files come last.
+* **Filters** narrow the list by age, size, or part of a name or folder. Only what matches is cleared.
+* **Tick boxes** on a group or on single items. Open a group to see what is in it; the folder button shows an item where it lives.
+
+Clearing deletes for good. Items do not go to the Trash, because that would free no space. The app asks first and says how many of the items are your own files rather than leftovers.
+
+What it never touches: system folders, other people's files, folders locked with a passcode, and the app's own data (that has its own page under Settings > Storage). "Not opened for a long time" uses the later of the changed and opened dates; many systems do not keep the opened date current, so treat the last three groups as suggestions and look before clearing. Looking for exact copies reads the contents of same-sized files and is the slow part; untick it to skip it.
+
+On a phone it looks through shared storage only. Android does not let any app clear another app's cache; the system's own storage page does that.
+
+## Default file manager
+
+Settings > General > Default file manager makes folders that other apps open come here instead of the system's file manager. The same button puts things back. It changes settings for the signed-in person only and needs no administrator rights.
+
+| System | What opens here | What stays with the system |
+| --- | --- | --- |
+| Linux | Folders opened by other apps, and "Show in folder" in browsers and other apps (the file is highlighted) | A file manager that is already running keeps answering "Show in folder" until it is closed or you sign in again |
+| macOS | Folders opened by other apps; "Reveal in Finder" in apps that honour the system setting | Finder keeps the desktop, and some apps ask Finder directly. The app must be installed in Applications |
+| Windows | Folders and drives opened from other apps, the desktop and shortcuts | "Show in folder" in browsers and many apps asks File Explorer directly. Win+E, the taskbar's folder button, Control Panel and other special folders stay with File Explorer |
+
+On Windows, turn it off before removing the app. The `.exe` installer's uninstaller does this by itself; the `.msi` one does not, and folders would be left pointing at a program that is gone. If that happens, install the app again and turn the setting off.
+
+Starting the app while it is already running brings its window forward instead of starting a second copy. From a command line:
+
+```
+fast-file-explorer <folder>            opens the folder in a new tab
+fast-file-explorer <file>              opens the file's folder with the file highlighted
+fast-file-explorer --select <path>     highlights the item in its folder, also when it is a folder
+```
+
+`file://` addresses work wherever a path does.
+
+**On a phone** there is no single switch. Android offers the app whenever another app opens a folder, taps "Open downloads", or opens a file with "Open with"; choose it there and tap "Always". The settings page has a button to the system page where that choice is cleared. A file opened this way is shown in the app's own viewer, with its folder behind it. iPhone and iPad do not let any app replace Files; the app is listed under Share > "Open in".
+
 ## Servers (FTP, SFTP, WebDAV)
 
 Click **Connect to server…** at the bottom of the sidebar. Choose SFTP (SSH), FTP or WebDAV, type the server, your user name and password, and optionally a folder to start in. The server opens as a folder you can browse in a tab.

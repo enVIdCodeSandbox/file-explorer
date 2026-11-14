@@ -7,6 +7,8 @@ package __PACKAGE__
 //   - asking for "All files access", without which Android shows an app
 //     nothing of shared storage
 //   - handing a file to another app to open, and the share sheet
+//   - taking what other apps hand over: a folder to show, "open downloads",
+//     or a file picked under "Open with"
 //   - keeping the page clear of the status bar, the navigation bar and the
 //     keyboard, and coloring the strips behind the bars like the page
 //
@@ -23,6 +25,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -36,13 +40,130 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private var page: WebView? = null
 
+  /** What another app asked for and the page has not collected yet (JSON), or "". */
+  @Volatile private var asked: String = ""
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    received(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    received(intent)
+  }
+
+  /** Another app opened a folder, the downloads, or a file with this app. */
+  private fun received(intent: Intent?) {
+    val action = intent?.action ?: return
+    val request = JSONObject()
+    try {
+      if (action == "android.intent.action.VIEW_DOWNLOADS") {
+        request.put("folder", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).path)
+      } else if (action == Intent.ACTION_VIEW) {
+        val uri = intent.data ?: return
+        val path = pathOf(uri)
+        if (path != null && File(path).isDirectory) {
+          request.put("folder", path)
+        } else if (path != null) {
+          request.put("folder", File(path).parent ?: "")
+          request.put("file", path)
+        } else {
+          // Nothing on storage the app can point at: keep a copy to show.
+          val copy = copyOf(uri) ?: return
+          request.put("folder", "")
+          request.put("file", copy)
+        }
+      } else {
+        return
+      }
+    } catch (e: Exception) {
+      return
+    }
+    asked = request.toString()
+    page?.post { page?.evaluateJavascript("window.dispatchEvent(new Event('fast-open'))", null) }
+  }
+
+  /** Hands the request to the page, once. */
+  fun takeOpen(): String {
+    val was = asked
+    asked = ""
+    return was
+  }
+
+  /** The place on storage an address from another app stands for, when there is one. */
+  private fun pathOf(uri: Uri): String? {
+    try {
+      if (uri.scheme == "file") return uri.path
+      if (uri.scheme != "content") return null
+      val id = when {
+        DocumentsContract.isDocumentUri(this, uri) -> DocumentsContract.getDocumentId(uri)
+        uri.pathSegments.firstOrNull() == "tree" -> DocumentsContract.getTreeDocumentId(uri)
+        else -> null
+      }
+      if (id != null) {
+        if (uri.authority == "com.android.externalstorage.documents") {
+          val volume = id.substringBefore(':')
+          val rest = id.substringAfter(':', "")
+          val root = if (volume.equals("primary", true)) Environment.getExternalStorageDirectory().path else "/storage/$volume"
+          return existing(if (rest.isEmpty()) root else "$root/$rest")
+        }
+        if (id.startsWith("raw:")) return existing(id.removePrefix("raw:"))
+      }
+      // Many apps (galleries, the downloads list) say where the file is.
+      try {
+        contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { c ->
+          if (c.moveToFirst()) {
+            val at = c.getColumnIndex("_data")
+            if (at >= 0) c.getString(at)?.let { p -> existing(p)?.let { return it } }
+          }
+        }
+      } catch (e: Exception) {
+        // The app does not say; try the address itself.
+      }
+      // Addresses that carry the path, as file managers and browsers write them.
+      val text = Uri.decode(uri.path ?: "")
+      val at = text.indexOf("/storage/")
+      if (at >= 0) existing(text.substring(at))?.let { return it }
+      if (text.contains("/external_files/")) existing(Environment.getExternalStorageDirectory().path + "/" + text.substringAfter("/external_files/"))?.let { return it }
+    } catch (e: Exception) {
+      // Fall through: the caller copies the file instead.
+    }
+    return null
+  }
+
+  private fun existing(path: String): String? = if (File(path).exists()) path else null
+
+  /** A copy of what the address points at, in the app's cache, under its own name. */
+  private fun copyOf(uri: Uri): String? {
+    return try {
+      var name = "file"
+      contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getString(0)?.let { name = it.replace('/', '_') }
+      }
+      val dir = File(cacheDir, "opened").apply { deleteRecursively(); mkdirs() }
+      val out = File(dir, name)
+      contentResolver.openInputStream(uri)?.use { input -> out.outputStream().use { input.copyTo(it) } } ?: return null
+      out.path
+    } catch (e: Exception) {
+      null
+    }
+  }
+
+  /** The system page where "Open by default" for this app is set and cleared. */
+  fun openAppDefaults() {
+    try {
+      startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    } catch (e: Exception) {
+      // No such page on this device.
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -181,6 +302,12 @@ class FastNative(private val activity: MainActivity) {
 
   @JavascriptInterface
   fun shareFiles(paths: String): String = activity.shareFiles(paths.split("\n").filter { it.isNotBlank() })
+
+  @JavascriptInterface
+  fun takeOpen(): String = activity.takeOpen()
+
+  @JavascriptInterface
+  fun openAppDefaults() = activity.runOnUiThread { activity.openAppDefaults() }
 
   @JavascriptInterface
   fun setBars(color: String, lightBackground: Boolean) = activity.setBars(color, lightBackground)

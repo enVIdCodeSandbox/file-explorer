@@ -15,6 +15,10 @@ interface NativeBridge {
   openFile(path: string): string;
   /** Shares files (paths separated by line breaks) through the system's share sheet. Returns "" or why not. */
   shareFiles(paths: string): string;
+  /** What another app asked the app to show, as JSON, or "". Collected once. */
+  takeOpen?(): string;
+  /** Opens the system page where "Open by default" for the app is set. */
+  openAppDefaults?(): void;
   /** Colors the strips behind the status and navigation bars, and picks dark or light icons for them. */
   setBars(color: string, lightBackground: boolean): void;
 }
@@ -87,5 +91,29 @@ export function colorSystemBars(color: string, lightBackground: boolean): void {
     bridge()?.setBars(color, lightBackground);
   } catch {
     /* an older build of the activity, or not Android */
+  }
+}
+
+/** Android only: the folder or file another app opened with this one, once. `folder` is "" when only a copy of the file could be had. */
+export function takeOpenRequest(): { folder: string; file?: string } | null {
+  try {
+    const text = bridge()?.takeOpen?.();
+    if (!text) return null;
+    const asked = JSON.parse(text) as { folder?: string; file?: string };
+    return { folder: asked.folder ?? "", file: asked.file };
+  } catch {
+    return null;
+  }
+}
+
+/** Android only: show the system page where this app's "Open by default" choices live. False where there is none. */
+export function openAppDefaults(): boolean {
+  try {
+    const b = bridge();
+    if (!b?.openAppDefaults) return false;
+    b.openAppDefaults();
+    return true;
+  } catch {
+    return false;
   }
 }

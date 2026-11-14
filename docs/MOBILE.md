@@ -77,6 +77,8 @@ the table below.
 | Archives (open, extract, add, edit) | Yes | Yes |
 | Search, folder sizes, storage analysis | Yes | Yes (within the app's folder) |
 | Open a file in another app | Yes (the system's "open with" sheet) | Not yet: pictures, video, audio, PDF and text open in the app's own viewer |
+| Opened by other apps | Offered for folders, "Open downloads" and "Open with"; choose "Always" to make it the default | Listed under Share > "Open in" |
+| Smart Clear | Shared storage (not other apps' caches) | The app's own folder |
 | Share sheet | Yes | Not yet (sharing by link on the local network works) |
 | Recycle bin | No: deleting is permanent and always asks | No: same |
 | Several windows, tabs dragged out, drag and drop between apps | No | No |

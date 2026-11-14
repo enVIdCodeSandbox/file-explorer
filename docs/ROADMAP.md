@@ -9,6 +9,10 @@
 | Frontend type-check, unit tests, production build | Pass |
 | App launched on Linux (WebKitGTK) | Browsing, thumbnails, tabs and groups, search, disk usage, This PC, settings, right-click menu, copy and paste of a 303-file folder all exercised |
 | Linux `.deb` bundle | Built |
+| Default file manager on Linux | Run end to end with the real app on a private desktop session: started with a file (folder opens, file highlighted), started a second time (handed to the running copy, no second window), `xdg-open` on a folder, and `org.freedesktop.FileManager1` `ShowItems` and `ShowFolders`, including being started by the request. Making it the default and putting the previous one back is tested with a throwaway home folder |
+| Default file manager on Windows and macOS | Type-checked for both targets in isolation. **Never run** |
+| Smart Clear | The rules are unit-tested against folders built for the purpose; the page was looked at in the browser preview on desktop and phone. **Not run:** a scan of a real Windows or macOS home folder, and clearing from the page on any system |
+| Android: opened by other apps | The activity compiles. **Never run on a device** |
 | Windows, macOS | **Never run.** Expect issues in `platform.rs` (terminal and elevation commands) and in webview differences first |
 | Transfer speed against `cp` and `rsync` | Measured on one Linux VM (2 vCPU, virtual disk, files mostly cached): the engine matches or beats `cp` on small and mixed folders and trails it by about 20% on four large files. See TRANSFERS.md, Benchmarks. **Not measured:** Explorer, Finder, SSD vs HDD, SMB, Windows, macOS |
 
@@ -50,6 +54,10 @@
 12. **Signing and auto-update** for installers. Signing is wired into the release workflow and switches on when the certificate secrets exist (see RELEASING.md); it has never run with a real certificate. Auto-update is not built.
 
 ## Known limits in this build
+
+* **Default file manager, Windows:** a browser's "Show in folder" and Win+E still open File Explorer; redirecting those needs shell hooks the app does not install. The `.msi` uninstaller does not undo the setting.
+* **Phones on Windows** are now opened by USB port rather than by serial number, because Windows' portable-device service can know a phone under a different serial than USB reports. This follows the library's own notes and was not run on Windows.
+* **Smart Clear** judges "not used" by the later of the changed and opened dates, and many systems do not keep the opened date. It cannot see other apps' caches on Android or anything outside the app's folder on iOS.
 
 * **In-app locks are a privacy screen, not encryption.** Argon2 hashes protect the passcodes, but the files themselves are untouched and every other program can read them. Deleting a folder that *contains* a locked folder is not blocked.
 * **Written but never run on Windows or macOS:** drive eject, map/disconnect network drive, the registry-based "Open with" list and Windows' own chooser, `pkexec`/UAC/`osascript` elevation (including the per-drive "Run as administrator" SMART read), and the `smartctl` fallback. Linux paths were exercised.

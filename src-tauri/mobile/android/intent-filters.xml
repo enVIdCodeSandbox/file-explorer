@@ -1,0 +1,21 @@
+            <!-- Offered by Android when another app opens a folder. -->
+            <intent-filter android:label="FAST File Explorer">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="resource/folder" />
+                <data android:mimeType="inode/directory" />
+                <data android:mimeType="vnd.android.document/directory" />
+            </intent-filter>
+            <!-- "Open downloads" in browsers and on the finished-download notification. -->
+            <intent-filter android:label="FAST File Explorer">
+                <action android:name="android.intent.action.VIEW_DOWNLOADS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- Any file: the app is listed under "Open with", and can be chosen as "Always". -->
+            <intent-filter android:label="FAST File Explorer">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="*/*" />
+            </intent-filter>

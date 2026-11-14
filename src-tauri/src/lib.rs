@@ -1,8 +1,10 @@
 //! Tauri shell: wires the UI-agnostic `fast-core` engine to the webview.
 
 mod commands;
+mod launch;
 mod native_dnd;
 mod remote;
+mod smartclear;
 mod state;
 
 use fast_core::history::History;
@@ -19,7 +21,19 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[cfg_attr(mobile, allow(unused_mut))]
+    let mut builder = tauri::Builder::default();
+    // Starting the app again (or opening a folder with it) goes to the copy
+    // that is already running. This has to be the first plugin.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let launches = fast_core::filemanager::parse_launch(&args, std::path::Path::new(&cwd));
+            launch::deliver(app, launches);
+        }));
+        launch::queue_own_arguments();
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
@@ -78,6 +92,8 @@ pub fn run() {
             });
             app.manage(state.clone());
 
+            #[cfg(desktop)]
+            launch::start(app.handle());
             commands::start_indexing(app.handle().clone(), state.clone());
             commands::start_drive_watch(app.handle().clone(), state.clone());
 
@@ -125,6 +141,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_dir,
+            smartclear::smart_clear_scan,
+            smartclear::smart_clear_cancel,
+            launch::take_launch,
+            launch::default_fm_status,
+            launch::default_fm_set,
             remote::remote_connect,
             remote::remote_disconnect,
             remote::remote_is_connected,
@@ -245,11 +266,30 @@ pub fn run() {
                     state.shares.stop_all();
                 }
             }
+            // macOS: a folder or file handed to the app by the system (Open With,
+            // the Dock, or another app revealing a file). iOS: a file sent with "Open in".
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                let found = urls
+                    .iter()
+                    .filter_map(|u| u.to_file_path().ok())
+                    .filter_map(|p| fast_core::filemanager::launch_for(&p, false))
+                    .collect();
+                launch::deliver(app, fast_core::filemanager::merge(found));
+            }
         });
 }
 
 /// Headless mode used for operations run through the OS's administrator
 /// prompt: do one job and exit. Returns the process exit code.
 pub fn run_helper(args: &[String]) -> i32 {
+    // What the uninstaller runs: stop being the system's file manager.
+    #[cfg(desktop)]
+    if args.iter().any(|a| a == "--restore-file-manager") {
+        return match fast_core::filemanager::restore_for("dev.envid.fastfileexplorer") {
+            Ok(()) => 0,
+            Err(_) => 1,
+        };
+    }
     fast_core::ops::helper_main(args)
 }

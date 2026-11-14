@@ -2,5 +2,16 @@
   "UIFileSharingEnabled": true,
   "LSSupportsOpeningDocumentsInPlace": true,
   "UISupportsDocumentBrowser": false,
-  "NSLocalNetworkUsageDescription": "Connects to file servers (FTP, SFTP, WebDAV) on your network."
+  "NSLocalNetworkUsageDescription": "Connects to file servers (FTP, SFTP, WebDAV) on your network.",
+  "CFBundleDocumentTypes": [
+    {
+      "CFBundleTypeName": "File",
+      "CFBundleTypeRole": "Viewer",
+      "LSHandlerRank": "Alternate",
+      "LSItemContentTypes": [
+        "public.data",
+        "public.content"
+      ]
+    }
+  ]
 }
