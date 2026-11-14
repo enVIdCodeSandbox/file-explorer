@@ -1,11 +1,15 @@
 //! Changing what is inside an archive: add files, move and rename items, make
 //! folders, delete.
 //!
-//! Zip, tar and tar.gz are rewritten by this program (a new file is written
-//! beside the archive and swapped in only when it is complete, so a failure
-//! or a cancel leaves the original untouched). 7z goes through the installed
-//! 7-Zip. Everything else (rar, bzip2 and xz tars, iso ...) cannot be changed
-//! and says so.
+//! Zip and every kind of tar (plain, gzip, bzip2, xz) are rewritten by this
+//! program (a new file is written beside the archive and swapped in only when
+//! it is complete, so a failure or a cancel leaves the original untouched). 7z
+//! goes through the installed 7-Zip. The rest are unpacked to a scratch folder,
+//! changed there and packed again by a tool that can write that format: wim by
+//! 7-Zip; iso, cpio and zstd, lzip and compress tars by bsdtar (built into
+//! Windows 10 and later and macOS); rar by WinRAR's `rar` when it is installed.
+//! Formats nothing can write here (cab, arj, lzh, rpm, deb and single
+//! compressed files) say so.
 //!
 //! Names that already exist in the target folder are never overwritten: the
 //! new item gets "name (2)".
@@ -21,17 +25,98 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Report<'a> = &'a mut dyn FnMut(u64, u64, &str);
 
+/// How an archive that this program cannot write itself is packed again.
+#[derive(Clone, Debug)]
+enum Repack {
+    /// 7-Zip with `-t<type>`.
+    SevenZip(&'static str),
+    /// bsdtar with these options placed before `-f`.
+    Bsdtar(&'static [&'static str]),
+    /// WinRAR's command line.
+    Rar,
+}
+
+fn repack_for(archive: &Path) -> Option<Repack> {
+    let name = archive.file_name()?.to_string_lossy().to_lowercase();
+    let ends = |e: &[&str]| e.iter().any(|x| name.ends_with(x));
+    if ends(&[".wim"]) {
+        Some(Repack::SevenZip("wim"))
+    } else if ends(&[".iso"]) {
+        Some(Repack::Bsdtar(&["--format", "iso9660"]))
+    } else if ends(&[".cpio"]) {
+        Some(Repack::Bsdtar(&["--format", "cpio"]))
+    } else if ends(&[".tar.zst", ".tzst"]) {
+        Some(Repack::Bsdtar(&["--zstd"]))
+    } else if ends(&[".tar.lz"]) {
+        Some(Repack::Bsdtar(&["--lzip"]))
+    } else if ends(&[".tar.z"]) {
+        Some(Repack::Bsdtar(&["-Z"]))
+    } else if ends(&[".rar"]) {
+        Some(Repack::Rar)
+    } else {
+        None
+    }
+}
+
+fn find_bsdtar() -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let p = PathBuf::from(root).join("System32").join("tar.exe");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(p) = browse::on_path("bsdtar") {
+        return Some(p);
+    }
+    // macOS (and some Linux systems) ship bsdtar under the name tar.
+    let tar = browse::on_path("tar")?;
+    let out = command(&tar).arg("--version").output().ok()?;
+    String::from_utf8_lossy(&out.stdout).to_lowercase().contains("bsdtar").then_some(tar)
+}
+
+fn find_rar() -> Option<PathBuf> {
+    if let Some(p) = browse::on_path("rar") {
+        return Some(p);
+    }
+    #[cfg(windows)]
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(base) = std::env::var_os(var) {
+            let p = PathBuf::from(base).join("WinRAR").join("Rar.exe");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn seven_zip() -> Option<PathBuf> {
+    match find_tool() {
+        Some((Tool::SevenZip, exe)) => Some(exe),
+        _ => None,
+    }
+}
+
 /// Whether this archive can be changed, and why not.
 pub fn check_editable(archive: &Path) -> Result<Kind> {
     let kind = browse::kind_of(archive).ok_or_else(|| CoreError::Invalid("This is not a kind of archive that can be opened.".into()))?;
     let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let needs = |tool: &str| Err(CoreError::Invalid(format!("{name} cannot be changed without {tool}. Install it and try again.")));
     match kind {
-        Kind::Zip | Kind::Tar | Kind::TarGz => Ok(kind),
-        Kind::SevenZ => match find_tool() {
-            Some((Tool::SevenZip, _)) => Ok(kind),
-            _ => Err(CoreError::Invalid(format!("Changing {name} needs 7-Zip. Install it and try again."))),
+        Kind::Zip | Kind::Tar | Kind::TarGz | Kind::TarBz2 | Kind::TarXz => Ok(kind),
+        Kind::SevenZ => match seven_zip() {
+            Some(_) => Ok(kind),
+            None => needs("7-Zip"),
         },
-        _ => Err(CoreError::Invalid(format!("Items inside {name} cannot be changed, only read. Extract it to change what is in it. Zip, tar, tar.gz and 7z files can be changed."))),
+        Kind::External => match repack_for(archive) {
+            Some(Repack::SevenZip(_)) if seven_zip().is_none() => needs("7-Zip"),
+            Some(Repack::Bsdtar(_)) if find_bsdtar().is_none() => needs("bsdtar (built into Windows 10 and later and macOS; on Linux the package is libarchive-tools or bsdtar)"),
+            Some(Repack::Rar) if find_rar().is_none() => needs("WinRAR's command line (rar): RAR files can only be written by WinRAR"),
+            Some(_) => Ok(kind),
+            None => Err(CoreError::Invalid(format!("{name} cannot be changed: no tool can write this kind of file here, only read it. Extract it to change what is in it."))),
+        },
+        _ => Err(CoreError::Invalid(format!("{name} cannot be changed, only read. Extract it to change what is in it."))),
     }
 }
 
@@ -250,11 +335,12 @@ fn rewrite(archive: &Path, plan: &Plan, cancel: &AtomicBool, report: Report) -> 
     let kind = check_editable(archive)?;
     let result = match kind {
         Kind::SevenZ => seven_rewrite(archive, plan, cancel, report),
+        Kind::External => external_rewrite(archive, plan, cancel, report),
         _ => {
             let tmp = temp_beside(archive);
             let r = match kind {
                 Kind::Zip => zip_rewrite(archive, &tmp, plan, cancel, report),
-                _ => tar_rewrite(archive, &tmp, kind == Kind::TarGz, plan, cancel, report),
+                _ => tar_rewrite(archive, &tmp, kind, plan, cancel, report),
             };
             match r {
                 Ok(n) => fs::rename(&tmp, archive).map(|_| n).map_err(|e| {
@@ -307,13 +393,54 @@ fn zip_rewrite(archive: &Path, tmp: &Path, plan: &Plan, cancel: &AtomicBool, rep
     Ok(files)
 }
 
-fn tar_rewrite(archive: &Path, tmp: &Path, gz: bool, plan: &Plan, cancel: &AtomicBool, report: Report) -> Result<u64> {
-    let kind = if gz { Kind::TarGz } else { Kind::Tar };
-    let file = File::create(tmp).map_err(|e| CoreError::io(tmp, e))?;
-    let sink: Box<dyn Write> = if gz {
-        Box::new(flate2::write::GzEncoder::new(BufWriter::with_capacity(256 * 1024, file), flate2::Compression::default()))
-    } else {
-        Box::new(BufWriter::with_capacity(256 * 1024, file))
+/// Where a rewritten tar goes: plain, or through the compressor its name asks for.
+enum Sink {
+    Plain(BufWriter<File>),
+    Gz(flate2::write::GzEncoder<BufWriter<File>>),
+    Bz(bzip2::write::BzEncoder<BufWriter<File>>),
+    Xz(Box<lzma_rust2::XzWriter<BufWriter<File>>>),
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Sink::Plain(w) => w.write(buf),
+            Sink::Gz(w) => w.write(buf),
+            Sink::Bz(w) => w.write(buf),
+            Sink::Xz(w) => w.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Sink::Plain(w) => w.flush(),
+            Sink::Gz(w) => w.flush(),
+            Sink::Bz(w) => w.flush(),
+            Sink::Xz(w) => w.flush(),
+        }
+    }
+}
+
+impl Sink {
+    /// Write whatever the compressor still holds and flush the file.
+    fn finish(self) -> std::io::Result<()> {
+        match self {
+            Sink::Plain(mut w) => w.flush(),
+            Sink::Gz(w) => w.finish()?.flush(),
+            Sink::Bz(w) => w.finish()?.flush(),
+            Sink::Xz(w) => (*w).finish()?.flush(),
+        }
+    }
+}
+
+fn tar_rewrite(archive: &Path, tmp: &Path, kind: Kind, plan: &Plan, cancel: &AtomicBool, report: Report) -> Result<u64> {
+    let file = BufWriter::with_capacity(256 * 1024, File::create(tmp).map_err(|e| CoreError::io(tmp, e))?);
+    let sink = match kind {
+        Kind::TarGz => Sink::Gz(flate2::write::GzEncoder::new(file, flate2::Compression::default())),
+        Kind::TarBz2 => Sink::Bz(bzip2::write::BzEncoder::new(file, bzip2::Compression::default())),
+        Kind::TarXz => Sink::Xz(Box::new(
+            lzma_rust2::XzWriter::new(file, lzma_rust2::XzOptions::with_preset(6)).map_err(|e| invalid(archive, format!("could not be rewritten ({e})")))?,
+        )),
+        _ => Sink::Plain(file),
     };
     let mut b = tar::Builder::new(sink);
     b.follow_symlinks(false);
@@ -361,7 +488,7 @@ fn tar_rewrite(archive: &Path, tmp: &Path, gz: bool, plan: &Plan, cancel: &Atomi
         b.append_data(&mut h, format!("{d}/"), std::io::empty()).map_err(tar_err)?;
     }
     let sink = b.into_inner().map_err(tar_err)?;
-    drop(sink); // the gzip encoder finishes when dropped
+    sink.finish().map_err(tar_err)?;
     Ok(files)
 }
 
@@ -466,6 +593,65 @@ fn seven_rewrite(archive: &Path, plan: &Plan, cancel: &AtomicBool, report: Repor
     Ok(files)
 }
 
+// ---- Everything else: unpack, change, pack again -----------------------------
+
+fn external_rewrite(archive: &Path, plan: &Plan, cancel: &AtomicBool, report: Report) -> Result<u64> {
+    let repack = repack_for(archive).ok_or_else(|| invalid(archive, "cannot be changed here."))?;
+    let stage = scratch_dir()?;
+    let tmp = temp_beside(archive);
+    let result = (|| -> Result<u64> {
+        // 1. Everything out, as it is now.
+        browse::extract_items(archive, &[String::new()], &stage, cancel, &mut |d, t, c| report(d, t.max(1), c))?;
+        // 2. The change, on disk.
+        for d in &plan.drops {
+            let p = stage.join(d);
+            let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+        }
+        for (from, to) in &plan.renames {
+            let dest = stage.join(to);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
+            }
+            fs::rename(stage.join(from), &dest).map_err(|e| CoreError::io(&dest, e))?;
+        }
+        let mut files = 0u64;
+        for (src, name) in &plan.add {
+            files += copy_tree(src, &stage.join(name), cancel)?;
+            report(files, files, name);
+        }
+        for d in &plan.dirs {
+            fs::create_dir_all(stage.join(d)).map_err(|e| CoreError::io(&stage, e))?;
+        }
+        // 3. Packed again into a new file, which replaces the old one only when complete.
+        let os = |s: &str| std::ffi::OsString::from(s);
+        match repack {
+            Repack::SevenZip(kind) => {
+                let exe = seven_zip().ok_or_else(|| no_tool(archive))?;
+                seven_run(&exe, vec![os("a"), os("-y"), os(&format!("-t{kind}")), tmp.as_os_str().to_owned(), os("*")], Some(&stage), cancel, archive)?;
+            }
+            Repack::Bsdtar(opts) => {
+                let exe = find_bsdtar().ok_or_else(|| no_tool(archive))?;
+                let mut args = vec![os("-c")];
+                args.extend(opts.iter().map(|o| os(o)));
+                args.extend([os("-f"), tmp.as_os_str().to_owned(), os(".")]);
+                seven_run(&exe, args, Some(&stage), cancel, archive)?;
+            }
+            Repack::Rar => {
+                let exe = find_rar().ok_or_else(|| no_tool(archive))?;
+                // WinRAR decides the format from the name given; ".rar" is added to a bare one.
+                let named = tmp.with_extension("rar");
+                seven_run(&exe, vec![os("a"), os("-r"), os("-ep1"), os("-idq"), os("-y"), named.as_os_str().to_owned(), os("*")], Some(&stage), cancel, archive)?;
+                fs::rename(&named, &tmp).map_err(|e| CoreError::io(&named, e))?;
+            }
+        }
+        fs::rename(&tmp, archive).map_err(|e| CoreError::io(archive, e))?;
+        Ok(files)
+    })();
+    let _ = fs::remove_dir_all(&stage);
+    let _ = fs::remove_file(&tmp);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,18 +736,23 @@ mod tests {
     }
 
     #[test]
-    fn tar_and_tar_gz_can_be_changed() {
+    fn every_kind_of_tar_can_be_changed() {
         let work = tmp("tar");
         let root = work.join("base");
         base_tree(&root);
-        for (name, gz) in [("t.tar", false), ("t.tar.gz", true)] {
+        for name in ["t.tar", "t.tar.gz", "t.tar.bz2", "t.tar.xz", "t.tbz2", "t.txz"] {
             let archive = work.join(name);
-            let f = File::create(&archive).unwrap();
-            let w: Box<dyn Write> = if gz { Box::new(flate2::write::GzEncoder::new(f, flate2::Compression::fast())) } else { Box::new(f) };
-            let mut b = tar::Builder::new(w);
+            let f = std::io::BufWriter::new(File::create(&archive).unwrap());
+            let sink = match name {
+                "t.tar.gz" => Sink::Gz(flate2::write::GzEncoder::new(f, flate2::Compression::fast())),
+                "t.tar.bz2" | "t.tbz2" => Sink::Bz(bzip2::write::BzEncoder::new(f, bzip2::Compression::fast())),
+                "t.tar.xz" | "t.txz" => Sink::Xz(Box::new(lzma_rust2::XzWriter::new(f, lzma_rust2::XzOptions::with_preset(1)).unwrap())),
+                _ => Sink::Plain(f),
+            };
+            let mut b = tar::Builder::new(sink);
             b.append_dir_all("docs", root.join("docs")).unwrap();
             b.append_path_with_name(root.join("top.txt"), "top.txt").unwrap();
-            b.into_inner().unwrap().flush().unwrap();
+            b.into_inner().unwrap().finish().unwrap();
             exercise(&archive, &work);
         }
         let _ = fs::remove_dir_all(work);
@@ -584,9 +775,24 @@ mod tests {
     }
 
     #[test]
-    fn rar_and_other_formats_say_they_are_read_only() {
+    fn wim_can_be_changed_when_seven_zip_is_installed() {
+        let Some(exe) = seven_zip() else { return };
+        let work = tmp("wim");
+        let root = work.join("base");
+        base_tree(&root);
+        let archive = work.join("t.wim");
+        let st = std::process::Command::new(exe).current_dir(&root).args(["a", "-y", "-twim"]).arg(&archive).arg("*").output().unwrap();
+        if !st.status.success() {
+            return; // this build of 7-Zip cannot write wim
+        }
+        exercise(&archive, &work);
+        let _ = fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn formats_nothing_can_write_say_they_are_read_only() {
         let work = tmp("ro");
-        for name in ["a.rar", "a.tar.bz2", "a.iso", "a.gz"] {
+        for name in ["a.cab", "a.gz", "a.deb", "a.arj", "a.zst"] {
             let p = work.join(name);
             fs::write(&p, b"x").unwrap();
             let e = delete(&p, &["x".into()], &no()).unwrap_err().to_string();

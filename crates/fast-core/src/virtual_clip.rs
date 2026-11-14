@@ -173,7 +173,15 @@ mod imp {
         }
         let mut medium: STGMEDIUM = match got {
             Some(m) => m,
-            None => return Err(fail("the other program would not give a file", last.expect("at least one attempt"))),
+            None => {
+                let why = last.expect("at least one attempt");
+                // Programs like Explorer make such files only when asked. Once the program
+                // has closed, nothing is left to ask, and Windows reports a format error.
+                return Err(CoreError::Invalid(format!(
+                    "the program you copied from no longer has these files ({}). If you closed it, copy them again and paste before closing it, or copy them out to a folder first.",
+                    why.message().trim()
+                )));
+            }
         };
         let mut file = std::fs::File::create(target).map_err(|e| CoreError::io(target, e))?;
         let result: Result<()> = (|| {

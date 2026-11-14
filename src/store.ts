@@ -769,7 +769,7 @@ export const useStore = create<State>((set, get) => ({
       try {
         system = await api.clipboardStageVirtual();
       } catch (e) {
-        return get().showToast(`Could not get the files from the other program: ${String(e)}`);
+        return get().showToast(`Could not paste: ${String(e).replace(/^Error: /, "")}`);
       }
     }
     if (!system.length) return get().showToast("There are no files to paste. Copy some files first.");

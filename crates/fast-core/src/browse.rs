@@ -676,7 +676,7 @@ pub(crate) enum Tool {
     Bsdtar,
 }
 
-fn on_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn on_path(name: &str) -> Option<PathBuf> {
     let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
 }

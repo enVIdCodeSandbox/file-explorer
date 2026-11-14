@@ -55,6 +55,17 @@ function layoutFor(level: string, thumbPx: number) {
   return { mode: "tile" as const, w: thumbPx + 28, h: thumbPx + 50, icon: thumbPx };
 }
 
+/** Folder sizes seen this session, by folder; the oldest folders are dropped past a limit. */
+const sizesThisSession = new Map<string, Record<string, FolderSize>>();
+const SESSION_FOLDERS = 300;
+function rememberSize(m: FolderSize & { dir: string }) {
+  const have = sizesThisSession.get(m.dir) ?? {};
+  have[m.name] = m;
+  sizesThisSession.delete(m.dir); // re-insert: most recently used last
+  sizesThisSession.set(m.dir, have);
+  if (sizesThisSession.size > SESSION_FOLDERS) sizesThisSession.delete(sizesThisSession.keys().next().value as string);
+}
+
 export function FileView({ path }: { path: string }) {
   const settings = useStore((s) => s.settings)!;
   const version = useStore((s) => s.dirVersion[path] ?? 0);
@@ -115,11 +126,13 @@ export function FileView({ path }: { path: string }) {
   const wantSizes = adv<boolean>(settings, "files.folderSizes");
   const [folderSizes, setFolderSizes] = useState<Record<string, FolderSize>>({});
   const sizedPath = useRef("");
+  // Sizes seen this session, so a folder revisited shows them before anything is asked.
+  const remember = adv<boolean>(settings, "files.sizeCache");
   useEffect(() => {
     if (!current || !wantSizes || isRemote(current.path) || isArchiveLoc(current.path)) return;
     const same = sizedPath.current === current.path;
     sizedPath.current = current.path;
-    if (!same) setFolderSizes({});
+    if (!same) setFolderSizes(remember ? { ...(sizesThisSession.get(current.path) ?? {}) } : {});
     const names = current.entries.filter((e) => e.isDir && !e.isSymlink).map((e) => e.name);
     if (names.length) {
       const policy = {
@@ -133,10 +146,12 @@ export function FileView({ path }: { path: string }) {
   useEffect(() => {
     if (!wantSizes) return;
     const off = on("folder-size", (m) => {
-      if (m.dir === path) setFolderSizes((prev) => ({ ...prev, [m.name]: m }));
+      if (m.dir !== path) return;
+      if (remember) rememberSize(m);
+      setFolderSizes((prev) => ({ ...prev, [m.name]: m }));
     });
     return () => void off.then((f) => f());
-  }, [path, wantSizes]);
+  }, [path, wantSizes, remember]);
 
   const sized = useMemo(
     () =>
@@ -588,9 +603,12 @@ export function FileView({ path }: { path: string }) {
     };
   };
 
+  const isArchiveDrop = (e: FileEntry) => !e.isDir && isArchiveFile(e.name) && !isRemote(path) && !isArchiveLoc(path);
+
   const itemProps = (e: FileEntry, i: number) => ({
-    "data-drop": e.isDir ? "folder" : undefined,
-    "data-drop-path": e.isDir ? fullPath(e.name) : undefined,
+    // A folder takes what is dropped on it; so does an archive file, which adds to it.
+    "data-drop": e.isDir || isArchiveDrop(e) ? "folder" : undefined,
+    "data-drop-path": e.isDir ? fullPath(e.name) : isArchiveDrop(e) ? archiveUrl(fullPath(e.name)) : undefined,
     onPointerDown: (ev: React.PointerEvent) => {
       // Ctrl and Shift are for choosing several items, not for dragging.
       if (renaming || ev.ctrlKey || ev.shiftKey || ev.metaKey) return;

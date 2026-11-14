@@ -15,7 +15,7 @@
 import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
-import { baseName, insideArchive, isInside, parentPath } from "./util/path";
+import { baseName, insideArchive, isArchiveLoc, isInside, parentPath } from "./util/path";
 
 export interface Mods {
   ctrl: boolean;
@@ -73,6 +73,14 @@ export function resolveFolderDrop(paths: string[], dest: string, mods: Mods, dri
   }
   if (paths.every((p) => { const up = parentPath(p); return up !== null && same(up, dest); })) {
     return mods.ctrl ? { ok: true, op: "copy", text: `Copy here (make a duplicate)` } : { ok: false, text: `Already in ${name}` };
+  }
+  const arc = insideArchive(dest);
+  if (arc) {
+    if (paths.some((p) => same(p, arc))) return { ok: false, text: "Can't put an archive inside itself" };
+    const within = paths.every((p) => insideArchive(p) === arc);
+    const op = within ? (mods.ctrl ? "copy" : "move") : "copy";
+    const where = baseName(arc);
+    return { ok: true, op, text: `${op === "move" ? "Move" : "Add"} to ${where}` };
   }
   const onSameDrive = paths.every((p) => volumeOf(p, drives) === volumeOf(dest, drives));
   const op = mods.ctrl ? "copy" : mods.shift ? "move" : onSameDrive ? "move" : "copy";
@@ -216,6 +224,7 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
     }
   };
 
+  let staging: Promise<string[] | null> | null = null;
   const move = (e: PointerEvent) => {
     last = { x: e.clientX, y: e.clientY };
     mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
@@ -224,15 +233,28 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
       payload = get();
       if (!payload) return finish(false);
       document.body.setAttribute("data-dragging", "");
+      // Items inside an archive do not exist on disk. Unpack them now, while the pointer is
+      // still crossing the window, so they are ready when it reaches the edge.
+      if (payload.paths.length && payload.paths.every(isArchiveLoc)) {
+        staging = api.archiveStage(payload.paths).catch((err) => {
+          useStore.getState().showToast(String(err));
+          return null;
+        });
+      }
     }
     // Out past the edge of the window: hand over to the system's own drag, so
     // another program receives the files as if they were dropped from a file manager.
     const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth - 1 || e.clientY > window.innerHeight - 1;
     if (outside && payload.paths.length && !payload.section) {
       const paths = payload.paths;
+      const pending = staging;
       finish(false);
-      noteOwnDrag(paths);
-      void api.dragOut(paths).catch((err) => useStore.getState().showToast(String(err)));
+      void (async () => {
+        const real = pending ? await pending : paths;
+        if (!real) return;
+        noteOwnDrag(real);
+        await api.dragOut(real).catch((err) => useStore.getState().showToast(String(err)));
+      })();
       return;
     }
     evaluate();

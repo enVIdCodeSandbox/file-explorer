@@ -271,8 +271,25 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
         *slot = cancel.clone();
     }
     std::thread::spawn(move || {
-        // The listing and the first thumbnails come first: give them a head start, and do
-        // not walk shares at all.
+        // Remembered sizes are shown at once, with no waiting.
+        let mut todo: Vec<String> = Vec::new();
+        for name in names {
+            let path = Path::new(&dir).join(&name);
+            if is_locked(&st, &path.to_string_lossy()) {
+                continue;
+            }
+            let remember = policy.remember && !cache_off(&st, &path);
+            let remembered = if remember { st.folder_sizes.lock().get(&path) } else { None };
+            if let Some(e) = remembered {
+                let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name: name.clone(), bytes: e.bytes, files: e.files, complete: true, cached: true });
+                if !refresh && (now_secs().max(0) as u64).saturating_sub(e.at) < policy.fresh_secs {
+                    continue;
+                }
+            }
+            todo.push(name);
+        }
+        // Measuring comes second: the listing and the first thumbnails get a head start, and
+        // shares are not walked at all.
         for _ in 0..12 {
             if cancel.load(Ordering::Relaxed) {
                 return;
@@ -288,23 +305,13 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
             c.trim(policy.max_entries.max(100));
             let _ = c.save(&st.paths.sizes);
         };
-        for name in names {
+        for name in todo {
             if cancel.load(Ordering::Relaxed) {
                 save(&st);
                 return;
             }
             let path = Path::new(&dir).join(&name);
-            if is_locked(&st, &path.to_string_lossy()) {
-                continue;
-            }
             let remember = policy.remember && !cache_off(&st, &path);
-            let remembered = if remember { st.folder_sizes.lock().get(&path) } else { None };
-            if let Some(e) = remembered {
-                let _ = app.emit("folder-size", FolderSizeEvent { dir: dir.clone(), name: name.clone(), bytes: e.bytes, files: e.files, complete: true, cached: true });
-                if !refresh && (now_secs().max(0) as u64).saturating_sub(e.at) < policy.fresh_secs {
-                    continue;
-                }
-            }
             let stats = details::folder_stats(&path, threads, Some(&cancel));
             if cancel.load(Ordering::Relaxed) {
                 save(&st);

@@ -9,7 +9,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isOwnDrag, useDragView } from "./dnd";
 import { useStore } from "./store";
-import { baseName } from "./util/path";
+import { baseName, insideArchive } from "./util/path";
 
 function openFolder(): string | null {
   const s = useStore.getState();
@@ -61,7 +61,7 @@ export async function listenForExternalDrops(): Promise<() => void> {
           label: paths ? baseName(paths[0]) : (prev?.label ?? ""),
           count,
           ok: !!dest,
-          text: dest ? `Copy to ${baseName(dest) || dest}` : "Open a folder to drop files here",
+          text: dest ? (insideArchive(dest) ? `Add to ${baseName(insideArchive(dest) ?? "")}` : `Copy to ${baseName(dest) || dest}`) : "Open a folder to drop files here",
         },
       });
       return;
