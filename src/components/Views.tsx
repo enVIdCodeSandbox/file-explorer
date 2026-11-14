@@ -1,6 +1,7 @@
 // Non-folder pages: Home, This PC, search results and disk usage.
 
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useSelectionBand } from "./useSelectionBand";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mergeHits } from "../util/searchHits";
 import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
@@ -459,6 +460,19 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
     overscan: 12,
   });
 
+  // Drag over empty space to select what the box touches (see useSelectionBand).
+  const { band, startBand } = useSelectionBand({
+    scroller,
+    geometry: { count: hits.length, details: true, rowHeight, headerHeight: 28, rowsWidth: 1e9, columnsPerRow: 1, tileW: 0, tileH: 0 },
+    keys: useMemo(() => hits.map((h) => h.path), [hits]),
+    selected,
+    commit: setSelected,
+    onLast: (i) => {
+      cursor.current = i;
+      anchor.current = i;
+    },
+  });
+
   // Opening a result keeps the results: folders go to a new tab by default.
   const open = (h: Hit) => {
     if (h.isDir) {
@@ -691,7 +705,7 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
         {narrowed && <button className="link-button" onClick={() => setFilter(null)}>Clear filters</button>}
       </div>
       {busy && <div className="loading-bar" />}
-      <div ref={scroller} className="file-scroller" tabIndex={0} onKeyDown={onKeyDown} onMouseDown={() => setSelected(new Set())}>
+      <div ref={scroller} className="file-scroller" tabIndex={0} onKeyDown={onKeyDown} onMouseDown={startBand}>
         {result && hits.length === 0 ? (
           <div className="empty-state">
             <strong>{narrowed && all.length ? "Nothing matches the filters" : `No matches for "${query}"`}</strong>
@@ -764,6 +778,7 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
             </div>
           </>
         )}
+        {band && <div className="select-band" style={{ left: band.l, top: band.t, width: band.w, height: band.h }} />}
       </div>
       {selected.size > 0 && (
         <div className="search-selection">

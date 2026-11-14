@@ -797,3 +797,7 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 
 /* A device card's note ("Unlock the phone…") may run over several lines. */
 .drive-card .drive-note { white-space: normal; line-height: 1.3; }
+
+/* The box drawn while dragging over empty space to select (like Windows Explorer's blue box). */
+.select-band { position: absolute; z-index: 1; pointer-events: none; box-sizing: border-box; background: var(--band-fill, color-mix(in srgb, var(--accent) 28%, transparent)); border: var(--band-border-width, 1px) var(--band-border-style, solid) var(--band-border, var(--accent)); }
+.file-scroller { user-select: none; }

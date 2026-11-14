@@ -7,7 +7,8 @@ import type { Settings } from "../api";
 export type AdvControl =
   | { type: "toggle" }
   | { type: "number"; min: number; max: number; step?: number; unit?: string }
-  | { type: "select"; options: { value: string; label: string }[] };
+  | { type: "select"; options: { value: string; label: string }[] }
+  | { type: "color" };
 
 export interface AdvDef {
   key: string;
@@ -26,6 +27,10 @@ const num = (def: number, key: string, group: string, label: string, min: number
 });
 const sel = (def: string, key: string, group: string, label: string, options: [string, string][], description?: string): AdvDef => ({
   key, group, label, description, control: { type: "select", options: options.map(([value, l]) => ({ value, label: l })) }, default: def,
+});
+
+const col = (def: string, key: string, group: string, label: string, description?: string): AdvDef => ({
+  key, group, label, description, control: { type: "color" }, default: def,
 });
 
 export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails"] as const;
@@ -77,6 +82,16 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "files.keepFilter", "Files and lists", "Use the same filter in every folder", "What is typed or ticked in the Filter menu stays when you open another folder, until you clear it. The Filter button shows a dot while one is on. Turn off to start every folder unfiltered."),
   yn(true, "files.rememberView", "Files and lists", "Use the same view in every folder", "The view you pick in the View menu (Details, List, icons of any size) stays when you open another folder, and is still there next time you start the app. Turn off to have a view you pick apply only to the folder you are in; every other folder opens in the view chosen under Appearance > Folder view."),
   yn(true, "files.sortAfterJobs", "Files and lists", "Sort and filter when a job finishes", "When copying, moving or deleting is done, the folders it touched are reloaded and the current sort and filter are applied straight away, so new files land in their sorted place and hidden ones stay hidden. Turn off to leave folders as they are until you refresh."),
+  yn(true, "files.selectionBox", "Files and lists", "Selection box", "Drag over empty space in a folder or in search results to select everything the box touches, as in Windows Explorer. Turn off and dragging over empty space only clears the selection."),
+  yn(true, "band.followAccent", "Files and lists", "Selection box uses the accent colour", "Turn off to choose the fill and border colours below."),
+  col("#0078d4", "band.fillColor", "Files and lists", "Selection box fill colour", "Used when the accent colour is not followed."),
+  num(28, "band.fillOpacity", "Files and lists", "Selection box fill strength", 0, 100, "%", "0 leaves the inside clear and shows only the border."),
+  col("#0078d4", "band.borderColor", "Files and lists", "Selection box border colour", "Used when the accent colour is not followed."),
+  num(1, "band.borderWidth", "Files and lists", "Selection box border width", 0, 8, "px", "0 draws no border."),
+  sel("solid", "band.borderStyle", "Files and lists", "Selection box border style", [["solid", "Solid"], ["dashed", "Dashed"], ["dotted", "Dotted"]]),
+  yn(true, "band.autoScroll", "Files and lists", "Scroll while dragging the selection box", "The list scrolls by itself when the pointer is near or past its top or bottom edge, and the box keeps growing. Turn off to select only what is on screen."),
+  num(28, "band.edgeZone", "Files and lists", "Scrolling starts this close to the edge", 4, 120, "px", "How near the pointer must be to the edge of the list for it to scroll."),
+  num(48, "band.scrollSpeed", "Files and lists", "Fastest selection-box scrolling", 4, 200, "px/frame", "How fast the list scrolls when the pointer is far outside it. It is slower closer to the edge."),
   yn(true, "files.naturalSort", "Files and lists", "Sort numbers naturally", "file2 comes before file10."),
   yn(false, "files.caseSensitive", "Files and lists", "Sort capital letters first"),
   num(700, "files.typeAheadMs", "Files and lists", "Type-to-select pause", 200, 3000, "ms", "How long typing keeps extending what you typed."),

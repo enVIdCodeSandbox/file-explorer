@@ -21,6 +21,7 @@ import {
   useStore,
   type SortKey,
 } from "../store";
+import { useSelectionBand } from "./useSelectionBand";
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
 import { formatDate, formatSize, kindOf, typeLabel } from "../util/format";
 import { adv } from "../settings/advanced";
@@ -492,6 +493,20 @@ export function FileView({ path }: { path: string }) {
     lastSet.current = next;
     setSelected(next);
   };
+
+  // ---- Selection box (see useSelectionBand) ---------------------------------------
+  const { band, startBand } = useSelectionBand({
+    scroller,
+    geometry: { count: entries.length, details, rowHeight, headerHeight, rowsWidth, columnsPerRow, tileW: tileLayout.w, tileH: tileLayout.h },
+    keys: useMemo(() => entries.map((e) => e.name), [entries]),
+    selected,
+    commit: (next) => commit(next),
+    onLast: (i) => {
+      cursor.current = i;
+      anchor.current = i;
+    },
+  });
+
   /** Set when a plain press landed on an item inside a multi-selection; see itemProps. */
   const collapseOnClick = useRef<number | null>(null);
   const selectIndex = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
@@ -731,7 +746,7 @@ export function FileView({ path }: { path: string }) {
         data-drop-path={path}
         tabIndex={0}
         onKeyDown={onKeyDown}
-        onMouseDown={() => setSelected(new Set())}
+        onMouseDown={startBand}
         onContextMenu={(ev) => {
           ev.preventDefault();
           setSelected(new Set());
@@ -806,6 +821,7 @@ export function FileView({ path }: { path: string }) {
             )}
           </div>
         )}
+        {band && <div className="select-band" style={{ left: band.l, top: band.t, width: band.w, height: band.h }} />}
       </div>
       <div className="status-bar">
         <span>

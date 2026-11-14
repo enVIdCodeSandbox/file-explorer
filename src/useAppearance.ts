@@ -152,6 +152,12 @@ export function useAppearance() {
     root.style.setProperty("--tab-min-width", `${adv<number>(settings, "tabs.minWidth")}px`);
     root.style.setProperty("--tab-height", `${adv<number>(settings, "tabs.height")}px`);
     root.style.setProperty("--selection-alpha", `${adv<number>(settings, "ui.selectionOpacity")}%`);
+    const follow = adv<boolean>(settings, "band.followAccent");
+    const fill = follow ? "var(--accent)" : adv<string>(settings, "band.fillColor");
+    root.style.setProperty("--band-fill", `color-mix(in srgb, ${fill} ${adv<number>(settings, "band.fillOpacity")}%, transparent)`);
+    root.style.setProperty("--band-border", follow ? "var(--accent)" : adv<string>(settings, "band.borderColor"));
+    root.style.setProperty("--band-border-width", `${adv<number>(settings, "band.borderWidth")}px`);
+    root.style.setProperty("--band-border-style", adv<string>(settings, "band.borderStyle"));
     document.body.style.zoom = String(adv<number>(settings, "ui.scale") / 100);
     configureFormat({ units: adv<"decimal" | "binary" | "windows">(settings, "files.sizeUnits"), dates: adv<string>(settings, "files.dateFormat"), clock: adv<string>(settings, "files.clock") });
     configureSort({ natural: adv<boolean>(settings, "files.naturalSort"), caseSensitive: adv<boolean>(settings, "files.caseSensitive") });
