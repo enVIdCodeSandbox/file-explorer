@@ -12,6 +12,7 @@ import { adv } from "../settings/advanced";
 import { QUALITY, VIEW_SETTING, thumbKind, type ThumbView } from "../util/thumbKinds";
 import { extensionOf, kindOf } from "../util/format";
 import { isArchiveLoc, isRemote } from "../util/path";
+import { networkThumbs } from "../util/network";
 import { FileIcon } from "./Icons";
 
 const MAX_CACHED = 600;
@@ -117,11 +118,12 @@ export function Thumb({
   const settle = adv<number>(settings, "perf.thumbDelayMs");
   const types = useStore((s) => s.info?.thumbnailTypes);
   const threads = useStore((s) => s.budget?.thumbThreads ?? 1);
+  const link = useStore((s) => s.link);
   setThumbParallelism(adv<number>(settings, "thumbs.parallel") || threads + 1);
   const ext = extensionOf(name);
   const kind = thumbKind(ext);
   const wanted =
-    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (adv<boolean>(settings, "thumbs.networkDrives") || !onNetwork(path, drives));
+    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (networkThumbs(settings, link) || !onNetwork(path, drives));
   const supported = enabled && wanted && !isDir && !isRemote(path) && !isArchiveLoc(path) && !!types?.includes(ext);
   // Ask for more or fewer pixels than are shown, depending on the sharpness setting.
   const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));

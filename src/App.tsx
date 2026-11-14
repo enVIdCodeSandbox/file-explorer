@@ -59,6 +59,9 @@ export default function App() {
   useEffect(() => {
     const s = useStore.getState();
     s.init().catch((e) => setFatal(String(e)));
+    s.refreshLink();
+    // A cable plugged in or Wi-Fi taking over changes what thumbnails of network shares do in automatic mode.
+    const linkTimer = setInterval(() => useStore.getState().refreshLink(), 10_000);
     const subscriptions = [
       on("transfer-progress", (p) => useStore.getState().onProgress(p)),
       on("delete-progress", (p) => useStore.getState().onDeleteProgress(p)),
@@ -111,7 +114,10 @@ export default function App() {
         if (JSON.stringify(cur) !== JSON.stringify(next)) useStore.setState({ settings: next });
       }),
     ];
-    return () => subscriptions.forEach((p) => void p.then((off) => off()));
+    return () => {
+      clearInterval(linkTimer);
+      subscriptions.forEach((p) => void p.then((off) => off()));
+    };
   }, []);
 
   // Bring back panels that were detached last time, only if asked to.

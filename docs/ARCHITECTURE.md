@@ -47,7 +47,9 @@ interface, only the top two layers are replaced.
 | `treemap.rs` | Size tree and largest files for the disk usage view |
 | `predict.rs` | Learns which folders are opened next |
 | `resources.rs` | Turns CPU, RAM and battery state into a `Budget` |
-| `devices.rs` | Phones, cameras and other devices that are not drives: Linux sysfs + GVFS (`FAST_EXPLORER_USB_ROOT` / `FAST_EXPLORER_GVFS_DIR` override the locations for tests), macOS `system_profiler`, Windows shell "This PC" items that are not file-system folders. `path` when the app can browse it, `open` for the system's own tool |
+| `devices.rs` | Phones, cameras and other devices that are not drives: Linux sysfs + GVFS (`FAST_EXPLORER_USB_ROOT` / `FAST_EXPLORER_GVFS_DIR` override the locations for tests), macOS `system_profiler`, Windows shell "This PC" items that are not file-system folders (used for the phone's name and as a File Explorer fallback). On Windows and macOS phones are matched to the MTP devices from `remote::mtp::found_devices` and get an `mtp://` `path`; on Linux `path` is the GVFS mount. `open` is the system's own tool, kept as a fallback |
+| `remote/mtp.rs` | A plugged-in phone or camera as a `Session` (like FTP/SFTP) over the `mtp-rs` library: Windows' portable-device service on Windows, direct USB on macOS. Addresses are `mtp://<key>/<storage>/<path>`; `<key>` is a hash of the USB identity. Tested against `mtp-rs`'s virtual device on every OS |
+| `network.rs` | Wired / wireless / unknown for the connection carrying traffic (Linux `/proc/net/route` + sysfs, macOS `route` + `networksetup`, Windows `GetAdaptersAddresses`). Drives the *Automatic* mode of thumbnails on network shares |
 | `drives.rs` | Volumes and media types; `signature()` is a cheap fingerprint of what is mounted (mountinfo, /Volumes, drive letters plus media presence) that the shell's `drive-watch` thread polls to emit `drives-changed`; on Windows every drive letter is listed natively (empty drives as offline removable) |
 | `thumbs.rs` | Thumbnails with a disk cache |
 | `platform.rs` | Everything OS-specific: known folders, trash (and restoring from it), terminals, elevation |

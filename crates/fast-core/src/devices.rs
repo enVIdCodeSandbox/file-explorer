@@ -54,6 +54,7 @@ const PHONE_WORDS: &[&str] = &[
 ];
 const CAMERA_WORDS: &[&str] = &["camera", "canon", "nikon", "gopro", "fujifilm", "olympus", "panasonic lumix", "eos", "dslr", "webcam"];
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const UNLOCK: &str = "Unlock the phone and choose \"File transfer\" in its USB notification.";
 
 fn has_word(name: &str, words: &[&str]) -> bool {
@@ -125,6 +126,36 @@ fn list_all() -> Vec<Device> {
     build_linux(&usb, &mounts, &roots)
 }
 
+/// Phones the app can browse itself (over MTP) get their address; the helper app stays as a
+/// fallback in `open`. A phone the system listing missed is added.
+#[cfg(any(target_os = "macos", test))]
+pub fn attach_mtp(devices: &mut Vec<Device>, found: &[crate::remote::mtp::Found]) {
+    for f in found {
+        let serial = f.serial.to_lowercase();
+        let at = devices.iter().position(|d| {
+            d.path.is_none() && matches!(d.kind, DeviceKind::Phone | DeviceKind::Camera) && ((!serial.is_empty() && d.id.to_lowercase().ends_with(&format!(":{serial}"))) || d.name.eq_ignore_ascii_case(&f.name))
+        });
+        let path = Some(format!("mtp://{}/", f.key));
+        let note = "Unlock the phone and choose File transfer if it looks empty.".to_string();
+        match at {
+            Some(i) => {
+                devices[i].path = path;
+                devices[i].note = note;
+            }
+            None => devices.push(Device {
+                id: format!("mtp:{}", f.key),
+                name: f.name.clone(),
+                maker: f.maker.clone(),
+                kind: kind_from_name(&format!("{} {}", f.maker, f.name)).filter(|k| *k == DeviceKind::Camera).unwrap_or(DeviceKind::Phone),
+                path,
+                connectable: false,
+                open: None,
+                note,
+            }),
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn list_all() -> Vec<Device> {
     let json = std::process::Command::new("system_profiler")
@@ -134,7 +165,9 @@ fn list_all() -> Vec<Device> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
-    parse_system_profiler(&json, |app| Path::new("/Applications").join(format!("{app}.app")).exists())
+    let mut devices = parse_system_profiler(&json, |app| Path::new("/Applications").join(format!("{app}.app")).exists());
+    attach_mtp(&mut devices, &crate::remote::mtp::found_devices());
+    devices
 }
 
 #[cfg(windows)]
@@ -542,10 +575,53 @@ mod win {
         }
     }
 
-    /// Portable devices (phones, cameras, players) are the items of "This PC" that are not
-    /// file-system folders and whose shell path names a device (`\\?\usb#vid_...`). Phone Link
-    /// shows up the same way when Windows exposes it there.
+    /// Portable devices (phones, cameras, players), browsed inside the app through Windows
+    /// Portable Devices. The same devices as the shell shows in "This PC" (not file-system
+    /// folders, shell path naming a device) are kept as a fallback for File Explorer, and
+    /// any the portable-device list misses (Phone Link, say) are listed with only that.
     pub fn list() -> Vec<Device> {
+        // The shell part joins a COM apartment of its own, so it gets its own thread.
+        let shell = std::thread::scope(|s| s.spawn(shell_items).join().unwrap_or_default());
+        let mut out = Vec::new();
+        let mut used = vec![false; shell.len()];
+        for f in crate::remote::mtp::found_devices() {
+            // Windows names the phone ("Chau's S24+") and puts its serial number in the shell path.
+            let at = (!f.serial.is_empty()).then(|| shell.iter().position(|(_, parsing)| parsing.to_lowercase().contains(&f.serial.to_lowercase()))).flatten();
+            if let Some(i) = at {
+                used[i] = true;
+            }
+            let name = at.map(|i| shell[i].0.clone()).unwrap_or_else(|| f.name.clone());
+            out.push(Device {
+                id: f.key.clone(),
+                kind: kind_from_name(&format!("{name} {} {}", f.maker, f.name)).unwrap_or(DeviceKind::Phone),
+                name,
+                maker: f.maker,
+                path: Some(format!("mtp://{}/", f.key)),
+                connectable: false,
+                open: at.map(|i| shell[i].1.clone()),
+                note: "Unlock the phone and choose File transfer if it looks empty.".into(),
+            });
+        }
+        for (i, (name, parsing)) in shell.into_iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            out.push(Device {
+                id: parsing.clone(),
+                kind: kind_from_name(&name).unwrap_or(DeviceKind::Phone),
+                name,
+                maker: String::new(),
+                path: None,
+                connectable: false,
+                open: Some(parsing),
+                note: "Opens in File Explorer. Unlock the phone and choose File transfer if it looks empty.".into(),
+            });
+        }
+        out
+    }
+
+    /// `(display name, shell parsing name)` of the device items in "This PC".
+    fn shell_items() -> Vec<(String, String)> {
         let mut out = Vec::new();
         unsafe {
             let started = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
@@ -567,20 +643,9 @@ mod win {
                         let lower = parsing.to_lowercase();
                         let device = lower.contains("\\\\?\\") || lower.contains("usb#") || lower.contains("wpdbusenum") || lower.contains("{6ac27878-a6fa-4155-ba85-f98f491d4f33}");
                         let name = name_of(&item, SIGDN_NORMALDISPLAY);
-                        if !device || name.is_empty() {
-                            continue;
+                        if device && !name.is_empty() {
+                            out.push((name, parsing));
                         }
-                        let kind = kind_from_name(&name).unwrap_or(DeviceKind::Phone);
-                        out.push(Device {
-                            id: parsing.clone(),
-                            name,
-                            maker: String::new(),
-                            kind,
-                            path: None,
-                            connectable: false,
-                            open: Some(parsing),
-                            note: "Opens in File Explorer. Unlock the phone and choose File transfer if it looks empty.".into(),
-                        });
                     }
                 }
             }
@@ -614,6 +679,23 @@ mod tests {
             id: id.into(), vendor_id: "18d1".into(), product_id: "4ee1".into(), maker: maker.into(), product: product.into(),
             serial: serial.into(), device_class: 0, interfaces: classes.iter().map(|c| (*c, String::new())).collect(),
         }
+    }
+
+    #[test]
+    fn mtp_phones_are_matched_to_the_system_listing() {
+        use crate::remote::mtp::Found;
+        let mk = |id: &str, name: &str, kind| Device { id: id.into(), name: name.into(), maker: String::new(), kind, path: None, connectable: false, open: Some("OpenMTP".into()), note: String::new() };
+        let mut list = vec![mk("usb:0x14100000:R5CW1234", "SAMSUNG_Android", DeviceKind::Phone), mk("usb:0x1:", "Keyboard", DeviceKind::Input)];
+        let found = vec![
+            Found { key: "aaaa".into(), name: "SAMSUNG_Android".into(), maker: "SAMSUNG".into(), serial: "r5cw1234".into() },
+            Found { key: "bbbb".into(), name: "Pixel 8".into(), maker: "Google".into(), serial: String::new() },
+        ];
+        attach_mtp(&mut list, &found);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].path.as_deref(), Some("mtp://aaaa/"));
+        assert_eq!(list[0].open.as_deref(), Some("OpenMTP"), "the helper app stays as a fallback");
+        assert_eq!(list[1].path, None);
+        assert_eq!((list[2].path.as_deref(), list[2].kind), (Some("mtp://bbbb/"), DeviceKind::Phone));
     }
 
     #[test]

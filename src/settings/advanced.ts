@@ -135,7 +135,7 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "thumbs.inPane", "Thumbnails", "Show in the details pane", "The preview at the top of the details pane for the selected file."),
   sel("normal", "thumbs.quality", "Thumbnails", "Sharpness", [["draft", "Draft (smaller, fastest)"], ["normal", "Normal"], ["sharp", "Sharp (twice the pixels, for high-resolution screens)"]], "Sharper thumbnails take longer to make and more space to keep."),
   num(0, "thumbs.parallel", "Thumbnails", "Made at the same time", 0, 8, undefined, "How many thumbnails are made at once. 0 lets the performance level decide."),
-  yn(false, "thumbs.networkDrives", "Thumbnails", "On network drives", "Off: files on network drives keep their icons, which avoids reading many files over the network."),
+  sel("auto", "thumbs.networkDrives", "Thumbnails", "On network drives", [["auto", "Automatic (on when wired)"], ["on", "Always on"], ["off", "Always off"]], "Showing thumbnails of files on network shares means reading many files over the network. Automatic checks the connection: on a cable (Ethernet or fibre) thumbnails are always made, and on Wi-Fi or mobile data they are not."),
   num(64, "thumbs.maxImageMb", "Thumbnails", "Largest picture to preview", 0, 2048, "MB", "Bigger pictures keep their icon. 0 means no limit."),
   num(10, "thumbs.videoPercent", "Thumbnails", "Video frame to show", 0, 95, "%", "How far into the video the frame is taken. With ffmpeg alone (no ffmpegthumbnailer) the frame at two seconds is used."),
 

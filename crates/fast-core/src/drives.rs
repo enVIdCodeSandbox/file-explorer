@@ -107,6 +107,7 @@ pub fn list_drives() -> Vec<Drive> {
 /// unmounted, connected or disconnected, and costs far less than [`list_drives`], so the
 /// shell can check it every second or so and only list the volumes when it moved.
 pub fn signature() -> u64 {
+    #[allow(unused_imports)] // Windows hashes through its own module
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     #[cfg(windows)]

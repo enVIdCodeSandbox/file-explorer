@@ -286,6 +286,9 @@ export interface Prediction {
   sameRoute: boolean;
 }
 
+/** What kind of connection carries the computer's traffic. */
+export type NetworkLink = "wired" | "wireless" | "unknown";
+
 export interface DeleteProgress {
   id: number;
   phase: "scanning" | "running" | "done" | "cancelled" | "failed";
@@ -621,6 +624,7 @@ export const api = {
   thumbnail: (path: string, size: number) => invoke<ArrayBuffer>("thumbnail", { path, size }),
   getDrives: () => invoke<Drive[]>("get_drives"),
   getDevices: () => invoke<Device[]>("get_devices"),
+  networkLink: () => invoke<NetworkLink>("network_link"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),
   openDeviceInSystem: (open: string) => invoke<void>("open_device_in_system", { open }),
   knownFolders: () => invoke<{ label: string; path: string }[]>("known_folders"),
@@ -641,6 +645,10 @@ export const api = {
   /** Put files on the system clipboard, so other programs can paste them. */
   clipboardSetFiles: (paths: string[]) => invoke<void>("clipboard_set_files", { paths }),
   clipboardGetFiles: () => invoke<string[]>("clipboard_get_files"),
+  /** What another program put on the clipboard: paths, whether it was a Cut, and files that exist only inside that program. */
+  clipboardGet: () => invoke<{ paths: string[]; cut: boolean; virtualFiles: boolean }>("clipboard_get"),
+  clipboardClear: () => invoke<void>("clipboard_clear"),
+  clipboardStageVirtual: () => invoke<string[]>("clipboard_stage_virtual"),
   /** Start the system drag with these files, to drop them into another program. */
   dragOut: (paths: string[]) => invoke<void>("drag_out", { paths }),
   transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>

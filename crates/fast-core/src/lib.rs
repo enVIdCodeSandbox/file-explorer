@@ -12,6 +12,8 @@ pub mod details;
 pub mod driveio;
 pub mod drives;
 pub mod devices;
+pub mod network;
+pub mod virtual_clip;
 pub mod entry;
 pub mod error;
 pub mod history;

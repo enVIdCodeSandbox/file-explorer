@@ -48,6 +48,15 @@ impl Lease {
     fn new(st: &Shared, key: &str, fresh: bool) -> Result<Lease, String> {
         let (server, idle) = {
             let mut remotes = st.remotes.lock();
+            if !remotes.contains_key(key) {
+                // A plugged-in device has no login: opening its address is enough.
+                match Location::parse(key) {
+                    Ok(loc) if loc.protocol == Protocol::Mtp => {
+                        remotes.insert(key.to_string(), Remote { server: loc.server(), idle: Vec::new() });
+                    }
+                    _ => {}
+                }
+            }
             let r = remotes.get_mut(key).ok_or_else(|| format!("{NEEDS_LOGIN}{key}"))?;
             (r.server.clone(), if fresh { None } else { r.idle.pop() })
         };

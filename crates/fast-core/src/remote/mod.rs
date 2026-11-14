@@ -10,6 +10,7 @@
 
 mod ftp;
 mod http;
+pub mod mtp;
 mod sftp;
 mod webdav;
 
@@ -25,6 +26,8 @@ pub enum Protocol {
     Sftp,
     /// WebDAV over HTTP or HTTPS.
     Dav,
+    /// A phone, camera or player plugged in (see [`mtp`]); the host is the device's key.
+    Mtp,
 }
 
 impl Protocol {
@@ -34,6 +37,7 @@ impl Protocol {
             (Protocol::Sftp, _) => 22,
             (Protocol::Dav, false) => 80,
             (Protocol::Dav, true) => 443,
+            (Protocol::Mtp, _) => 0,
         }
     }
 }
@@ -68,6 +72,7 @@ impl Server {
             (Protocol::Sftp, _) => "sftp",
             (Protocol::Dav, false) => "dav",
             (Protocol::Dav, true) => "davs",
+            (Protocol::Mtp, _) => "mtp",
         };
         let user = if self.user.is_empty() { String::new() } else { format!("{}@", self.user) };
         let port = if self.port == self.protocol.default_port(self.tls) { String::new() } else { format!(":{}", self.port) };
@@ -95,7 +100,7 @@ pub struct Location {
 
 /// Whether text is the address of something on a server.
 pub fn is_remote(s: &str) -> bool {
-    ["ftp://", "sftp://", "dav://", "davs://"].iter().any(|p| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p))
+    ["ftp://", "sftp://", "dav://", "davs://", "mtp://"].iter().any(|p| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p))
 }
 
 impl Location {
@@ -107,6 +112,7 @@ impl Location {
             "sftp" => (Protocol::Sftp, false),
             "dav" => (Protocol::Dav, false),
             "davs" => (Protocol::Dav, true),
+            "mtp" => (Protocol::Mtp, false),
             _ => return Err(bad()),
         };
         let (authority, path) = match rest.find('/') {
@@ -227,6 +233,7 @@ pub fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Session>> 
         Protocol::Ftp => ftp::connect(server),
         Protocol::Sftp => sftp::connect(server, known_hosts),
         Protocol::Dav => webdav::connect(server),
+        Protocol::Mtp => mtp::connect(&server.host),
     }
 }
 

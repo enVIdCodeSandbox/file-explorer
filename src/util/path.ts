@@ -7,7 +7,7 @@ export const THIS_PC = "fast://thispc";
 export const isAppLocation = (loc: string) => loc.startsWith("fast://");
 
 /** An address on a server: `sftp://user@host/folder` (also ftp, dav, davs). */
-export const isRemote = (loc: string) => /^(ftp|sftp|dav|davs):\/\//i.test(loc);
+export const isRemote = (loc: string) => /^(ftp|sftp|dav|davs|mtp):\/\//i.test(loc);
 
 // ---- Archives opened like folders ---------------------------------------
 // `archive:///home/me/photos.zip!/2024/trip` is the folder "2024/trip" inside
@@ -80,6 +80,22 @@ export function setAddressPrivacy(hide: boolean, servers: { name: string; host: 
 }
 
 export const addressesHidden = () => privacy.hide;
+
+// ---- Plugged-in devices -------------------------------------------------
+// `mtp://3f9a…/Internal storage/DCIM`: the code after the scheme names a phone or
+// camera. Show the device's own name wherever the address is only displayed.
+
+const deviceNames = new Map<string, string>();
+/** The key the app uses in addresses, from a device's address (`mtp://key/`). */
+const deviceKey = (path: string | null | undefined) => (path && /^mtp:\/\//i.test(path) ? splitRemote(path).origin.slice(6).toLowerCase() : null);
+
+export function setDeviceNames(devices: { name: string; path: string | null }[]) {
+  deviceNames.clear();
+  for (const d of devices) {
+    const k = deviceKey(d.path);
+    if (k) deviceNames.set(k, d.name);
+  }
+}
 const HIDDEN = "•••";
 
 /** What stands in for a host: the name the person gave the server, else dots. */
@@ -103,6 +119,7 @@ export function maskAddresses(text: string, force?: boolean): string {
 
 /** "user@host" for a server address, for titles (the host is hidden when addresses are). */
 export function remoteLabel(url: string): string {
+  if (/^mtp:\/\//i.test(url)) return deviceNames.get(splitRemote(url).origin.slice(6).toLowerCase()) ?? "Device";
   const origin = splitRemote(url).origin.replace(/^[a-z]+:\/\//i, "");
   if (!privacy.hide) return origin;
   const at = origin.lastIndexOf("@");
@@ -112,6 +129,7 @@ export function remoteLabel(url: string): string {
 
 /** The real "user@host", for saving and connecting. */
 export function rawRemoteLabel(url: string): string {
+  if (/^mtp:\/\//i.test(url)) return remoteLabel(url);
   return splitRemote(url).origin.replace(/^[a-z]+:\/\//i, "");
 }
 

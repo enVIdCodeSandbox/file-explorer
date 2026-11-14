@@ -376,6 +376,12 @@ fn device_settings(st: &Shared) -> (bool, bool) {
 }
 
 /// Phones, cameras and other connected devices (not drives).
+/// Whether the computer is on a cable, on Wi-Fi, or it could not be told.
+#[tauri::command]
+pub async fn network_link() -> CmdResult<fast_core::network::Link> {
+    blocking(|| Ok(fast_core::network::link())).await
+}
+
 #[tauri::command]
 pub async fn get_devices(state: State<'_, Shared>) -> CmdResult<Vec<fast_core::devices::Device>> {
     let st = state.inner().clone();

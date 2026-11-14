@@ -92,6 +92,7 @@ const MAX_DECODE_BYTES: u64 = 384 * 1024 * 1024;
 /// Skip very large sources: decoding them costs more than the preview is worth.
 const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// How long an outside program may take to render one thumbnail.
+#[cfg(not(windows))]
 const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub fn is_supported(path: &Path) -> bool {
@@ -212,7 +213,9 @@ fn fit(png: &[u8], px: u32) -> Result<Vec<u8>> {
 
 /// Rendering documents and videos with what the system provides.
 mod render {
-    use super::{Kind, Options, RENDER_TIMEOUT};
+    #[cfg(not(windows))]
+    use super::RENDER_TIMEOUT;
+    use super::{Kind, Options};
     use crate::{CoreError, Result};
     use std::path::Path;
 

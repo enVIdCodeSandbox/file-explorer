@@ -30,7 +30,7 @@ import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRen
 import { formatDate, formatSize, steadyFraction } from "./util/format";
 import { HOME, THIS_PC, baseName, insideArchive, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
-import { setAddressPrivacy } from "./util/path";
+import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -140,6 +140,8 @@ interface State {
   drives: Drive[];
   /** Phones, cameras and other devices that are not drives. */
   devices: Device[];
+  /** Wired, wireless or unknown: decides thumbnails on network shares in automatic mode. */
+  link: "wired" | "wireless" | "unknown";
   drivesFresh: boolean;
   transfers: Record<number, Progress>;
   /** What each transfer was asked to do, kept for "retry as administrator". */
@@ -249,6 +251,7 @@ interface State {
   removeSearch: (text: string) => void;
   clearSearches: () => void;
   refreshDrives: () => void;
+  refreshLink: () => void;
   onDrivesChanged: (p: { drives: Drive[]; devices: Device[]; added: string[]; removed: string[] }) => void;
   setClipboard: (c: Clipboard | null) => void;
   /** Paste what is on the clipboard (from this app or any other) into a folder. */
@@ -337,6 +340,7 @@ export const useStore = create<State>((set, get) => ({
   openLockDialog: (path) => set({ lockDialog: path }),
   drives: [],
   devices: [],
+  link: "unknown",
   drivesFresh: false,
   transfers: {},
   specs: {},
@@ -705,6 +709,15 @@ export const useStore = create<State>((set, get) => ({
       .catch(() => {});
   },
 
+  refreshLink: () => {
+    void api
+      .networkLink()
+      .then((link) => {
+        if (link !== get().link) set({ link });
+      })
+      .catch(() => {});
+  },
+
   setClipboard: (clipboard) => {
     set({ clipboard });
     stagedClip = [];
@@ -727,16 +740,29 @@ export const useStore = create<State>((set, get) => ({
   },
   pasteInto: async (dest) => {
     const ours = get().clipboard;
-    const system = await api.clipboardGetFiles().catch(() => [] as string[]);
+    const clip = await api.clipboardGet().catch(() => ({ paths: [] as string[], cut: false, virtualFiles: false }));
+    let system = clip.paths;
     const same = ours && system.length === ours.paths.length && system.every((p) => ours.paths.includes(p) || stagedClip.includes(p));
-    if (ours && (same || system.length === 0)) {
+    if (ours && (same || (system.length === 0 && !clip.virtualFiles))) {
       // Copied or cut here: cut means move.
       await get().startTransfer(ours.paths, dest, ours.op);
       if (ours.op === "move") get().setClipboard(null);
-    } else if (system.length) {
-      // Copied in another program (Explorer, Finder, a mail client): always a copy.
-      await get().startTransfer(system, dest, "copy");
+      return;
     }
+    if (!system.length && clip.virtualFiles) {
+      // Copied out of a zip, a phone or the cloud in another program: the files only exist inside it, so they are saved first.
+      get().showToast("Getting the files from the other program…");
+      try {
+        system = await api.clipboardStageVirtual();
+      } catch (e) {
+        return get().showToast(`Could not get the files from the other program: ${String(e)}`);
+      }
+    }
+    if (!system.length) return get().showToast("There are no files to paste. Copy some files first.");
+    // Copied in another program (Explorer, Finder, Files, a mail client). If that program cut them, they are moved, as in any file manager.
+    const move = clip.cut && !clip.virtualFiles;
+    await get().startTransfer(system, dest, move ? "move" : "copy");
+    if (move) void api.clipboardClear().catch(() => {});
   },
   setSelection: (selection) => set({ selection }),
 
@@ -1496,9 +1522,10 @@ export function friendlyRemoteError(e: unknown): string {
 async function deleteOnServer(paths: string[]): Promise<boolean> {
   const s = useStore.getState();
   const what = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;
+  const device = /^mtp:\/\//i.test(paths[0]);
   const r = await ask({
-    title: `Delete ${what} from the server?`,
-    message: "Servers have no Recycle Bin or Trash. This cannot be undone.",
+    title: `Delete ${what} from ${device ? "the device" : "the server"}?`,
+    message: device ? "Phones and cameras have no Recycle Bin. This cannot be undone." : "Servers have no Recycle Bin or Trash. This cannot be undone.",
     buttons: [
       { id: "ok", label: "Delete", primary: true, danger: true },
       { id: "cancel", label: "Cancel" },
@@ -1540,7 +1567,7 @@ function remoteFinished(p: DeleteProgress) {
     if (p.result) void openFile(p.result);
     return;
   }
-  if (p.action === "remote-delete") return s.notify("delete", `Deleted ${name} from the server`, p.errorCount ? `${p.errorCount} could not be deleted` : `${p.itemsDone} item${p.itemsDone === 1 ? "" : "s"}`);
+  if (p.action === "remote-delete") return s.notify("delete", `Deleted ${name}`, p.errorCount ? `${p.errorCount} could not be deleted` : `${p.itemsDone} item${p.itemsDone === 1 ? "" : "s"}`);
   if (p.action === "unpack") {
     const left = p.skipped ? `${p.skipped} already there, left as they were` : "";
     return s.notify("copy", `Copied out of the archive: ${name}`, p.errors[0]?.message ?? [files, left].filter(Boolean).join(", "));
@@ -1590,10 +1617,11 @@ function parentOf(path: string): string {
 {
   let last: unknown[] = [];
   useStore.subscribe((s) => {
-    const next = [s.settings?.appearance.hideNetworkAddress, s.servers];
-    if (next[0] === last[0] && next[1] === last[1]) return;
+    const next = [s.settings?.appearance.hideNetworkAddress, s.servers, s.devices];
+    if (next[0] === last[0] && next[1] === last[1] && next[2] === last[2]) return;
     last = next;
     setAddressPrivacy(!!s.settings?.appearance.hideNetworkAddress, s.servers);
+    setDeviceNames(s.devices);
   });
 }
 

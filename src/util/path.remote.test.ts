@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseName, crumbs, isRemote, joinPath, maskAddresses, parentPath, remoteLabel, setAddressPrivacy, splitRemote } from "./path";
+import { baseName, crumbs, isRemote, joinPath, maskAddresses, parentPath, remoteLabel, setAddressPrivacy, setDeviceNames, splitRemote } from "./path";
 import { fieldsFromUrl } from "../components/ConnectServer";
 
 describe("server addresses", () => {
@@ -77,5 +77,19 @@ describe("address privacy", () => {
   it("force overrides the global choice", () => {
     reset();
     expect(maskAddresses("\\\\nas\\s", true)).toBe("\\\\•••\\s");
+  });
+});
+
+describe("plugged-in devices", () => {
+  it("are addresses like servers, labelled with the device's name", () => {
+    expect(isRemote("mtp://3f9a/Internal storage/DCIM")).toBe(true);
+    setDeviceNames([{ name: "Chau's S24+", path: "mtp://3f9a/" }]);
+    expect(remoteLabel("mtp://3f9a/Internal storage")).toBe("Chau's S24+");
+    expect(baseName("mtp://3f9a/")).toBe("Chau's S24+");
+    expect(baseName("mtp://3f9a/Internal storage/DCIM")).toBe("DCIM");
+    expect(parentPath("mtp://3f9a/Internal storage")).toBe("mtp://3f9a/");
+    expect(parentPath("mtp://3f9a/")).toBeNull();
+    expect(joinPath("mtp://3f9a/Internal storage", "DCIM")).toBe("mtp://3f9a/Internal storage/DCIM");
+    expect(remoteLabel("mtp://unknown/")).toBe("Device");
   });
 });
