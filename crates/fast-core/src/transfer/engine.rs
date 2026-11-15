@@ -570,6 +570,7 @@ fn run(
     // Source directories to remove after a copy-based move, deepest last.
     let mut moved_dirs: Vec<PathBuf> = Vec::new();
     let mut renamed_all = spec.op == Op::Move;
+    let phase1_started = Instant::now();
     // What each top-level source becomes, for tools that copy whole folders.
     let mut tops: Vec<method::Top> = Vec::new();
 
@@ -769,7 +770,8 @@ fn run(
         file_cost / (file_cost + byte_cost)
     };
     let mut last_fraction = 0.0f64;
-    let copy_started = Instant::now();
+    // An instant move did all its work while scanning: that is the time it took.
+    let copy_started = if plan.strategy == Strategy::Rename { phase1_started } else { Instant::now() };
     let (mut peak_bps, mut peak_fps) = (0f64, 0f64);
 
     progress.route = Some(route);
@@ -1032,10 +1034,23 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
             });
             let mut credited = 0u64; // bytes already counted of the file in flight
             let (mut total_bytes, mut total_files) = (0u64, 0u64); // for tools that report running totals
+            // Robocopy names a file before copying it and says nothing while it goes, so the files
+            // it has begun are followed by their size on disk: the speed graph then shows a real
+            // speed, not the whole file at once when it starts.
+            let mut flights: Vec<Flight> = Vec::new();
+            let mut polled = Instant::now();
             let mut interrupted = false;
             loop {
+                if !flights.is_empty() && polled.elapsed() >= Duration::from_millis(100) {
+                    polled = Instant::now();
+                    Flight::settle(&mut flights, shared, false);
+                }
                 match rx.recv_timeout(Duration::from_millis(40)) {
                     Ok(line) => match method::parse(method, &line) {
+                        method::Event::Started { size, name } => {
+                            flights.push(Flight { dst: flight_destination(top, &name), size, credited: 0, born: Instant::now() });
+                            Flight::settle(&mut flights, shared, false);
+                        }
                         method::Event::Done(size) => {
                             shared.bytes_done.fetch_add(size.saturating_sub(credited), Ordering::Relaxed);
                             shared.files_done.fetch_add(1, Ordering::Relaxed);
@@ -1064,6 +1079,9 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
             }
             let status = child.wait();
             let _ = reader.join();
+            if !interrupted {
+                Flight::settle(&mut flights, shared, true);
+            }
             if interrupted {
                 if shared.cancelled() {
                     return;
@@ -1077,6 +1095,47 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
             }
             break;
         }
+    }
+}
+
+/// A file a copy tool has begun, followed by how much of it is on disk.
+struct Flight {
+    dst: Option<PathBuf>,
+    size: u64,
+    credited: u64,
+    born: Instant,
+}
+
+impl Flight {
+    /// Count what has been written since the last look. A file is finished when all of it is
+    /// there, or (with `all`) when the tool has ended. A file that cannot be found by name is
+    /// counted as soon as it is clear it cannot be followed, as before.
+    fn settle(flights: &mut Vec<Flight>, shared: &Shared, all: bool) {
+        flights.retain_mut(|f| {
+            let on_disk = f.dst.as_ref().and_then(|d| fs::metadata(d).ok()).map(|m| m.len());
+            let unfollowable = on_disk.is_none() && f.born.elapsed() >= Duration::from_millis(1500);
+            let reach = if all || unfollowable { f.size } else { on_disk.unwrap_or(0).min(f.size) };
+            shared.bytes_done.fetch_add(reach.saturating_sub(f.credited), Ordering::Relaxed);
+            f.credited = f.credited.max(reach);
+            let finished = f.credited >= f.size;
+            if finished {
+                shared.files_done.fetch_add(1, Ordering::Relaxed);
+            }
+            !finished
+        });
+    }
+}
+
+/// Where Robocopy is writing the file it read from `name` (a full path, or only a name).
+fn flight_destination(top: &method::Top, name: &str) -> Option<PathBuf> {
+    if !top.is_dir {
+        return Some(top.dst.clone());
+    }
+    let name = Path::new(name.trim());
+    match name.strip_prefix(&top.src) {
+        Ok(rel) => Some(top.dst.join(rel)),
+        // Not under the folder as written (another spelling): a file directly in it can still be found.
+        Err(_) => name.file_name().map(|n| top.dst.join(n)),
     }
 }
 
@@ -1467,6 +1526,42 @@ mod tests {
         p
     }
 
+    #[test]
+    fn a_tool_file_is_followed_by_its_size_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        let top = method::Top { src: PathBuf::from("/src/photos"), dst: d.path().join("photos"), is_dir: true };
+        std::fs::create_dir_all(top.dst.join("sub")).unwrap();
+        // The folder is named as written in the command, so the sub-folder is kept.
+        assert_eq!(flight_destination(&top, "/src/photos/sub/a.bin"), Some(top.dst.join("sub/a.bin")));
+        // Another spelling of the folder: a file name alone still finds it directly inside.
+        assert_eq!(flight_destination(&top, "/SRC/Photos/a.bin"), Some(top.dst.join("a.bin")));
+        let single = method::Top { src: "/a/x.iso".into(), dst: "/b/x.iso".into(), is_dir: false };
+        assert_eq!(flight_destination(&single, "x.iso"), Some(PathBuf::from("/b/x.iso")));
+
+        let shared = test_shared();
+        let target = top.dst.join("sub/a.bin");
+        let mut flights = vec![Flight { dst: Some(target.clone()), size: 1000, credited: 0, born: Instant::now() }];
+        Flight::settle(&mut flights, &shared, false);
+        assert_eq!((shared.bytes_done.load(Ordering::Relaxed), flights.len()), (0, 1), "nothing written yet: nothing counted");
+        std::fs::write(&target, vec![0u8; 400]).unwrap();
+        Flight::settle(&mut flights, &shared, false);
+        assert_eq!(shared.bytes_done.load(Ordering::Relaxed), 400, "counted as it is written, not all at the start");
+        assert_eq!(shared.files_done.load(Ordering::Relaxed), 0);
+        std::fs::write(&target, vec![0u8; 1000]).unwrap();
+        Flight::settle(&mut flights, &shared, false);
+        assert_eq!((shared.bytes_done.load(Ordering::Relaxed), shared.files_done.load(Ordering::Relaxed), flights.len()), (1000, 1, 0));
+    }
+
+    #[test]
+    fn a_tool_file_that_cannot_be_followed_is_counted_when_the_tool_ends() {
+        let shared = test_shared();
+        let mut flights = vec![Flight { dst: None, size: 500, credited: 0, born: Instant::now() }];
+        Flight::settle(&mut flights, &shared, false);
+        assert_eq!(flights.len(), 1);
+        Flight::settle(&mut flights, &shared, true);
+        assert_eq!((shared.bytes_done.load(Ordering::Relaxed), shared.files_done.load(Ordering::Relaxed), flights.len()), (500, 1, 0));
+    }
+
     fn test_shared() -> Shared {
         Shared {
             control: AtomicU8::new(ST_RUN),
@@ -1702,6 +1797,9 @@ mod tests {
         assert_eq!(p.strategy, Some(Strategy::Rename));
         assert!(!src.exists());
         assert!(dest.join("src/a/b/big.bin").exists());
+        // Its numbers are real, so the graph and history have something to show.
+        assert_eq!(p.files_done, 1);
+        assert!(p.avg_files_per_sec > 0.0 && p.peak_files_per_sec >= p.avg_files_per_sec);
     }
 
     #[test]

@@ -332,7 +332,7 @@ pub fn command(method: Method, t: &Top, conflict: Conflict, preserve_times: bool
         }
         c.arg(if preserve_times { "/COPY:DAT" } else { "/COPY:D" })
             .arg("/DCOPY:T")
-            .args(["/R:1", "/W:1", "/BYTES", "/NJH", "/NJS", "/NP", "/NDL"])
+            .args(["/R:1", "/W:1", "/BYTES", "/FP", "/NJH", "/NJS", "/NP", "/NDL"])
             .arg(format!("/MT:{}", workers.clamp(1, 32)));
         if method == Method::Smb {
             c.arg("/COMPRESS"); // SMB compression: fewer bytes over the wire when the link is the limit
@@ -383,6 +383,9 @@ pub fn command(method: Method, t: &Top, conflict: Conflict, preserve_times: bool
 pub enum Event {
     /// A file is finished: its size.
     Done(u64),
+    /// A file has just begun copying (Robocopy says so before it copies, not after): its size and
+    /// the path it was read from. How far it has got is read from the file being written.
+    Started { size: u64, name: String },
     /// Bytes of the current file transferred so far (rsync's live counter).
     Partial(u64),
     /// Everything transferred so far by this run of the tool: bytes and files (rclone's statistics).
@@ -409,7 +412,7 @@ pub fn parse(method: Method, line: &str) -> Event {
             let parts: Vec<&str> = line.split('\t').map(str::trim).filter(|p| !p.is_empty()).collect();
             let copied = matches!(parts.first().map(|c| c.to_ascii_lowercase()).as_deref(), Some("new file" | "newer" | "older" | "changed" | "modified" | "lonely"));
             match (copied, parts.get(1).and_then(|s| s.parse::<u64>().ok())) {
-                (true, Some(size)) => Event::Done(size),
+                (true, Some(size)) => Event::Started { size, name: parts.get(2).map(|s| s.to_string()).unwrap_or_default() },
                 _ => Event::Nothing,
             }
         }
@@ -450,8 +453,9 @@ mod tests {
 
     #[test]
     fn parses_robocopy_lines() {
-        assert_eq!(parse(Method::Robocopy, "\t    New File  \t\t  1048576\tbig.bin"), Event::Done(1048576));
-        assert_eq!(parse(Method::Robocopy, "\t    Newer     \t\t      12\ta.txt"), Event::Done(12));
+        let started = |size: u64, name: &str| Event::Started { size, name: name.into() };
+        assert_eq!(parse(Method::Robocopy, "\t    New File  \t\t  1048576\tbig.bin"), started(1048576, "big.bin"));
+        assert_eq!(parse(Method::Robocopy, "\t    Newer     \t\t      12\tC:\\src\\sub\\a.txt"), started(12, "C:\\src\\sub\\a.txt"));
         assert_eq!(parse(Method::Robocopy, "\t    same      \t\t      12\ta.txt"), Event::Nothing);
         assert_eq!(parse(Method::Robocopy, "\t  *EXTRA File \t\t      12\ta.txt"), Event::Nothing);
         assert_eq!(parse(Method::Robocopy, ""), Event::Nothing);
@@ -534,6 +538,7 @@ mod tests {
         let a: Vec<_> = c.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(&a[..3], ["C:\\data\\photos", "D:\\backup\\photos", "/E"]);
         assert!(a.contains(&"/MT:16".to_string()) && a.contains(&"/XC".to_string()));
+        assert!(a.contains(&"/FP".to_string()), "full paths, so the file being written can be found");
         let f = Top { src: "/d/a.iso".into(), dst: "/b/a.iso".into(), is_dir: false };
         let a: Vec<_> = command(Method::Robocopy, &f, Conflict::Overwrite, true, 4).get_args().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(&a[..3], ["/d", "/b", "a.iso"]);

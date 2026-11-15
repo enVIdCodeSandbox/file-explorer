@@ -234,7 +234,7 @@ impl History {
     }
 
     /// Add a finished transfer. Transfers that teach nothing (cancelled,
-    /// failed, instant renames, too short to time) are ignored.
+    /// failed, too short to time) are ignored; instant moves are kept for the record.
     /// Returns whether a record was stored.
     pub fn record(&mut self, p: &Progress, now: i64, limit: usize) -> bool {
         if limit == 0 {
@@ -242,7 +242,10 @@ impl History {
         }
         let Some(route) = &p.route else { return false };
         let Some(plan) = &p.plan else { return false };
-        if p.phase != Phase::Done || plan.strategy == Strategy::Rename || p.files_done == 0 || p.elapsed_secs < 0.2 {
+        // An instant move is kept too (it is a transfer like any other, and takes as long as it takes),
+        // but it never shapes an estimate: the records of renames are skipped when predicting.
+        let instant = plan.strategy == Strategy::Rename;
+        if p.phase != Phase::Done || p.files_done == 0 || (!instant && p.elapsed_secs < 0.2) {
             return false;
         }
         let src = self.name_id(&route.src);
@@ -306,9 +309,49 @@ impl History {
         true
     }
 
+    /// Add a job that is not a copy (deleting, compressing, unpacking): `route` comes from
+    /// `meter::route_for`, which names the kind of job where a destination would be. Each item's cost is
+    /// all the time it took divided by the number of items.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_job(&mut self, route: &Route, is_move: bool, files: u64, bytes: u64, secs: f64, errors: u64, now: i64, limit: usize) -> bool {
+        if limit == 0 || files == 0 || secs < 0.2 {
+            return false;
+        }
+        let src = self.name_id(&route.src);
+        let dst = self.name_id(&route.dst);
+        self.records.push_back(Record {
+            at: now,
+            src,
+            dst,
+            src_media: media_code(route.src_media),
+            dst_media: media_code(route.dst_media),
+            strategy: strategy_code(Strategy::Mixed),
+            is_move,
+            files: files.min(u32::MAX as u64) as u32,
+            bytes,
+            secs: secs as f32,
+            avg_bytes_per_sec: (bytes as f64 / secs) as f32,
+            avg_files_per_sec: (files as f64 / secs) as f32,
+            peak_bytes_per_sec: (bytes as f64 / secs) as f32,
+            per_file_secs: (secs / files as f64) as f32,
+            per_mb_secs: 0.0,
+            overhead_share: 1.0,
+            workers: 1,
+            errors: errors.min(u16::MAX as u64) as u16,
+            method: 0,
+        });
+        self.trim(limit);
+        true
+    }
+
     /// How alike a past record and a new job are. 0 is identical; each unit is
     /// roughly "a factor of e" in file size or count, or a route mismatch.
     fn distance(&self, r: &Record, q: &Query) -> f64 {
+        // Deleting, compressing and unpacking are kept apart from copies (see `meter::route_for`).
+        let job = |name: Option<&String>| name.is_some_and(|n| n.starts_with('<'));
+        if job(self.names.get(r.dst as usize)) != q.route.dst.starts_with('<') {
+            return f64::INFINITY;
+        }
         let route = if self.names.get(r.src as usize) == Some(&q.route.src)
             && self.names.get(r.dst as usize) == Some(&q.route.dst)
             && !q.route.src.is_empty()
@@ -514,10 +557,22 @@ mod tests {
         assert!(!h.record(&cancelled, NOW, 50));
         let mut instant = done(r.clone(), 100, 0, 3.0, 0.01, 0.01);
         instant.plan.as_mut().unwrap().strategy = Strategy::Rename;
-        assert!(!h.record(&instant, NOW, 50));
+        instant.elapsed_secs = 0.004;
+        assert!(h.record(&instant, NOW, 50), "an instant move is remembered however short it was");
         assert!(!h.record(&done(r.clone(), 100, 10_000_000, 0.05, 0.01, 0.01), NOW, 50), "too short to time");
         assert!(!h.record(&done(r, 100, 10_000_000, 3.0, 0.01, 0.01), NOW, 0), "limit 0 stores nothing");
-        assert_eq!(h.len(), 1);
+        assert_eq!(h.len(), 2);
+    }
+
+    #[test]
+    fn instant_moves_never_shape_an_estimate() {
+        let mut h = History::default();
+        let r = route("C:\\", "C:\\", Media::Ssd, Media::Ssd);
+        let mut instant = done(r.clone(), 100, 0, 3.0, 0.004, 0.01);
+        instant.plan.as_mut().unwrap().strategy = Strategy::Rename;
+        assert!(h.record(&instant, NOW, 50));
+        let q = Query { route: r, files: 100, bytes: 0, is_move: true };
+        assert!(h.predict(&q, NOW).is_none());
     }
 
     #[test]

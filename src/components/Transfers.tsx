@@ -179,10 +179,18 @@ function Card({ job }: { job: Job }) {
               </div>
             </>
           ) : (
-            <div className="transfer-stats muted">
-              {job.p.bytesTotal > 0 ? <span>{formatSize(job.p.bytesDone)} / {formatSize(job.p.bytesTotal)}</span> : <span>{formatCount(job.p.itemsDone)} / {formatCount(job.p.itemsTotal)} items{scanning ? " found so far" : ""}</span>}
-              <span>{formatDuration(job.p.elapsedSecs)}</span>
-            </div>
+            <>
+              {job.p.stats && !scanning && (
+                <div className="transfer-stats">
+                  <span className="eta-line">{formatEta(job.p.stats.etaSecs)}<EtaNote p={{ phase: job.p.phase, etaSecs: job.p.stats.etaSecs, etaConfidence: job.p.stats.etaConfidence }} /></span>
+                  <span className="transfer-rate">{jobRate(job.p.stats)}</span>
+                </div>
+              )}
+              <div className="transfer-stats muted">
+                {job.p.bytesTotal > 0 ? <span>{formatSize(job.p.bytesDone)} / {formatSize(job.p.bytesTotal)}</span> : <span>{formatCount(job.p.itemsDone)} / {formatCount(job.p.itemsTotal)} items{scanning ? " found so far" : ""}</span>}
+                <span>{formatDuration(job.p.elapsedSecs)}</span>
+              </div>
+            </>
           )}
         </>
       )}
@@ -204,7 +212,13 @@ function niceMax(v: number): number {
 
 const METHOD_LABEL: Record<string, string> = { robocopy: "Robocopy", rsync: "rsync", rclone: "rclone", smb: "SMB-tuned copy", nfs: "NFS-tuned rsync" };
 
-export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; total: number | null; etaSecs?: number | null }) {
+/** Speed of a delete, archive or server job: items per second and, when known, bytes per second. */
+function jobRate(s: { itemsPerSec: number; bytesPerSec: number }): string {
+  const items = `${s.itemsPerSec >= 10 ? formatCount(s.itemsPerSec) : s.itemsPerSec.toFixed(1)} items/s`;
+  return s.bytesPerSec > 0 ? `${formatSize(s.bytesPerSec)}/s · ${items}` : items;
+}
+
+export function SpeedGraph({ samples, total, etaSecs, bytes = true }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean }) {
   const W = 520;
   const H = 150;
   const pad = { l: 46, r: 56, t: 10, b: 22 };
@@ -228,9 +242,11 @@ export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; tot
           <text x={pad.l - 6} y={pad.t + h - f * h + 3} textAnchor="end" className="graph-label files">
             {f === 0 ? "0" : formatCount(maxFiles * f)}
           </text>
-          <text x={pad.l + w + 6} y={pad.t + h - f * h + 3} className="graph-label bytes">
-            {f === 0 ? "0" : formatSize(maxBytes * f).replace(" ", "")}
-          </text>
+          {bytes && (
+            <text x={pad.l + w + 6} y={pad.t + h - f * h + 3} className="graph-label bytes">
+              {f === 0 ? "0" : formatSize(maxBytes * f).replace(" ", "")}
+            </text>
+          )}
         </g>
       ))}
       {[0, 0.5, 1].map((f) => (
@@ -240,13 +256,13 @@ export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; tot
       ))}
       {samples.length > 1 && (
         <>
-          <path d={line((s) => s.bytesPerSec, maxBytes)} className="graph-line bytes" />
+          {bytes && <path d={line((s) => s.bytesPerSec, maxBytes)} className="graph-line bytes" />}
           <path d={line((s) => s.filesPerSec, maxFiles)} className="graph-line files" />
         </>
       )}
       {last && samples.length > 1 && (
         <>
-          {([["bytes", last.bytesPerSec, maxBytes], ["files", last.filesPerSec, maxFiles]] as const).map(([k, v, max]) => {
+          {([["bytes", last.bytesPerSec, maxBytes], ["files", last.filesPerSec, maxFiles]] as const).filter(([k]) => bytes || k === "files").map(([k, v, max]) => {
             const y = pad.t + h - (v / max) * h;
             return (
               <g key={k}>
@@ -259,7 +275,7 @@ export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; tot
       )}
       {total != null && total > 0 && total < end * 1.5 && <line x1={x(Math.min(total, end))} x2={x(Math.min(total, end))} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
       <text x={pad.l} y={pad.t - 1} className="graph-label files" fontSize="9">files/s</text>
-      <text x={pad.l + w} y={pad.t - 1} textAnchor="end" className="graph-label bytes" fontSize="9">MB/s</text>
+      {bytes && <text x={pad.l + w} y={pad.t - 1} textAnchor="end" className="graph-label bytes" fontSize="9">MB/s</text>}
     </svg>
   );
 }
@@ -269,7 +285,7 @@ export function SpeedGraph({ samples, total, etaSecs }: { samples: Sample[]; tot
 // ---------------------------------------------------------------------------
 
 /** Says how far to trust the time left: rough at first, then improving, then briefly "settled" before it goes away. */
-function EtaNote({ p }: { p: Progress }) {
+function EtaNote({ p }: { p: Pick<Progress, "phase" | "etaSecs" | "etaConfidence"> }) {
   const conf = p.etaConfidence ?? 1;
   const [showSettled, setShowSettled] = useState(false);
   const wasRough = useRef(false);
@@ -414,16 +430,40 @@ function TransferDetail({ p }: { p: Progress }) {
 
 function DeleteDetail({ p }: { p: DeleteProgress }) {
   const fraction = useStore((s) => s.shown[p.id] ?? 0);
+  const series = useStore((s) => s.series[p.id]) ?? [];
+  const [more, setMore] = useState(true);
+  const stats = p.stats;
+  const active = isActive({ kind: "delete", p });
+  const typical = stats?.typicalSecs ?? null;
+  const hasBytes = p.bytesTotal > 0 || (stats?.peakBytesPerSec ?? 0) > 0;
+  const noun = p.action === "delete" || p.action === "remote-delete" ? "Items" : p.action === "compress" || p.action === "extract" ? "Files" : "Items";
   return (
     <div className="transfer-detail">
       <div className="percent">
         <strong>{p.phase === "scanning" ? (p.action === "delete" || p.action === "remote-delete" ? "Counting items…" : "Getting ready…") : `${Math.round(fraction * 100)}% complete`}</strong>
+        <span className="muted">{active && stats && p.phase === "running" ? jobRate(stats) : ""}</span>
       </div>
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
+      {stats && (
+        <>
+          <SpeedGraph samples={series} total={typical} etaSecs={stats.etaSecs} bytes={hasBytes} />
+          <div className="graph-legend">
+            <span className="files">● Items per second</span>
+            {hasBytes && <span className="bytes">● Megabytes per second</span>}
+            {typical ? <span className="typical">┆ Typical finish</span> : null}
+          </div>
+        </>
+      )}
       <dl className="details-list transfer-facts">
+        {stats && (
+          <>
+            <dt>Time remaining</dt>
+            <dd className="eta-line">{active ? formatEta(stats.etaSecs).replace(" left", "") : "—"}<EtaNote p={{ phase: p.phase, etaSecs: stats.etaSecs, etaConfidence: stats.etaConfidence }} /></dd>
+          </>
+        )}
         {p.bytesTotal > 0 && (
           <>
-            <dt>Copied</dt>
+            <dt>{p.action === "delete" ? "Removed" : "Copied"}</dt>
             <dd>{formatSize(p.bytesDone)} of {formatSize(p.bytesTotal)}</dd>
           </>
         )}
@@ -439,6 +479,12 @@ function DeleteDetail({ p }: { p: DeleteProgress }) {
             )}
           </>
         )}
+        {(p.action === "compress" || p.action === "extract") && p.itemsTotal > 0 && (
+          <>
+            <dt>{noun}</dt>
+            <dd>{formatCount(p.itemsDone)} of {formatCount(p.itemsTotal)}</dd>
+          </>
+        )}
         <dt>Elapsed</dt>
         <dd>{formatDuration(p.elapsedSecs)}</dd>
         {p.current && (
@@ -448,6 +494,27 @@ function DeleteDetail({ p }: { p: DeleteProgress }) {
           </>
         )}
       </dl>
+      {stats && (
+        <>
+          <button className="link-button" onClick={() => setMore(!more)}>
+            {more ? "Fewer details" : "More details"}
+          </button>
+          {more && (
+            <dl className="details-list transfer-facts">
+              <dt>Typical time</dt>
+              <dd>
+                {typical != null
+                  ? `${formatDuration(typical)} for similar jobs (${stats.samples} past)`
+                  : "No similar jobs recorded yet; this one will be remembered"}
+              </dd>
+              <dt>Average speed</dt>
+              <dd>{jobRate({ itemsPerSec: stats.avgItemsPerSec, bytesPerSec: stats.avgBytesPerSec })}</dd>
+              <dt>Peak speed</dt>
+              <dd>{jobRate({ itemsPerSec: stats.peakItemsPerSec, bytesPerSec: stats.peakBytesPerSec })}</dd>
+            </dl>
+          )}
+        </>
+      )}
     </div>
   );
 }

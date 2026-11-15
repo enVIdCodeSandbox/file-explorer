@@ -172,6 +172,9 @@ pub struct DeleteProgress {
     /// A file that exists on both sides and is waiting for the person's decision.
     #[serde(default)]
     pub conflict: Option<crate::transfer::ConflictInfo>,
+    /// Speed, time left and the graph's numbers, measured the way a transfer's are.
+    #[serde(default)]
+    pub stats: Option<crate::meter::JobStats>,
 }
 
 const MAX_REPORTED_ERRORS: usize = 50;
@@ -180,6 +183,9 @@ struct DeleteCtx {
     cancel: Arc<AtomicBool>,
     total: AtomicU64,
     done: AtomicU64,
+    /// Bytes in the files to remove, and how many have gone (permanent deletes only).
+    bytes_total: AtomicU64,
+    bytes_done: AtomicU64,
     error_count: AtomicU64,
     errors: Mutex<Vec<TransferError>>,
     current: Mutex<String>,
@@ -210,6 +216,7 @@ fn count_tree(path: &Path, ctx: &DeleteCtx) {
     ctx.total.fetch_add(1, Ordering::Relaxed);
     let Ok(meta) = std::fs::symlink_metadata(path) else { return };
     if !meta.is_dir() {
+        ctx.bytes_total.fetch_add(meta.len(), Ordering::Relaxed);
         return;
     }
     let Ok(rd) = std::fs::read_dir(path) else { return };
@@ -250,7 +257,9 @@ fn remove_tree(path: &Path, ctx: &DeleteCtx) {
     };
     if !meta.is_dir() {
         match remove_file_forced(path) {
-            Ok(()) => {}
+            Ok(()) => {
+                ctx.bytes_done.fetch_add(meta.len(), Ordering::Relaxed);
+            }
             Err(e) => ctx.fail(path, &e),
         }
         ctx.done.fetch_add(1, Ordering::Relaxed);
@@ -283,20 +292,31 @@ fn remove_tree(path: &Path, ctx: &DeleteCtx) {
     ctx.done.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Asked once the items are counted (how many items, how many bytes) what similar earlier jobs took.
+pub type JobPredictor<'a> = &'a (dyn Fn(u64, u64) -> Option<crate::history::Prediction> + Sync);
+
 /// Delete `paths`, reporting progress every ~150 ms through `on_progress`.
 /// Blocks until finished. Setting `cancel` stops it between items.
-pub fn delete_with_progress(
+pub fn delete_with_progress(id: u64, paths: &[PathBuf], permanent: bool, threads: usize, cancel: Arc<AtomicBool>, on_progress: impl Fn(DeleteProgress) + Send + Sync) -> DeletePhase {
+    delete_with_meter(id, paths, permanent, threads, cancel, None, on_progress)
+}
+
+/// Like [`delete_with_progress`], with speed, time left and a first guess from `predict`.
+pub fn delete_with_meter(
     id: u64,
     paths: &[PathBuf],
     permanent: bool,
     threads: usize,
     cancel: Arc<AtomicBool>,
+    predict: Option<JobPredictor<'_>>,
     on_progress: impl Fn(DeleteProgress) + Send + Sync,
 ) -> DeletePhase {
     let ctx = DeleteCtx {
         cancel,
         total: AtomicU64::new(0),
         done: AtomicU64::new(0),
+        bytes_total: AtomicU64::new(0),
+        bytes_done: AtomicU64::new(0),
         error_count: AtomicU64::new(0),
         errors: Mutex::new(Vec::new()),
         current: Mutex::new(String::new()),
@@ -307,7 +327,27 @@ pub fn delete_with_progress(
         .first()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let snapshot = |ctx: &DeleteCtx, phase: DeletePhase| DeleteProgress {
+    let meter = Mutex::new(crate::meter::Meter::new(None));
+    let counted = AtomicBool::new(false);
+    let snapshot = |ctx: &DeleteCtx, phase: DeletePhase| {
+        let (items_done, items_total) = (ctx.done.load(Ordering::Relaxed), ctx.total.load(Ordering::Relaxed));
+        let (bytes_done, bytes_total) = (ctx.bytes_done.load(Ordering::Relaxed), ctx.bytes_total.load(Ordering::Relaxed));
+        let secs = started.elapsed().as_secs_f64();
+        let stats = (phase != DeletePhase::Scanning).then(|| {
+            let mut m = meter.lock();
+            // The first guess is asked for once, as soon as everything has been counted.
+            if let (Some(predict), false) = (predict, counted.swap(true, Ordering::Relaxed)) {
+                m.set_prediction(predict(items_total, bytes_total));
+            }
+            let mut s = m.update(secs, items_done, items_total, bytes_done, bytes_total);
+            if phase == DeletePhase::Done {
+                s.fraction = 1.0;
+                s.eta_secs = Some(0.0);
+                s.eta_confidence = 1.0;
+            }
+            s
+        });
+        DeleteProgress {
         id,
         phase,
         permanent,
@@ -321,10 +361,12 @@ pub fn delete_with_progress(
         first_name: first_name.clone(),
         action: "delete".into(),
         result: String::new(),
-        bytes_done: 0,
-        bytes_total: 0,
+        bytes_done,
+        bytes_total,
         skipped: 0,
         conflict: None,
+        stats,
+        }
     };
     let finished = AtomicBool::new(false);
 
@@ -642,6 +684,27 @@ mod tests {
         assert_eq!(last.items_done, last.items_total);
         assert_eq!(last.error_count, 0);
         assert_eq!(last.first_name, "a");
+    }
+
+    #[test]
+    fn a_delete_reports_speed_and_asks_for_a_first_guess_once() {
+        let d = tree();
+        let asked = std::sync::atomic::AtomicU32::new(0);
+        let guess = |files: u64, bytes: u64| {
+            asked.fetch_add(1, Ordering::Relaxed);
+            assert_eq!((files, bytes), (9, 4 * 5), "asked with what was counted");
+            None
+        };
+        let reports = Mutex::new(Vec::new());
+        let targets = vec![d.path().join("a"), d.path().join("6.txt")];
+        delete_with_meter(1, &targets, true, 2, Arc::new(AtomicBool::new(false)), Some(&guess), |p| reports.lock().push(p));
+        let reports = reports.into_inner();
+        assert_eq!(asked.load(Ordering::Relaxed), 1);
+        assert!(reports.iter().filter(|p| p.phase == DeletePhase::Scanning).all(|p| p.stats.is_none()), "nothing to measure while counting");
+        let last = reports.last().unwrap();
+        assert_eq!((last.bytes_done, last.bytes_total), (4 * 5, 4 * 5));
+        let s = last.stats.as_ref().expect("a finished delete has its numbers");
+        assert_eq!((s.fraction, s.eta_secs), (1.0, Some(0.0)));
     }
 
     #[test]

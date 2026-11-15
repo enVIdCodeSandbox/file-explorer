@@ -974,6 +974,12 @@ export const useStore = create<State>((set, get) => ({
       // Keep the graph light on very long jobs: thin out every other sample.
       series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
     }
+    // A job that was over before a second sample could be taken (an instant move, one small file)
+    // still gets a graph: from nothing to its average speed.
+    if (p.phase === "done" && (series[p.id]?.length ?? 0) < 2) {
+      const t = Math.max(p.elapsedSecs, 0.05);
+      series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t, filesPerSec: p.avgFilesPerSec, bytesPerSec: p.avgBytesPerSec }] };
+    }
     set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
     if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
       inFlight.delete(`t${p.id}`);
@@ -1015,8 +1021,18 @@ export const useStore = create<State>((set, get) => ({
   onDeleteProgress: (p) => {
     if (forcedJobs.has(p.id)) return;
     const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.itemsTotal > 0 ? p.itemsDone / p.itemsTotal : 0;
-    const shown = steadyFraction(get().shown[p.id] ?? 0, { phase: p.phase === "done" ? "done" : "running", fraction: p.phase === "scanning" ? 0 : ratio });
-    set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown } });
+    const shown = steadyFraction(get().shown[p.id] ?? 0, { phase: p.phase === "done" ? "done" : "running", fraction: p.phase === "scanning" ? 0 : (p.stats?.fraction ?? ratio) });
+    // The same speed graph a transfer has: items (shown as files) and bytes per second over time.
+    let series = get().series;
+    const list = series[p.id] ?? [];
+    if (p.phase === "running" && p.stats && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.2) {
+      const next = [...list, { t: p.elapsedSecs, filesPerSec: p.stats.itemsPerSec, bytesPerSec: p.stats.bytesPerSec }];
+      series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
+    }
+    if (p.phase === "done" && p.stats && (series[p.id]?.length ?? 0) < 2) {
+      series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t: Math.max(p.elapsedSecs, 0.05), filesPerSec: p.stats.avgItemsPerSec, bytesPerSec: p.stats.avgBytesPerSec }] };
+    }
+    set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown }, series });
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
     if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);

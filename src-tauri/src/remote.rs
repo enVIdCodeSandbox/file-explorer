@@ -354,6 +354,8 @@ struct Reporter {
     ask: Arc<crate::state::JobAsk>,
     /// Files left alone so far (shown as "skipped", not as failures).
     skipped: AtomicU64,
+    /// Speed and time left, measured like a transfer's.
+    meter: parking_lot::Mutex<fast_core::meter::Meter>,
 }
 
 impl Reporter {
@@ -363,6 +365,9 @@ impl Reporter {
 
     #[allow(clippy::too_many_arguments)]
     fn emit_with(&self, phase: DeletePhase, items: (u64, u64), bytes: (u64, u64), current: &str, result: &str, errors: &[(String, String)], conflict: Option<fast_core::transfer::ConflictInfo>) {
+        let stats = (phase != DeletePhase::Scanning).then(|| {
+            self.meter.lock().update(self.started.elapsed().as_secs_f64(), items.0, items.1, bytes.0, bytes.1).finish(phase == DeletePhase::Done)
+        });
         let _ = self.app.emit(
             "delete-progress",
             DeleteProgress {
@@ -383,6 +388,7 @@ impl Reporter {
                 bytes_total: bytes.1,
                 skipped: self.skipped.load(Ordering::Relaxed),
                 conflict,
+                stats,
             },
         );
     }
@@ -480,7 +486,7 @@ fn spawn_job(app: AppHandle, st: Shared, action: &'static str, selected: u64, fi
     st.deletes.lock().insert(id, cancel.clone());
     let ask = Arc::new(crate::state::JobAsk::default());
     st.job_asks.lock().insert(id, ask.clone());
-    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)), ask, skipped: AtomicU64::new(0) };
+    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)), ask, skipped: AtomicU64::new(0), meter: parking_lot::Mutex::new(fast_core::meter::Meter::new(None)) };
     std::thread::Builder::new()
         .name(format!("remote-{id}"))
         .spawn(move || {

@@ -455,6 +455,9 @@ mod tests {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let mut c = Client::new("127.0.0.1", port, false, "", "");
         let err = c.call("GET", "/", &[], b"").err().unwrap().to_string();
-        assert!(err.contains("Could not connect"), "{err}");
+        // The port was free a moment ago, but another test may have taken it since (macOS hands out
+        // the same numbers quickly), and then the connection is reset instead of refused. Either way
+        // the person gets a sentence that names the server, not a bare system error.
+        assert!(err.contains("Could not connect") || err.contains("Lost the connection to 127.0.0.1"), "{err}");
     }
 }

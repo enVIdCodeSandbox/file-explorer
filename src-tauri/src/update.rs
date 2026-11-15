@@ -213,6 +213,7 @@ impl Job {
                 bytes_total: total,
                 skipped: 0,
                 conflict: None,
+                stats: None,
             },
         );
     }

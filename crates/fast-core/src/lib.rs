@@ -25,6 +25,7 @@ pub mod index;
 pub mod indexset;
 pub mod locks;
 pub mod media;
+pub mod meter;
 pub mod openwith;
 pub mod ops;
 pub mod phone;

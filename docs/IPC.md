@@ -134,7 +134,7 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 | Event | Meaning |
 |---|---|
 | `transfer-progress` | A transfer job's `Progress` snapshot (rate set by `transfer.progressIntervalMs` or the resource budget) |
-| `delete-progress` | Progress of a delete job |
+| `delete-progress` | Progress of a delete, archive, server or update job. `stats` (`JobStats`: items/bytes per second, `etaSecs`, `etaConfidence`, `fraction`, average and peak speed, `typicalSecs`, `samples`) is absent while items are still being counted and for update downloads. A finished delete or archive job is added to the transfer history (`History::record_job`, route `<delete>`, `<trash>`, `<compress>` or `<extract>`). |
 | `job-finished` | A transfer or delete ended (done, cancelled or failed) |
 | `dir-updated` | A cached folder listing changed after a background re-read |
 | `fs-changed` | The watcher saw changes in a watched folder |

@@ -331,6 +331,25 @@ export interface DeleteProgress {
   skipped?: number;
   /** A file that exists on both sides, waiting for an answer. */
   conflict?: ConflictInfo | null;
+  /** Speed, time left and typical time, measured the way a transfer's are. */
+  stats?: JobStats | null;
+}
+
+/** What the card of a delete, archive or server job shows beside its bar. */
+export interface JobStats {
+  itemsPerSec: number;
+  bytesPerSec: number;
+  etaSecs: number | null;
+  /** 0 = rough guess, 1 = settled. */
+  etaConfidence: number;
+  fraction: number;
+  avgItemsPerSec: number;
+  avgBytesPerSec: number;
+  peakItemsPerSec: number;
+  peakBytesPerSec: number;
+  /** What similar earlier jobs took. */
+  typicalSecs: number | null;
+  samples: number;
 }
 
 export type ServerProtocol = "ftp" | "sftp" | "dav";

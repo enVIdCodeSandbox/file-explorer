@@ -1175,7 +1175,20 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
             let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
             let started = std::time::Instant::now();
             let first_name = paths.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let snapshot = |phase: DeletePhase, done: u64, total: u64, current: &str, result: &str, error: Option<String>| DeleteProgress {
+            let meter = parking_lot::Mutex::new(fast_core::meter::Meter::new(None));
+            let predicted = AtomicBool::new(false);
+            let snapshot = |phase: DeletePhase, done: u64, total: u64, current: &str, result: &str, error: Option<String>| {
+                let secs = started.elapsed().as_secs_f64();
+                let stats = (phase != DeletePhase::Scanning).then(|| {
+                    let mut m = meter.lock();
+                    if total > 0 && !predicted.swap(true, Ordering::Relaxed) {
+                        if let Some(first) = paths.first() {
+                            m.set_prediction(job_prediction(&st, &action, first, total, 0));
+                        }
+                    }
+                    m.update(secs, done, total, 0, 0).finish(phase == DeletePhase::Done)
+                });
+                DeleteProgress {
                 id,
                 phase,
                 permanent: false,
@@ -1193,6 +1206,8 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
                 bytes_total: 0,
                 skipped: 0,
                 conflict: None,
+                stats,
+                }
             };
             let _ = app.emit("delete-progress", snapshot(DeletePhase::Scanning, 0, 0, "", "", None));
             let mut last = std::time::Instant::now();
@@ -1218,7 +1233,12 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
             let was_cancelled = cancel.load(Ordering::Relaxed);
             let made = outcome.as_ref().ok().map(|(p, _)| p.clone());
             let final_progress = match outcome {
-                Ok((path, files)) => snapshot(DeletePhase::Done, files, files, "", &path.to_string_lossy(), None),
+                Ok((path, files)) => {
+                    if let Some(first) = paths.first() {
+                        remember_job(&st, &action, first, false, files, 0, started.elapsed().as_secs_f64(), 0);
+                    }
+                    snapshot(DeletePhase::Done, files, files, "", &path.to_string_lossy(), None)
+                }
                 Err(_) if was_cancelled => snapshot(DeletePhase::Cancelled, 0, 0, "", "", None),
                 Err(e) => snapshot(DeletePhase::Failed, 0, 0, "", "", Some(e.to_string())),
             };
@@ -1281,6 +1301,32 @@ pub async fn check_conflicts(sources: Vec<String>, dest_dir: String) -> CmdResul
             .collect())
     })
     .await
+}
+
+/// What similar earlier jobs of this kind ("delete", "trash", "compress", "extract") took.
+pub(crate) fn job_prediction(st: &Shared, kind: &str, path: &Path, files: u64, bytes: u64) -> Option<fast_core::history::Prediction> {
+    if !st.settings.read().transfer.remember_device_speeds {
+        return None;
+    }
+    let route = fast_core::meter::route_for(kind, path, &st.drives.read());
+    st.history.lock().predict(&fast_core::meter::query_for(route, files, bytes), now_secs())
+}
+
+/// Let a finished delete, compress or unpack teach the time estimates, if the person allows it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remember_job(st: &Shared, kind: &str, path: &Path, is_move: bool, files: u64, bytes: u64, secs: f64, errors: u64) {
+    let (remember, limit) = {
+        let s = st.settings.read();
+        (s.transfer.remember_device_speeds, s.transfer.history_limit)
+    };
+    if !remember || limit == 0 {
+        return;
+    }
+    let route = fast_core::meter::route_for(kind, path, &st.drives.read());
+    let mut history = st.history.lock();
+    if history.record_job(&route, is_move, files, bytes, secs, errors, now_secs(), limit) {
+        let _ = history.save(&st.paths.history);
+    }
 }
 
 /// Remember how a finished transfer went, if the person allows it.
@@ -1554,10 +1600,19 @@ pub async fn delete_start(
         .name(format!("delete-{id}"))
         .spawn(move || {
             let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-            let live = app.clone();
-            ops::delete_with_progress(id, &paths, permanent, threads, cancel, move |p| {
-                let _ = live.emit("delete-progress", p);
+            let kind = if permanent { "delete" } else { "trash" };
+            let first = paths.first().cloned().unwrap_or_default();
+            let predict = |files: u64, bytes: u64| job_prediction(&st, kind, &first, files, bytes);
+            let last: parking_lot::Mutex<Option<ops::DeleteProgress>> = parking_lot::Mutex::new(None);
+            ops::delete_with_meter(id, &paths, permanent, threads, cancel, Some(&predict), |p| {
+                *last.lock() = Some(p.clone());
+                let _ = app.emit("delete-progress", p);
             });
+            if let Some(p) = last.into_inner() {
+                if p.phase == ops::DeletePhase::Done {
+                    remember_job(&st, kind, &first, true, p.items_done, p.bytes_done, p.elapsed_secs, p.error_count);
+                }
+            }
             st.deletes.lock().remove(&id);
             fs_changed(&app, &st, ops::parents(&paths));
         })
