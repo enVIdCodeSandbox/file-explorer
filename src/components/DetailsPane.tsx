@@ -13,10 +13,10 @@ import { Thumb } from "./Thumb";
 function Row({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   if (value == null || value === "") return null;
   return (
-    <>
+    <div className="details-row">
       <dt>{label}</dt>
       <dd className={mono ? "mono" : undefined}>{value}</dd>
-    </>
+    </div>
   );
 }
 

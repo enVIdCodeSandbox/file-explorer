@@ -10,6 +10,9 @@ import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
 import { ChooseDetails } from "./components/ChooseDetails";
+import { TerminalPanel } from "./components/Terminal";
+import { isMobileOs } from "./util/native";
+import { toggleTerminalPanel, useTerminal } from "./terminal/state";
 import { PickBar } from "./components/PickBar";
 import { Setup } from "./components/Setup";
 import { latestLabel } from "./components/UpdatesPanel";
@@ -42,6 +45,8 @@ export default function App() {
   const tasksOpen = useStore((s) => s.tasksOpen);
   const settings = useStore((s) => s.settings);
   const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
+  const terminalOpen = useTerminal((s) => s.open);
+  const info = useStore((s) => s.info);
   // "Start with the computer" is an operating-system setting: keep it in step with the choice made in Settings.
   const startWithComputer = useStore((s) => (s.unsaved ? null : s.settings?.advanced["tasks.startWithComputer"] === true));
   useEffect(() => {
@@ -207,6 +212,7 @@ export default function App() {
         case "toggleDetails": s.updateSettings((x) => void (x.appearance.showDetailsPane = !x.appearance.showDetailsPane)); break;
         case "toggleTypeFind": s.updateSettings((x) => void (x.advanced["files.typeFind"] = !adv<boolean>(x, "files.typeFind"))); s.showToast(adv<boolean>(useStore.getState().settings, "files.typeFind") ? "Type to find is on." : "Type to find is off."); break;
         case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
+        case "toggleTerminal": toggleTerminalPanel(); break;
         case "thisPc": s.navigate(THIS_PC); break;
         case "home": s.navigate(HOME); break;
         case "toggleHidden": s.updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)); break;
@@ -283,9 +289,11 @@ export default function App() {
       case "commands":
         return <CommandBar vertical={vertical} onFilter={setFilterAnchor} />;
       case "sidebar":
-        return <Sidebar />;
+        return <Sidebar horizontal={dock === "top" || dock === "bottom"} />;
       case "details":
         return showDetails && loc.kind === "folder" ? <DetailsPane /> : null;
+      case "terminal":
+        return terminalOpen && !isMobileOs(info?.os) ? <TerminalPanel dock={dock} /> : null;
     }
   };
 

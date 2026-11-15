@@ -49,6 +49,8 @@ import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
+import { toggleTerminalPanel, useTerminal } from "../terminal/state";
+import { isMobileOs } from "../util/native";
 import { FileIcon, Icon } from "./Icons";
 import { useTasksRunning } from "./Tasks";
 
@@ -1099,7 +1101,7 @@ export function serverUrl(s: SavedServer): string {
   return `${scheme}://${user}${s.host}${port}${path}`;
 }
 
-export function Sidebar() {
+export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   const pins = useStore((s) => s.pins);
   const places = useStore((s) => s.places);
   const drives = useStore((s) => s.drives);
@@ -1112,10 +1114,11 @@ export function Sidebar() {
   const { navigate, newTab, togglePin, addRecent, showToast, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const terminalOpen = useTerminal((t) => t.open);
 
   const chrome = useChrome();
   const nm = (t: string) => SIDE_NAMES[chrome][t] ?? t;
-  const collapsed = appearance.sidebarCollapsed;
+  const collapsed = appearance.sidebarCollapsed && !horizontal;
   const width = collapsed ? COLLAPSED_WIDTH : (dragWidth ?? appearance.sidebarWidth);
 
   // The Frequently used list follows what you open; refresh it when you navigate.
@@ -1323,8 +1326,8 @@ export function Sidebar() {
   };
 
   return (
-    <div className="sidebar-wrap" style={{ width }}>
-    <nav className="sidebar" aria-label="Places" data-collapsed={collapsed || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
+    <div className="sidebar-wrap" data-horizontal={horizontal || undefined} style={horizontal ? undefined : { width }}>
+    <nav className="sidebar" aria-label="Places" data-collapsed={(!horizontal && collapsed) || undefined} data-horizontal={horizontal || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
       <button
         className="side-item side-toggle"
         title={collapsed ? "Expand the navigation pane" : "Collapse to icons"}
@@ -1368,16 +1371,25 @@ export function Sidebar() {
           </button>
         </div>}
       </div>
+      {!isMobileOs(info?.os) && (
+        <div className="side-group side-terminal" key="terminal">
+          {collapsed && <div className="side-divider" />}
+          <button className="side-item" data-active={terminalOpen || undefined} title="Show or hide the built-in terminal (Ctrl+`)" aria-pressed={terminalOpen} onClick={toggleTerminalPanel}>
+            <Icon name="terminal" />
+            {!collapsed && <span className="side-label">Terminal</span>}
+          </button>
+        </div>
+      )}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </nav>
-    <div
+    {!horizontal && <div
       className="sidebar-resizer"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize navigation pane"
       onPointerDown={startResize}
       onDoubleClick={() => updateSettings((s) => void (s.appearance.sidebarCollapsed = !s.appearance.sidebarCollapsed))}
-    />
+    />}
     </div>
   );
 }

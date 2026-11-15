@@ -6,9 +6,13 @@ what works on each system, and how to look at the phone layout without a phone.
 
 ## Getting a package from GitHub
 
-The **Mobile** workflow (`.github/workflows/mobile.yml`) runs on every push to
-`main`, on version tags, and by hand: **Actions > Mobile > Run workflow**. When
-it finishes, the run's page lists two downloads under **Artifacts**:
+The mobile packages are built by `.github/workflows/mobile.yml`, which the **Build**
+workflow runs on every push to `main` and on version tags. They are attached to the
+same release as the desktop installers (the Releases page), as `FAST-File-Explorer-android.apk`
+and `FAST-File-Explorer-unsigned.ipa`. A phone build that fails does not stop the release: it
+is published without that file, with a warning in the run. You can also run the phone builds
+alone by hand (**Actions > Mobile > Run workflow**); the run's page then lists two downloads
+under **Artifacts**:
 
 | Artifact | Contains | Install with |
 | --- | --- | --- |

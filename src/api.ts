@@ -801,6 +801,17 @@ export const api = {
   showProperties: (paths: string[]) => invoke<boolean>("show_properties", { paths }),
   historyInfo: () => invoke<HistoryInfo>("history_info"),
   transferMethods: () => invoke<MethodsReport>("transfer_methods"),
+  termInfo: () => invoke<TermInfo>("term_info"),
+  termList: () => invoke<TermSession[]>("term_list"),
+  termSpawn: (cwd: string, cols: number, rows: number, title: string | null, elevated: boolean) => invoke<string>("term_spawn", { cwd, cols, rows, title, elevated }),
+  termAttach: (sid: string) => invoke<{ data: string; info: TermSession }>("term_attach", { sid }),
+  termInput: (sid: string, data: string) => invoke<void>("term_input", { sid, data }),
+  termResize: (sid: string, cols: number, rows: number) => invoke<void>("term_resize", { sid, cols, rows }),
+  termDo: (action: "kill" | "remove" | "clear" | "title", sid: string, title?: string) => invoke<void>("term_do", { action, sid, title: title ?? null }),
+  termOpenUrl: (url: string) => invoke<void>("term_open_url", { url }),
+  termPopout: (sid: string) => invoke<void>("term_popout", { sid }),
+  termTranscript: (sid: string, forget: boolean) => invoke<string | null>("term_transcript", { sid, forget }),
+  termSweepTranscripts: (keep: string[]) => invoke<void>("term_sweep_transcripts", { keep }),
   columnValues: (dir: string, names: string[], keys: string[]) => invoke<{ name: string; values: Record<string, string> }[]>("column_values", { dir, names, keys }),
   networkMap: (remote: string, letter: string | null) => invoke<string | null>("network_map", { remote, letter }),
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
@@ -918,7 +929,31 @@ export interface UpdateInfo {
   lastCheck: number;
 }
 
+/** One shell kept by the terminal host. */
+export interface TermSession {
+  sid: string;
+  title: string;
+  cwd: string;
+  program: string;
+  cols: number;
+  rows: number;
+  alive: boolean;
+  exit: number | null;
+  elevated: boolean;
+  created: number;
+  bytes: number;
+}
+
+export interface TermInfo {
+  appElevated: boolean;
+  os: string;
+  defaultShell: string;
+}
+
 export interface BackendEvents {
+  "term-out": { sid: string; data: string };
+  "term-exit": { sid: string; code: number | null };
+  "term-sessions": null;
   "update-available": UpdateInfo;
   "update-ready": UpdateInfo;
   "transfer-progress": Progress;

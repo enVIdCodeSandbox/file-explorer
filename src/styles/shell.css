@@ -850,3 +850,83 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .methods-table th { font-weight: 600; color: var(--text-muted); }
 .methods-table tr[data-available="no"] td:first-child { color: var(--text-muted); }
 .methods-table caption { text-align: left; font-weight: 600; padding: 6px 8px 2px; }
+
+/* ---- Panels on any side ------------------------------------------------- */
+/* Drag handle on the edge of a docked panel that can be resized. */
+.panel-resizer { position: absolute; z-index: 6; }
+.panel-resizer[data-edge="top"] { left: 0; right: 0; top: -3px; height: 6px; cursor: row-resize; }
+.panel-resizer[data-edge="bottom"] { left: 0; right: 0; bottom: -3px; height: 6px; cursor: row-resize; }
+.panel-resizer[data-edge="left"] { top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; }
+.panel-resizer[data-edge="right"] { top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; }
+.panel-resizer:hover, .panel-resizer:active { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+/* The details pane fills whatever panel it is in. */
+.panel .details-pane, .popout-panel .details-pane { width: 100%; height: 100%; box-sizing: border-box; border-left: 0; }
+.dock-left > .panel[data-panel="details"], .dock-right > .panel[data-panel="details"] { width: var(--details-width); flex: none; }
+.dock-right > .panel[data-panel="details"] { border-left: 1px solid var(--border); }
+.dock-left > .panel[data-panel="details"] { border-right: 1px solid var(--border); }
+.dock-top > .panel[data-panel="details"], .dock-bottom > .panel[data-panel="details"] { height: 210px; flex: none; }
+.dock-top > .panel[data-panel="details"] { border-bottom: 1px solid var(--border); }
+.dock-bottom > .panel[data-panel="details"] { border-top: 1px solid var(--border); }
+.details-row { display: contents; }
+
+/* Across the top or bottom: the picture on the left, the facts in columns that run across the width. */
+.dock-top .details-pane, .dock-bottom .details-pane { display: flex; flex-direction: row; align-items: flex-start; gap: 22px; overflow-x: auto; overflow-y: hidden; padding: 12px 16px; }
+.dock-top .details-pane > *, .dock-bottom .details-pane > * { flex: none; }
+.dock-top .details-preview, .dock-bottom .details-preview { width: 130px; height: 130px; margin: 0; }
+.dock-top .details-title, .dock-bottom .details-title { width: 190px; margin: 0; }
+.dock-top .details-list, .dock-bottom .details-list { display: grid; grid-template-columns: none; grid-template-rows: repeat(var(--detail-rows, 8), auto); grid-auto-flow: column; grid-auto-columns: minmax(230px, max-content); column-gap: 28px; row-gap: 4px; align-content: start; max-height: 100%; }
+.dock-top .details-row, .dock-bottom .details-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; max-width: 360px; }
+.dock-top .details-section, .dock-bottom .details-section { margin: 0; padding: 0 0 0 22px; border-top: 0; border-left: 1px solid var(--border); min-width: 240px; max-height: 100%; overflow-y: auto; }
+.dock-top .details-pane > p, .dock-bottom .details-pane > p { margin: 0; align-self: center; }
+
+/* Navigation pane along the top or bottom: its groups side by side. */
+.dock-top .sidebar-wrap, .dock-bottom .sidebar-wrap { width: 100%; height: auto; }
+.sidebar[data-horizontal] { display: flex; flex-direction: row; align-items: flex-start; gap: 6px 18px; overflow-x: auto; overflow-y: hidden; padding: 6px 12px; }
+.sidebar[data-horizontal] .side-toggle { display: none; }
+.sidebar[data-horizontal] .side-item { width: auto; flex: none; height: 28px; padding: 0 10px; }
+.sidebar[data-horizontal] .side-group { display: flex; align-items: center; gap: 2px; flex: none; }
+.sidebar[data-horizontal] .side-heading { margin: 0 4px 0 6px; white-space: nowrap; }
+.sidebar[data-horizontal] .side-section { display: flex; flex-direction: row; align-items: center; gap: 2px; max-height: none; overflow: visible; }
+.sidebar[data-horizontal] .side-label { flex: none; max-width: 180px; }
+.sidebar[data-horizontal] .side-item[data-active]::before { left: 8px; right: 8px; top: auto; bottom: 0; width: auto; height: 3px; }
+.sidebar[data-horizontal] .side-divider { width: 1px; height: 20px; margin: 4px 6px; }
+
+/* Vertical tab strip: a row for each tab, not a tall card. */
+.title-bar[data-vertical] .tab-slot, .tab-strip[data-vertical] .tab-slot { flex: none; width: 100%; }
+.title-bar[data-vertical] .tab, .tab-strip[data-vertical] .tab { flex: none; width: 100%; height: var(--tab-height, 34px); }
+.tab-strip[data-vertical] .tab-new { align-self: flex-start; }
+
+/* ---- Built-in terminal -------------------------------------------------- */
+.dock-top > .panel[data-panel="terminal"], .dock-bottom > .panel[data-panel="terminal"] { height: 280px; flex: none; }
+.dock-left > .panel[data-panel="terminal"], .dock-right > .panel[data-panel="terminal"] { width: 420px; flex: none; }
+.dock-bottom > .panel[data-panel="terminal"] { border-top: 1px solid var(--border); }
+.dock-top > .panel[data-panel="terminal"] { border-bottom: 1px solid var(--border); }
+.dock-left > .panel[data-panel="terminal"] { border-right: 1px solid var(--border); }
+.dock-right > .panel[data-panel="terminal"] { border-left: 1px solid var(--border); }
+.popout-panel[data-panel="terminal"] { width: min(90vw, 760px); height: 60vh; }
+.term { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; min-width: 0; background: var(--bg); }
+.term-bar { display: flex; align-items: center; gap: 2px; flex: none; height: 32px; padding: 0 6px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.term-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.term-tabs::-webkit-scrollbar { display: none; }
+.term-tab { display: flex; align-items: center; gap: 6px; flex: none; max-width: 200px; height: 26px; padding: 0 4px 0 9px; border-radius: var(--radius-small); color: var(--text-muted); cursor: default; }
+.term-tab:hover { background: var(--surface-hover); color: var(--text); }
+.term-tab[data-active] { background: var(--surface-active); color: var(--text); }
+.term-tab[data-ended] .term-tab-name { text-decoration: line-through; opacity: 0.7; }
+.term-tab-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--font-size-small); }
+.term-tab-count { font-size: 10px; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, var(--text) 14%, transparent); }
+.term-tab-x { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; opacity: 0.6; }
+.term-tab-x:hover { opacity: 1; background: var(--surface-hover); }
+.term-body { flex: 1; min-height: 0; min-width: 0; position: relative; display: flex; }
+.term-group { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.term-group[hidden] { display: none; }
+.term-group[data-side="column"] { flex-direction: column; }
+.term-pane { flex: 1; min-width: 0; min-height: 0; position: relative; padding: 4px 0 0 8px; background: var(--bg); }
+.term-group[data-side="row"] .term-pane + .term-pane { border-left: 1px solid var(--border); }
+.term-group[data-side="column"] .term-pane + .term-pane { border-top: 1px solid var(--border); }
+.term-pane[data-focused] { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 60%, transparent); }
+.term-group:has(.term-pane + .term-pane) .term-pane:not([data-focused]) { opacity: 0.88; }
+.term-screen { position: absolute; inset: 4px 0 0 8px; }
+.term .xterm { height: 100%; }
+.term .xterm-viewport { background-color: transparent !important; }
+.side-terminal { margin-top: 2px; }

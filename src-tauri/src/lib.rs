@@ -6,6 +6,8 @@ mod native_dnd;
 mod remote;
 mod smartclear;
 mod state;
+#[cfg(desktop)]
+mod terminal;
 mod tasks;
 mod update;
 
@@ -55,6 +57,8 @@ pub fn run() {
             let state = Arc::new(AppState {
                 listings: Mutex::new(ListingCache::new(budget.listing_cache_dirs)),
                 started: std::time::Instant::now(),
+                #[cfg(desktop)]
+                terminal: Default::default(),
                 thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
                 drives: RwLock::new(session.drives.clone()),
                 devices: RwLock::new(Vec::new()),
@@ -252,6 +256,28 @@ pub fn run() {
             commands::transfer_resolve,
             commands::check_access,
             commands::elevated_start,
+            #[cfg(desktop)]
+            terminal::term_info,
+            #[cfg(desktop)]
+            terminal::term_list,
+            #[cfg(desktop)]
+            terminal::term_spawn,
+            #[cfg(desktop)]
+            terminal::term_attach,
+            #[cfg(desktop)]
+            terminal::term_input,
+            #[cfg(desktop)]
+            terminal::term_resize,
+            #[cfg(desktop)]
+            terminal::term_do,
+            #[cfg(desktop)]
+            terminal::term_popout,
+            #[cfg(desktop)]
+            terminal::term_open_url,
+            #[cfg(desktop)]
+            terminal::term_transcript,
+            #[cfg(desktop)]
+            terminal::term_sweep_transcripts,
             commands::delete_start,
             commands::delete_control,
             commands::show_properties,
@@ -307,6 +333,8 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 tasks::shutdown(app);
+                #[cfg(desktop)]
+                terminal::on_exit(app);
                 use tauri::Manager;
                 if let Some(state) = app.try_state::<state::Shared>() {
                     state.shares.stop_all();
@@ -329,6 +357,18 @@ pub fn run() {
 /// Headless mode used for operations run through the OS's administrator
 /// prompt: do one job and exit. Returns the process exit code.
 pub fn run_helper(args: &[String]) -> i32 {
+    // The terminal host (keeps the shells) and a window attached to one of them.
+    #[cfg(desktop)]
+    if let Some(i) = args.iter().position(|a| a == "--terminal-host") {
+        return fast_core::terminal::host::serve(std::path::Path::new(args.get(i + 1).map(String::as_str).unwrap_or(".")));
+    }
+    #[cfg(desktop)]
+    if let Some(i) = args.iter().position(|a| a == "--terminal-attach") {
+        return match (args.get(i + 1), args.get(i + 2)) {
+            (Some(dir), Some(sid)) => fast_core::terminal::attach::run(std::path::Path::new(dir), sid),
+            _ => 2,
+        };
+    }
     // What the uninstaller runs: stop being the system's file manager.
     #[cfg(desktop)]
     if args.iter().any(|a| a == "--restore-file-manager") {

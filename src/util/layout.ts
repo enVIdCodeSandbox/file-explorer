@@ -1,7 +1,7 @@
 // The window is made of panels that can be docked, floated, popped out,
 // collapsed or hidden. This file holds the model; Layout.tsx draws it.
 
-export type PanelId = "tabs" | "address" | "commands" | "sidebar" | "details";
+export type PanelId = "tabs" | "address" | "commands" | "sidebar" | "details" | "terminal";
 export type Dock = "top" | "bottom" | "left" | "right" | "float" | "popout" | "hidden";
 
 export interface PanelState {
@@ -14,6 +14,9 @@ export interface PanelState {
   y: number;
   w: number;
   h: number;
+  /** Width (left and right docks) or height (top and bottom docks) in pixels after the person
+   *  drags the panel's edge; unset means the panel's own default. */
+  size?: number;
 }
 
 export type Layout = Record<PanelId, PanelState>;
@@ -25,12 +28,16 @@ export interface PanelInfo {
   docks: Dock[];
 }
 
+/** Panels whose edge can be dragged to change their size when docked. */
+export const RESIZABLE: PanelId[] = ["details", "terminal"];
+
 export const PANELS: PanelInfo[] = [
   { id: "tabs", label: "Tabs", icon: "plus", docks: ["top", "bottom", "left", "right", "float", "popout", "hidden"] },
   { id: "address", label: "Address and search", icon: "search", docks: ["top", "bottom", "float", "popout", "hidden"] },
   { id: "commands", label: "Command bar", icon: "more", docks: ["top", "bottom", "left", "right", "float", "popout", "hidden"] },
-  { id: "sidebar", label: "Navigation pane", icon: "sidebar", docks: ["left", "right", "float", "popout", "hidden"] },
-  { id: "details", label: "Details pane", icon: "details", docks: ["right", "left", "bottom", "float", "popout", "hidden"] },
+  { id: "sidebar", label: "Navigation pane", icon: "sidebar", docks: ["left", "right", "top", "bottom", "float", "popout", "hidden"] },
+  { id: "details", label: "Details pane", icon: "details", docks: ["right", "left", "bottom", "top", "float", "popout", "hidden"] },
+  { id: "terminal", label: "Terminal", icon: "terminal", docks: ["bottom", "top", "left", "right", "float", "popout", "hidden"] },
 ];
 
 export const DOCK_LABEL: Record<Dock, string> = {
@@ -60,6 +67,7 @@ export const DEFAULT_LAYOUT: Layout = {
   commands: base("top", 2),
   sidebar: base("left", 0),
   details: base("right", 0),
+  terminal: base("bottom", 0, { w: 520, h: 300 }),
 };
 
 export interface Preset {
@@ -132,6 +140,7 @@ export function resolveLayout(saved: unknown): Layout {
     if (typeof s.dock === "string" && info.docks.includes(s.dock as Dock)) cur.dock = s.dock as Dock;
     for (const k of ["order", "x", "y", "w", "h"] as const) if (typeof s[k] === "number" && Number.isFinite(s[k])) cur[k] = s[k] as number;
     if (typeof s.collapsed === "boolean") cur.collapsed = s.collapsed;
+    if (typeof s.size === "number" && Number.isFinite(s.size) && s.size >= 80) cur.size = Math.min(4000, Math.round(s.size));
   }
   return out;
 }
@@ -149,7 +158,10 @@ export function moveTo(layout: Layout, id: PanelId, dock: Dock, at?: { x: number
   if (!info.docks.includes(dock)) return layout;
   const next = structuredClone(layout);
   const order = Math.max(-1, ...panelsAt(next, dock).map((p) => next[p].order)) + 1;
+  // A size dragged for one edge means nothing on another (a height is not a width).
+  const flipsAxis = (dock === "left" || dock === "right") !== (next[id].dock === "left" || next[id].dock === "right");
   next[id] = { ...next[id], dock, order, collapsed: dock === "float" ? false : next[id].collapsed };
+  if (flipsAxis) delete next[id].size;
   if (at) {
     next[id].x = Math.max(0, Math.round(at.x));
     next[id].y = Math.max(0, Math.round(at.y));

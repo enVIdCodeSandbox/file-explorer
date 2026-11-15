@@ -42,6 +42,8 @@ pub mod shellmenu;
 pub mod sysreport;
 pub mod settings;
 pub mod share;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod terminal;
 pub mod thumbs;
 pub mod transfer;
 pub mod treemap;

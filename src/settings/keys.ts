@@ -19,6 +19,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "toggleSidebar", label: "Collapse or expand the navigation pane", default: "Ctrl+B" },
   { id: "toggleDetails", label: "Show or hide the details pane", default: "Alt+P" },
   { id: "toggleTypeFind", label: "Turn type-to-find on or off (not set by default)", default: "" },
+  { id: "toggleTerminal", label: "Show or hide the built-in terminal", default: "Ctrl+`" },
   { id: "editLayout", label: "Edit the window layout", default: "Ctrl+Alt+L" },
   { id: "thisPc", label: "Go to This PC", default: "Ctrl+Shift+C" },
   { id: "home", label: "Go to Home", default: "Alt+Home" },

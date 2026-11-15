@@ -54,6 +54,8 @@ pub struct Paths {
     /// Downloaded builds waiting to be installed, and what was already announced.
     pub update_dir: PathBuf,
     pub update_state: PathBuf,
+    /// The terminal host's address file, and what each terminal printed before the app closed.
+    pub terminal: PathBuf,
 }
 
 impl Paths {
@@ -78,6 +80,7 @@ impl Paths {
             task_state: config.join("task-state.json"),
             update_dir: cache.join("updates"),
             update_state: config.join("update-state.json"),
+            terminal: config.join("terminal"),
         }
     }
 }
@@ -231,6 +234,8 @@ pub struct AppState {
     pub watch_sets: Mutex<HashMap<String, Vec<PathBuf>>>,
     pub thumb_permits: Arc<tokio::sync::Semaphore>,
     pub started: std::time::Instant,
+    #[cfg(desktop)]
+    pub terminal: crate::terminal::Bridge,
 }
 
 pub type Shared = Arc<AppState>;

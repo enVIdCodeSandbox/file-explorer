@@ -245,7 +245,7 @@ interface State {
   /** The window layout is being edited on screen. */
   layoutEdit: boolean;
   /** The popped-out panel that is open, if any. */
-  popout: "tabs" | "address" | "commands" | "sidebar" | "details" | null;
+  popout: import("./util/layout").PanelId | null;
   /** A command for the folder view to carry out (select all, rename…). */
   command: { name: FolderCommand; tick: number } | null;
   runCommand: (name: FolderCommand) => void;

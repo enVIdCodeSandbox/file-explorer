@@ -22,6 +22,7 @@ const PATHS: Record<string, string> = {
   pin: "M9.5 2l4.5 4.5-2 .5-2.5 2.5.5 3L8 10.5 3.5 15M8 10.5 5.5 8l3-.5L11 5",
   terminal: "M2 3h12v10H2zM4.5 6l2.5 2-2.5 2M8.5 10.5h3",
   details: "M2 3h12v10H2zM10 3v10",
+  split: "M2 3h12v10H2zM8 3v10",
   grid: "M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z",
   list: "M2 4h12M2 8h12M2 12h12",
   chart: "M2 2h12v12H2zM2 9h6V2M8 9v5M8 6h6",

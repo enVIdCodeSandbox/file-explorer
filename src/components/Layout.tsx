@@ -2,7 +2,7 @@
 // panels, a tray for popped-out ones, and the on-screen editing mode.
 
 import { useEffect, useRef, useState } from "react";
-import { DOCK_LABEL, PANELS, PRESETS, moveTo, nudge, panelsAt, resolveLayout, zoneAt, type Dock, type Layout, type PanelId } from "../util/layout";
+import { DOCK_LABEL, PANELS, PRESETS, RESIZABLE, moveTo, nudge, panelsAt, resolveLayout, zoneAt, type Dock, type Layout, type PanelId } from "../util/layout";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { useStore } from "../store";
@@ -66,6 +66,40 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
     if (w !== state.w || h !== state.h) setLayout(patchPanel(layout, id, { w, h }));
   };
 
+  // A docked panel that can be resized is as wide (left and right) or as tall (top and bottom) as the person made it.
+  const sideDock = state.dock === "left" || state.dock === "right";
+  const edgeDock = sideDock || state.dock === "top" || state.dock === "bottom";
+  const resizable = RESIZABLE.includes(id) && edgeDock && !collapsed;
+  const [dragSize, setDragSize] = useState<number | null>(null);
+  const size = dragSize ?? state.size;
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = ref.current;
+    if (!el) return;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    const start = sideDock ? el.offsetWidth : el.offsetHeight;
+    const at = sideDock ? e.clientX : e.clientY;
+    // Dragging towards the middle of the window makes the panel bigger.
+    const sign = state.dock === "right" || state.dock === "bottom" ? -1 : 1;
+    const room = (el.closest(".shell") as HTMLElement | null)?.getBoundingClientRect();
+    const max = Math.max(160, Math.round((sideDock ? room?.width ?? 1200 : room?.height ?? 800) * 0.8));
+    let latest = start;
+    const move = (m: PointerEvent) => {
+      latest = Math.max(120, Math.min(max, Math.round(start + sign * ((sideDock ? m.clientX : m.clientY) - at))));
+      setDragSize(latest);
+    };
+    const up = () => {
+      target.removeEventListener("pointermove", move as EventListener);
+      target.removeEventListener("pointerup", up);
+      setDragSize(null);
+      setLayout(patchPanel(layout, id, { size: latest }));
+    };
+    target.addEventListener("pointermove", move as EventListener);
+    target.addEventListener("pointerup", up);
+  };
+
   const showGrip = edit || floating;
   return (
     <div
@@ -75,9 +109,28 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
       data-dock={state.dock}
       data-collapsed={collapsed || undefined}
       data-edit={edit || undefined}
-      style={floating ? { left: state.x, top: state.y, width: state.w, height: collapsed ? undefined : state.h } : undefined}
+      style={
+        floating
+          ? { left: state.x, top: state.y, width: state.w, height: collapsed ? undefined : state.h }
+          : resizable && size
+            ? sideDock
+              ? { width: size }
+              : { height: size }
+            : undefined
+      }
       onPointerUp={floating ? saveSize : undefined}
     >
+      {resizable && (
+        <div
+          className="panel-resizer"
+          data-edge={state.dock === "bottom" ? "top" : state.dock === "top" ? "bottom" : state.dock === "left" ? "right" : "left"}
+          role="separator"
+          aria-orientation={sideDock ? "vertical" : "horizontal"}
+          aria-label={`Resize ${info.label}`}
+          onPointerDown={startResize}
+          onDoubleClick={() => setLayout(patchPanel(layout, id, { size: undefined }))}
+        />
+      )}
       {showGrip && (
         <div className="panel-grip" onPointerDown={(e) => onGrab(id, e)} onContextMenu={openMenu} title="Drag to move this panel. Right-click for more.">
           <Icon name="more" size={12} />

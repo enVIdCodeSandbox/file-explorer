@@ -10,6 +10,7 @@
 //
 // Nothing is read from or written to this computer: files, storage and settings are made up.
 
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { AppInfo, Drive, FileEntry, Session, Settings } from "../api";
 import { applyPatch, perfPresetsFor, recommendMobilePerf, UI_PRESETS } from "../settings/presets";
@@ -22,6 +23,8 @@ const look = q.get("look") ?? (mobile ? (os === "ios" ? "apple" : "google") : os
 const root = os === "ios" ? "/var/mobile/Containers/Data/Application/1234/Documents" : os === "windows" ? "C:\\Users\\me" : "/storage/emulated/0";
 const sep = os === "windows" ? "\\" : "/";
 const day = 86_400_000;
+const fakeSessions = new Map<string, Record<string, unknown>>();
+const fakeOutput = new Map<string, string>();
 const now = Date.now();
 
 type Node = { dir?: Record<string, Node>; size?: number; age?: number };
@@ -159,6 +162,34 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   history_info: () => ({ entries: 0, bytes: 0 }),
   transfer_methods: () => ({ installed: ["native", "robocopy", "smb", "rclone"], stats: [{ method: "native", uses: 14, avgBytesPerSec: 210e6 }, { method: "robocopy", uses: 6, avgBytesPerSec: 340e6 }], jobs: [{ kind: "delete", uses: 9, avgItemsPerSec: 4200 }, { kind: "trash", uses: 12, avgItemsPerSec: 6.5 }, { kind: "extract", uses: 2, avgItemsPerSec: 800 }], instantMoves: 31 }),
   column_values: (a) => (a.names as string[]).map((n, i) => ({ name: n, values: Object.fromEntries((a.keys as string[]).map((k) => [k, k === "accessed" ? String(1.7e12 + i * 3.6e6) : k === "items" ? String(i * 3) : `${k} ${i}`])) })),
+  get_details: (a) => {
+    const path = String(a.path);
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const isDir = !/\.[a-z0-9]+$/i.test(name);
+    return { name, path, parent: path.slice(0, Math.max(0, path.length - name.length - 1)), kind: isDir ? "folder" : "file", size: isDir ? 0 : 88_000, sizeOnDisk: isDir ? null : 90_112, created: now - 40 * day, modified: now - 2 * day, accessed: now - day, readonly: false, hidden: false, extension: isDir ? null : name.split(".").pop() ?? null, mime: isDir ? null : "application/octet-stream", symlinkTarget: null, unix: null, attributes: ["Archive"], image: null, itemCount: isDir ? 12 : null, volume: { name: "Local Disk", mount: "C:\\", fs: "NTFS", total: 512e9, available: 190e9, media: "ssd", removable: false, readOnly: false, online: true }, media: [] };
+  },
+  folder_stats: () => ({ files: 403, folders: 97, totalBytes: 9.66e9, maxDepth: 6, largest: [], byType: [{ extension: "zip", count: 79, bytes: 5.16e9 }, { extension: "mp4", count: 8, bytes: 2.15e9 }], newest: null, oldest: null, emptyFolders: 3, complete: true }),
+  term_info: () => ({ appElevated: false, os, defaultShell: os === "windows" ? "pwsh" : "bash" }),
+  term_list: () => [...fakeSessions.values()],
+  term_spawn: (a) => {
+    const sid = `s${fakeSessions.size + 1}`;
+    fakeSessions.set(sid, { sid, title: os === "windows" ? "pwsh" : "bash", cwd: String(a.cwd), program: "sh", cols: 80, rows: 24, alive: true, exit: null, elevated: !!a.elevated, created: Date.now(), bytes: 0 });
+    fakeOutput.set(sid, `\x1b[32m${String(a.cwd)}\x1b[0m $ `);
+    return sid;
+  },
+  term_attach: (a) => ({ data: btoa(fakeOutput.get(String(a.sid)) ?? ""), info: fakeSessions.get(String(a.sid)) }),
+  term_input: (a) => {
+    const sid = String(a.sid);
+    const typed = atob(String(a.data));
+    const line = typed === "\r" ? "\r\n\x1b[36mhello from the preview\x1b[0m\r\n$ " : typed;
+    fakeOutput.set(sid, (fakeOutput.get(sid) ?? "") + line);
+    void emit("term-out", { sid, data: btoa(line) });
+    return null;
+  },
+  term_resize: () => null,
+  term_do: (a) => { if (a.action === "remove") fakeSessions.delete(String(a.sid)); if (a.action === "clear") fakeOutput.set(String(a.sid), ""); return null; },
+  term_transcript: () => null,
+  term_sweep_transcripts: () => null,
   clipboard_get: () => ({ paths: [], cut: false, virtualFiles: false }),
   check_conflicts: () => [],
   resource_usage: () => ({ cpuPercent: 3, memoryMb: 120, cores: system.cpus, totalRamMb: system.totalRamMb }),

@@ -9,6 +9,7 @@ export type AdvControl =
   | { type: "number"; min: number; max: number; step?: number; unit?: string }
   | { type: "select"; options: { value: string; label: string }[] }
   | { type: "color" }
+  | { type: "text"; placeholder?: string }
   | { type: "methods" };
 
 export interface AdvDef {
@@ -30,13 +31,27 @@ const sel = (def: string, key: string, group: string, label: string, options: [s
   key, group, label, description, control: { type: "select", options: options.map(([value, l]) => ({ value, label: l })) }, default: def,
 });
 
+const text = (def: string, key: string, group: string, label: string, placeholder?: string, description?: string): AdvDef => ({
+  key, group, label, description, control: { type: "text", placeholder }, default: def,
+});
+
 const col = (def: string, key: string, group: string, label: string, description?: string): AdvDef => ({
   key, group, label, description, control: { type: "color" }, default: def,
 });
 
-export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks"] as const;
+export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks", "Terminal panel"] as const;
 
 export const ADVANCED: AdvDef[] = [
+  // ---- Terminal panel (the built-in terminal; the Terminal section is for the outside one) ----
+  yn(false, "terminal.popOutOnClose", "Terminal panel", "Pop the terminal out when the app closes", "When you close the app, each running terminal opens in the system's own terminal app (Windows Terminal or the console on Windows, Terminal on a Mac, your terminal program on Linux) and keeps running, with everything it has printed. Off by default: closing the app then ends the terminals, but what they printed is shown again next time."),
+  yn(true, "terminal.restore", "Terminal panel", "Bring back the terminal's tabs and what they printed", "When the app starts again, the terminal panel comes back as it was: the same tabs and splits, showing what each printed. The commands are not run again; each tab gets a fresh shell in the folder it was in. Terminals that are still running (popped out, or after a crash) are reconnected instead."),
+  text("", "terminal.shell", "Terminal panel", "Shell to run", "Default: PowerShell or Command Prompt on Windows, your login shell on Mac and Linux", "For example pwsh, wsl.exe, or \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i. Leave empty for the default."),
+  sel("folder", "terminal.startIn", "Terminal panel", "New terminals start in", [["folder", "The folder being viewed"], ["home", "Your home folder"]]),
+  num(13, "terminal.fontSize", "Terminal panel", "Text size", 8, 32, "px"),
+  num(5000, "terminal.scrollback", "Terminal panel", "Lines kept to scroll back through", 500, 100000, "lines", "In each terminal, on top of what the terminal host keeps for reconnecting (about 2 MB of output each)."),
+  sel("block", "terminal.cursor", "Terminal panel", "Cursor", [["block", "Block"], ["bar", "Bar"], ["underline", "Underline"]]),
+  yn(true, "terminal.cursorBlink", "Terminal panel", "Blinking cursor"),
+  yn(false, "terminal.copyOnSelect", "Terminal panel", "Copy text when it is selected", "Selecting text copies it, as in many Linux terminals. Ctrl+Shift+C and Ctrl+Shift+V always copy and paste."),
   // ---- Tasks (the rest is in the Tasks window) ----
   yn(true, "tasks.enabled", "Tasks", "Run automated tasks", "Turns every automated task on or off. The tasks keep their settings while this is off. Used by the Tasks window and its scheduler."),
   yn(true, "tasks.showButton", "Tasks", "Show the Tasks button in the toolbar", "The button next to Share that opens the Tasks window. The window can also be opened from the right-click menu of a folder."),

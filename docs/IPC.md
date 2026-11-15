@@ -64,6 +64,15 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `create_item` | `createItem` | `dir: String, name: String, folder: bool` | `String` |  |
 | `open_item` | `openItem` | `path: String` | `()` |  |
 | `open_terminal` | `openTerminal` | `path: String, mode: TerminalMode` | `()` |  |
+| `term_info` | `termInfo` | `—` | `TermInfo` | Built-in terminal: starts the terminal host if needed; reports the OS, the default shell and whether the app is elevated. |
+| `term_list` | `termList` | `—` | `Vec<TermSession>` | Shells the terminal host is running (alive or ended but not removed). |
+| `term_spawn` | `termSpawn` | `cwd: String, cols: u16, rows: u16, title: Option<String>, elevated: bool` | `String` | Starts a shell and returns its id. Elevated uses `sudo` on Unix; on Windows it is refused unless the app is elevated. |
+| `term_attach` | `termAttach` | `sid: String` | `{ data, info }` | Base64 snapshot of the shell's kept output. Output after it arrives as `term-out` events. |
+| `term_input` / `term_resize` | `termInput` / `termResize` | `sid, data (base64)` / `sid, cols, rows` | `()` |  |
+| `term_do` | `termDo` | `action: kill\|remove\|clear\|title, sid: String, title: Option<String>` | `()` |  |
+| `term_open_url` | `termOpenUrl` | `url: String` | `()` | http and https only. |
+| `term_popout` | `termPopout` | `sid: String` | `()` | Opens the shell in the system's terminal app. |
+| `term_transcript` / `term_sweep_transcripts` | `termTranscript` / `termSweepTranscripts` | `sid, forget` / `keep` | `Option<String>` / `()` | Output kept from a previous run, for restoring tabs. |
 | `get_settings` | `getSettings` | `—` | `Settings` |  |
 | `set_settings` | `setSettings` | `settings: Settings` | `()` |  |
 | `get_session` | `getSession` | `—` | `Session` |  |

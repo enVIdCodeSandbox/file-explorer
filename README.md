@@ -44,7 +44,7 @@ screen. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Phones and tablets
 
-The same code builds for Android (an `.apk`) and for iPhone and iPad (an unsigned `.ipa`), with a touch layout in three looks: Google, Samsung and Apple. The **Mobile** workflow on GitHub makes both packages. See [docs/MOBILE.md](docs/MOBILE.md) for installing, what works on each system, and how to preview the phone layout on a computer.
+The same code builds for Android (an `.apk`) and for iPhone and iPad (an unsigned `.ipa`), with a touch layout in three looks: Google, Samsung and Apple. The GitHub release includes both packages (the Build workflow runs the Mobile one). See [docs/MOBILE.md](docs/MOBILE.md) for installing, what works on each system, and how to preview the phone layout on a computer.
 
 ## Status
 
