@@ -10,6 +10,14 @@
 //! Drive\shell                ... the same
 //! ```
 //!
+//! Archives (a downloaded `.zip` clicked in a browser's list) are a different thing from
+//! folders: Windows opens them through the file type, not the folder verbs. So the app also
+//! gets its own program entry for archives (`FastFileExplorer.Archive`), is listed under
+//! "Open with" for every archive type, and takes over `.zip`, which Explorer opens as a
+//! "compressed folder" unless something else is chosen. Other archive types keep their
+//! program (7-Zip and the like). If the person ever picked a program for `.zip` in Windows'
+//! own settings, that choice wins and has to be changed there.
+//!
 //! Explorer itself keeps running (it is also the taskbar and the desktop), and
 //! programs that ask Explorer directly, such as a browser's "Show in folder",
 //! still get an Explorer window.
@@ -17,7 +25,7 @@
 use super::*;
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyW, RegDeleteTreeW, RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW, HKEY,
+    RegCloseKey, RegCreateKeyW, RegDeleteKeyValueW, RegDeleteTreeW, RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW, RegSetValueExW, HKEY,
     HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, RRF_RT_REG_SZ,
 };
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
@@ -26,6 +34,9 @@ const VERB: &str = "FastFileExplorer";
 const LABEL: &str = "Open in FAST File Explorer";
 /// The kinds of thing whose default action is taken over: file-system folders, and drives.
 const CLASSES: [&str; 2] = ["Directory", "Drive"];
+const ARCHIVE_PROGID: &str = "FastFileExplorer.Archive";
+/// The file types whose default the app takes over: the ones Explorer itself opens.
+const TAKEN_OVER: [&str; 1] = ["zip"];
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -81,6 +92,25 @@ fn write_default(key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set a named value (empty text) under a key, making the key when it is missing.
+fn write_named(key: &str, name: &str) -> Result<()> {
+    let (wkey, wname, data) = (wide(key), wide(name), wide(""));
+    let rc = unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, wkey.as_ptr(), wname.as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
+    if rc != ERROR_SUCCESS {
+        return Err(failed(key, rc));
+    }
+    Ok(())
+}
+
+fn delete_named(key: &str, name: &str) {
+    let (wkey, wname) = (wide(key), wide(name));
+    unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, wkey.as_ptr(), wname.as_ptr()) };
+}
+
+fn ext_key(ext: &str) -> String {
+    format!("Software\\Classes\\.{ext}")
+}
+
 /// Remove a key's default value (the key itself stays).
 fn clear_default(key: &str) -> Result<()> {
     let wkey = wide(key);
@@ -128,6 +158,7 @@ pub fn status(note: &Saved) -> Status {
         previous: note.previous.get("Directory").cloned(),
         detail,
         limits: vec![
+            "Archives: .zip files open here too. Other archive types keep their program (7-Zip and the like) and list this app under \"Open with\". If a .zip still opens in File Explorer, choose FAST File Explorer once under Settings > Apps > Default apps > .zip.".to_string(),
             "\"Show in folder\" in browsers and many apps asks File Explorer directly and still opens there.".to_string(),
             "Win+E, the taskbar's folder button, Control Panel and other special folders stay with File Explorer.".to_string(),
         ],
@@ -153,8 +184,39 @@ pub fn set_default(note: &mut Saved, exe: &Path, _app_id: &str) -> Result<()> {
             return Err(e);
         }
     }
+    let archives = set_archive_defaults(note, exe);
+    if let Err(e) = archives {
+        let _ = restore(note);
+        return Err(e);
+    }
     announce();
     Ok(())
+}
+
+/// The program entry for archives, its place under "Open with", and the `.zip` default.
+fn set_archive_defaults(note: &mut Saved, exe: &Path) -> Result<()> {
+    let progid = format!("Software\\Classes\\{ARCHIVE_PROGID}");
+    write_default(&progid, "Archive (FAST File Explorer)")?;
+    write_default(&format!("{progid}\\shell\\open\\command"), &format!("\"{}\" \"%1\"", exe.to_string_lossy()))?;
+    for ext in fast_exts() {
+        write_named(&format!("{}\\OpenWithProgids", ext_key(ext)), ARCHIVE_PROGID)?;
+    }
+    for ext in TAKEN_OVER {
+        let key = ext_key(ext);
+        match read_default(&key) {
+            Some(old) if old != ARCHIVE_PROGID => {
+                note.previous.insert(format!("ext.{ext}"), old);
+            }
+            _ => {}
+        }
+        write_default(&key, ARCHIVE_PROGID)?;
+    }
+    Ok(())
+}
+
+/// The plain extensions (no `tar.gz`: Windows files those under `.gz`).
+fn fast_exts() -> impl Iterator<Item = &'static str> {
+    super::ARCHIVE_EXTS.iter().copied().filter(|e| !e.contains('.'))
 }
 
 pub fn restore(note: &mut Saved) -> Result<()> {
@@ -174,6 +236,24 @@ pub fn restore(note: &mut Saved) -> Result<()> {
         if let Err(e) = delete_tree(&format!("{shell}\\{VERB}")) {
             first.get_or_insert(e);
         }
+    }
+    for ext in TAKEN_OVER {
+        let key = ext_key(ext);
+        if read_default(&key).as_deref() == Some(ARCHIVE_PROGID) {
+            let put_back = match note.previous.get(&format!("ext.{ext}")) {
+                Some(old) => write_default(&key, old),
+                None => clear_default(&key),
+            };
+            if let Err(e) = put_back {
+                first.get_or_insert(e);
+            }
+        }
+    }
+    for ext in fast_exts() {
+        delete_named(&format!("{}\\OpenWithProgids", ext_key(ext)), ARCHIVE_PROGID);
+    }
+    if let Err(e) = delete_tree(&format!("Software\\Classes\\{ARCHIVE_PROGID}")) {
+        first.get_or_insert(e);
     }
     announce();
     match first {

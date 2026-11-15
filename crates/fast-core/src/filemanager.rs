@@ -141,9 +141,25 @@ fn text(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// Showing `path`: a folder opens; a file opens its folder with the file highlighted.
-/// With `select`, the item is highlighted in its parent even when it is a folder.
+/// Archives the app opens like folders. Must stay in step with `ARCHIVE_NAME` in src/util/path.ts.
+pub const ARCHIVE_EXTS: [&str; 26] = [
+    "zip", "7z", "rar", "tar", "tgz", "tbz", "tbz2", "txz", "tzst", "gz", "bz2", "xz", "zst", "lz", "lz4", "cab", "iso", "wim", "arj", "lzh", "lha",
+    "cpio", "rpm", "deb", "tar.gz", "tar.xz",
+];
+
+/// Whether a file name is an archive that can be browsed like a folder.
+pub fn is_archive_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ARCHIVE_EXTS.iter().any(|e| lower.len() > e.len() + 1 && lower.ends_with(&format!(".{e}")))
+}
+
+/// Showing `path`: a folder opens; an archive opens as a folder; any other file opens its
+/// folder with the file highlighted. With `select`, the item is highlighted in its parent
+/// even when it is a folder or an archive ("Show in folder").
 pub fn launch_for(path: &Path, select: bool) -> Option<Launch> {
+    if !select && path.is_file() && is_archive_name(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) {
+        return Some(Launch { folder: format!("archive://{}!/", text(path)), select: vec![] });
+    }
     let is_dir = path.is_dir();
     if is_dir && !select {
         return Some(Launch { folder: text(path), select: vec![] });
@@ -182,6 +198,8 @@ pub fn merge(launches: Vec<Launch>) -> Vec<Launch> {
 /// What to show for a command line (`args[0]` is the program).
 ///
 /// * `fast-file-explorer <folder>` opens the folder.
+/// * `fast-file-explorer <archive>` opens the archive like a folder (this is what a double click
+///   on a `.zip` does once the app is its program).
 /// * `fast-file-explorer <file>` opens the file's folder with the file highlighted.
 /// * `--select <path>` (or `--select=<path>`, or Explorer's `/select,<path>`) highlights
 ///   the item in its folder, also when it is a folder.
@@ -569,6 +587,23 @@ mod tests {
             parse_launch(&args(&["report.pdf"]), dir.path()),
             vec![Launch { folder: d.clone(), select: vec![text(&file)] }]
         );
+    }
+
+    #[test]
+    fn an_archive_opens_like_a_folder_unless_it_is_to_be_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("fast-file-explorer-build.zip");
+        std::fs::write(&zip, b"x").unwrap();
+        assert_eq!(
+            parse_launch(&args(&[&text(&zip)]), dir.path()),
+            vec![Launch { folder: format!("archive://{}!/", text(&zip)), select: vec![] }]
+        );
+        // "Show in folder" still shows where it is.
+        assert_eq!(
+            parse_launch(&args(&["--select", &text(&zip)]), dir.path()),
+            vec![Launch { folder: text(dir.path()), select: vec![text(&zip)] }]
+        );
+        assert!(is_archive_name("a.TAR.GZ") && is_archive_name("b.7z") && !is_archive_name(".zip") && !is_archive_name("zip") && !is_archive_name("notes.txt"));
     }
 
     #[test]

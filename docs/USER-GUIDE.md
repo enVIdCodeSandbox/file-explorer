@@ -166,7 +166,7 @@ Settings > General > Default file manager makes folders that other apps open com
 | --- | --- | --- |
 | Linux | Folders opened by other apps, and "Show in folder" in browsers and other apps (the file is highlighted) | A file manager that is already running keeps answering "Show in folder" until it is closed or you sign in again |
 | macOS | Folders opened by other apps; "Reveal in Finder" in apps that honour the system setting | Finder keeps the desktop, and some apps ask Finder directly. The app must be installed in Applications |
-| Windows | Folders and drives opened from other apps, the desktop and shortcuts | "Show in folder" in browsers and many apps asks File Explorer directly. Win+E, the taskbar's folder button, Control Panel and other special folders stay with File Explorer |
+| Windows | Folders and drives opened from other apps, the desktop and shortcuts; `.zip` files (a download clicked in a browser's list opens the zip like a folder) | "Show in folder" in browsers and many apps asks File Explorer directly. Win+E, the taskbar's folder button, Control Panel and other special folders stay with File Explorer |
 
 On Windows, turn it off before removing the app. The `.exe` installer's uninstaller does this by itself; the `.msi` one does not, and folders would be left pointing at a program that is gone. If that happens, install the app again and turn the setting off.
 
@@ -174,11 +174,12 @@ Starting the app while it is already running brings its window forward instead o
 
 ```
 fast-file-explorer <folder>            opens the folder in a new tab
-fast-file-explorer <file>              opens the file's folder with the file highlighted
+fast-file-explorer <archive>           opens the archive (zip, 7z, tar, ...) like a folder
+fast-file-explorer <other file>        opens the file's folder with the file highlighted
 fast-file-explorer --select <path>     highlights the item in its folder, also when it is a folder
 ```
 
-`file://` addresses work wherever a path does.
+`file://` addresses work wherever a path does. On Windows other archive types (7z, rar, tar...) keep their usual program but list this app under "Open with". If a `.zip` still opens in File Explorer, you once chose a program for it in Windows' own settings; change it under Settings > Apps > Default apps > .zip.
 
 **On a phone** there is no single switch. Android offers the app whenever another app opens a folder, taps "Open downloads", or opens a file with "Open with"; choose it there and tap "Always". The settings page has a button to the system page where that choice is cleared. A file opened this way is shown in the app's own viewer, with its folder behind it. iPhone and iPad do not let any app replace Files; the app is listed under Share > "Open in".
 
