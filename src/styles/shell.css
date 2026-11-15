@@ -842,3 +842,11 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 
 /* Minimized or behind other windows with the background saver on: nothing animates. */
 :root[data-background] *, :root[data-background] *::before, :root[data-background] *::after { animation-play-state: paused !important; transition: none !important; }
+
+/* Settings > Advanced > Transfers: which copy method is in use */
+.methods-panel { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.methods-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.methods-table th, .methods-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.methods-table th { font-weight: 600; color: var(--text-muted); }
+.methods-table tr[data-available="no"] td:first-child { color: var(--text-muted); }
+.methods-table caption { text-align: left; font-weight: 600; padding: 6px 8px 2px; }

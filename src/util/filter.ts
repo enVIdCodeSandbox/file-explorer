@@ -16,11 +16,27 @@ export function configureSort(opts: { natural: boolean; caseSensitive: boolean }
   });
 }
 
-export function sortEntries(entries: FileEntry[], key: SortKey, asc: boolean, foldersFirst: boolean): FileEntry[] {
+/** Where to read a column's value when it comes from the files themselves (see util/columns). */
+export interface ExtraValues {
+  kind: "text" | "date" | "size" | "number";
+  get: (name: string) => string | undefined;
+}
+
+export function sortEntries(entries: FileEntry[], key: SortKey, asc: boolean, foldersFirst: boolean, extra?: ExtraValues): FileEntry[] {
   const dir = asc ? 1 : -1;
   const cmp = (a: FileEntry, b: FileEntry): number => {
     if (foldersFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     let r = 0;
+    if (extra) {
+      const x = extra.get(a.name), y = extra.get(b.name);
+      // Items with no value for it go last when ascending, first when descending (like blanks in Explorer).
+      if ((x === undefined || x === "") !== (y === undefined || y === "")) return x === undefined || x === "" ? dir : -dir;
+      if (x !== undefined && y !== undefined && x !== "" && y !== "") {
+        r = extra.kind === "text" ? collator.compare(x, y) : (Number(x) || 0) - (Number(y) || 0);
+        return (r || collator.compare(a.name, b.name)) * dir;
+      }
+      return collator.compare(a.name, b.name) * dir;
+    }
     if (key === "size") r = a.size - b.size;
     else if (key === "modified") r = (a.modified ?? 0) - (b.modified ?? 0);
     else if (key === "created") r = (a.created ?? 0) - (b.created ?? 0);

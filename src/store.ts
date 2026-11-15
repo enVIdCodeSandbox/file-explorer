@@ -26,6 +26,9 @@ import {
   type TransferOp,
   type TransferSpec,
 } from "./api";
+import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
+import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
+import { loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
 import { syncDetailsPane } from "./util/layout";
@@ -35,12 +38,34 @@ import { HOME, THIS_PC, splitArchive, baseName, insideArchive, isInside, isAppLo
 import { moveGroupBlock } from "./util/tabs";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
+import { isFiltering } from "./util/filter";
+
+/** The columns shown by default: what was chosen last, or the widths saved before columns could be chosen. */
+function loadColumnSet(): ColumnSet {
+  try {
+    const raw = localStorage.getItem("fast.columnSet");
+    if (raw) return normalizeSet(JSON.parse(raw));
+    const old = localStorage.getItem("fast.columns");
+    if (old) return setFromLegacyWidths(JSON.parse(old));
+  } catch {
+    /* fall through to the defaults */
+  }
+  return DEFAULT_SET;
+}
+function saveColumnSet(set: ColumnSet) {
+  try {
+    localStorage.setItem("fast.columnSet", JSON.stringify(set));
+  } catch {
+    /* kept until the app closes */
+  }
+}
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 export const GROUP_COLORS = ["#4cc2ff", "#6ccb5f", "#ffb347", "#ff7b72", "#c38fff", "#f778ba", "#9aa0a6"];
 
-export type SortKey = "name" | "modified" | "created" | "type" | "size" | "extension";
+/** A column's id (see util/columns.ts): the folder can be ordered by any column it shows. */
+export type SortKey = string;
 
 /** Narrowing applied to the folder being viewed (reset when you leave it). */
 export interface FilterState {
@@ -162,6 +187,8 @@ interface State {
   deletes: Record<number, DeleteProgress>;
   /** Speed history per transfer id, for the graphs. */
   series: Record<number, Sample[]>;
+  /** The method the latest job of each kind used (by the kind's name), for Settings > Advanced > Transfers. */
+  lastMethods: Record<string, { method: string; what: string }>;
   /** Highest progress shown so far per job, so a bar never goes backwards. */
   shown: Record<number, number>;
   /** The transfers window is expanded (otherwise just the small cards). */
@@ -178,6 +205,11 @@ interface State {
   insertTabs: (locations: string[], index?: number) => void;
   sort: { key: SortKey; asc: boolean };
   filter: FilterState;
+  /** The columns shown where a folder has none of its own. */
+  columnSet: ColumnSet;
+  /** Sort order, filter and columns remembered for each folder. */
+  folderViews: FolderViews;
+  chooseDetailsOpen: boolean;
   /** A view picked for the open folder only (when views are not shared between folders). */
   folderView: number | null;
   /** Desktop, Documents, Downloads… for "Send to". */
@@ -300,6 +332,8 @@ interface State {
   dismissTransfer: (id: number) => void;
   dismissDelete: (id: number) => void;
   setSort: (sort: { key: SortKey; asc: boolean }) => void;
+  /** Change the columns: for the open folder (or every folder when views are not kept per folder), or for all folders. */
+  setColumns: (set: ColumnSet, scope: "here" | "all") => void;
   setFilter: (patch: Partial<FilterState> | null) => void;
   setViewLevel: (level: number) => void;
   refreshFrequent: () => void;
@@ -459,6 +493,7 @@ export const useStore = create<State>((set, get) => ({
   selection: [],
   deletes: {},
   series: {},
+  lastMethods: {},
   shown: {},
   transfersOpen: false,
   detached: { settings: false, transfers: false },
@@ -478,6 +513,9 @@ export const useStore = create<State>((set, get) => ({
   },
   sort: { key: "name", asc: true },
   filter: NO_FILTER,
+  columnSet: loadColumnSet(),
+  folderViews: loadViews(),
+  chooseDetailsOpen: false,
   folderView: null,
   frequent: [],
   places: [],
@@ -981,6 +1019,7 @@ export const useStore = create<State>((set, get) => ({
       series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t, filesPerSec: p.avgFilesPerSec, bytesPerSec: p.avgBytesPerSec }] };
     }
     set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
+    if (p.method && p.phase === "running") noteMethod(get, set, "Copy and move", METHOD_NAME[p.method], `to ${p.destDir}`);
     if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
       inFlight.delete(`t${p.id}`);
       wake();
@@ -1033,6 +1072,7 @@ export const useStore = create<State>((set, get) => ({
       series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t: Math.max(p.elapsedSecs, 0.05), filesPerSec: p.stats.avgItemsPerSec, bytesPerSec: p.stats.avgBytesPerSec }] };
     }
     set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown }, series });
+    if (p.method && p.phase === "running") noteMethod(get, set, jobGroup(p.action, p.permanent), p.method, p.firstName);
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
     if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);
@@ -1107,8 +1147,31 @@ export const useStore = create<State>((set, get) => ({
     set({ deletes });
   },
 
+  setColumns: (next, scope) => {
+    const loc = activeLocation();
+    const set_ = normalizeSet(next);
+    if (scope === "all" || !loc || isAppLocation(loc) || !adv<boolean>(get().settings, "files.perFolderView")) {
+      const folderViews = scope === "all" ? withoutColumns(get().folderViews) : get().folderViews;
+      set({ columnSet: set_, folderViews });
+      saveColumnSet(set_);
+      if (scope === "all") saveViews(folderViews);
+      return;
+    }
+    const folderViews = withView(get().folderViews, loc, { columns: set_ });
+    set({ folderViews });
+    saveViews(folderViews);
+  },
+
   setSort: (sort) => {
     set({ sort });
+    // With views kept per folder, the order belongs to this folder alone.
+    const loc = activeLocation();
+    if (loc && !isAppLocation(loc) && adv<boolean>(get().settings, "files.perFolderView")) {
+      const folderViews = withView(get().folderViews, loc, { sort: isDefaultSort(sort, get().settings) ? null : sort });
+      set({ folderViews });
+      saveViews(folderViews);
+      return;
+    }
     // The order is kept for every folder and for the next start.
     if (adv<boolean>(get().settings, "files.rememberSort")) {
       const a = get().settings?.advanced;
@@ -1123,6 +1186,13 @@ export const useStore = create<State>((set, get) => ({
   setFilter: (patch) => {
     const filter = patch ? { ...get().filter, ...patch } : NO_FILTER;
     set({ filter });
+    const loc = activeLocation();
+    if (loc && !isAppLocation(loc) && adv<boolean>(get().settings, "files.perFolderView")) {
+      const folderViews = withView(get().folderViews, loc, { filter: isFiltering(filter) ? { ...filter, subfolders: false } : null });
+      set({ folderViews });
+      saveViews(folderViews);
+      return;
+    }
     // Kept for next time, unless "Use the same filter in every folder" is off.
     try {
       if (adv<boolean>(get().settings, "files.keepFilter")) localStorage.setItem("fast.filter", JSON.stringify({ ...filter, subfolders: false }));
@@ -1983,8 +2053,42 @@ function parentOf(path: string): string {
 // takes effect at once in the open folder.
 useStore.subscribe((s, prev) => {
   if (s.settings?.advanced === prev.settings?.advanced || !s.settings) return;
+  if (adv<boolean>(s.settings, "files.perFolderView")) return;
   if (!adv<boolean>(s.settings, "files.rememberSort")) return;
   const key = adv<string>(s.settings, "files.sortKey") as SortKey;
   const asc = adv<boolean>(s.settings, "files.sortAsc");
   if (s.sort.key !== key || s.sort.asc !== asc) useStore.setState({ sort: { key, asc } });
 });
+
+// ---- Views kept for each folder ---------------------------------------------------
+// Whenever the open folder changes (opening, going back, another tab, the app starting), its own
+// sort order and filter are put in place; a folder with none starts as the defaults say.
+
+export const activeLocation = (): string | null => {
+  const s = useStore.getState();
+  return s.tabs.find((t) => t.id === s.activeTab)?.location ?? null;
+};
+
+const defaultSortOf = (settings: Settings | null) => ({ key: adv<string>(settings, "files.sortKey") as SortKey, asc: adv<boolean>(settings, "files.sortAsc") });
+const isDefaultSort = (sort: { key: SortKey; asc: boolean }, settings: Settings | null) => {
+  const d = defaultSortOf(settings);
+  return sort.key === d.key && sort.asc === d.asc;
+};
+
+let appliedFor: string | null = null;
+let appliedPerFolder = false;
+function applyFolderView() {
+  const s = useStore.getState();
+  const loc = activeLocation();
+  if (!s.ready || !s.settings || !loc) return;
+  const per = adv<boolean>(s.settings, "files.perFolderView");
+  if (loc === appliedFor && per === appliedPerFolder) return;
+  appliedFor = loc;
+  appliedPerFolder = per;
+  if (!per || isAppLocation(loc)) return;
+  const v = s.folderViews[loc];
+  const sort = v?.sort ?? defaultSortOf(s.settings);
+  const filter = v?.filter ?? NO_FILTER;
+  if (sort.key !== s.sort.key || sort.asc !== s.sort.asc || filter !== s.filter) useStore.setState({ sort, filter });
+}
+useStore.subscribe(applyFolderView);

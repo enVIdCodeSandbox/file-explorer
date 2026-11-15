@@ -214,6 +214,7 @@ impl Job {
                 skipped: 0,
                 conflict: None,
                 stats: None,
+                method: "HTTPS download from GitHub".into(),
             },
         );
     }

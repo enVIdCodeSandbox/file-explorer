@@ -175,6 +175,9 @@ pub struct DeleteProgress {
     /// Speed, time left and the graph's numbers, measured the way a transfer's are.
     #[serde(default)]
     pub stats: Option<crate::meter::JobStats>,
+    /// How the job is being carried out (the Recycle Bin, direct removal, SFTP over SSH, a zip writer…).
+    #[serde(default)]
+    pub method: String,
 }
 
 const MAX_REPORTED_ERRORS: usize = 50;
@@ -366,6 +369,7 @@ pub fn delete_with_meter(
         skipped: 0,
         conflict: None,
         stats,
+        method: if permanent { "Direct removal, in parallel".into() } else { "Recycle Bin / Trash, by the system".into() },
         }
     };
     let finished = AtomicBool::new(false);

@@ -867,10 +867,10 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
         checked: VIEW_LEVELS[level] === name,
         run: () => setViewLevel(VIEW_LEVELS.indexOf(name)),
       })),
+      { id: "choose-details", label: "Choose details…", separatorBefore: true, run: () => useStore.setState({ chooseDetailsOpen: true }) },
       {
         id: "details-pane",
         label: "Details pane",
-        separatorBefore: true,
         checked: settings.appearance.showDetailsPane,
         run: () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)),
       },

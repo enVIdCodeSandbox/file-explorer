@@ -333,6 +333,8 @@ export interface DeleteProgress {
   conflict?: ConflictInfo | null;
   /** Speed, time left and typical time, measured the way a transfer's are. */
   stats?: JobStats | null;
+  /** How the job is carried out: the Recycle Bin, direct removal, SFTP over SSH, a zip writer… */
+  method?: string;
 }
 
 /** What the card of a delete, archive or server job shows beside its bar. */
@@ -408,6 +410,17 @@ export interface CacheEntry {
   memoryBytes: number;
   items: number;
   rebuildable: boolean;
+}
+
+export type CopyMethod = "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs";
+
+export interface MethodsReport {
+  installed: CopyMethod[];
+  stats: { method: CopyMethod; uses: number; avgBytesPerSec: number }[];
+  /** Deletes, compresses and unpacks: kind is delete, trash, compress or extract. */
+  jobs: { kind: string; uses: number; avgItemsPerSec: number }[];
+  /** Moves inside one drive that were remembered. */
+  instantMoves: number;
 }
 
 export interface HistoryInfo {
@@ -787,6 +800,8 @@ export const api = {
   deleteControl: (id: number, action: "cancel") => invoke<void>("delete_control", { id, action }),
   showProperties: (paths: string[]) => invoke<boolean>("show_properties", { paths }),
   historyInfo: () => invoke<HistoryInfo>("history_info"),
+  transferMethods: () => invoke<MethodsReport>("transfer_methods"),
+  columnValues: (dir: string, names: string[], keys: string[]) => invoke<{ name: string; values: Record<string, string> }[]>("column_values", { dir, names, keys }),
   networkMap: (remote: string, letter: string | null) => invoke<string | null>("network_map", { remote, letter }),
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
   driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),

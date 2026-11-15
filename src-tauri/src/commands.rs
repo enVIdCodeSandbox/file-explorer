@@ -1207,6 +1207,7 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
                 skipped: 0,
                 conflict: None,
                 stats,
+                method: fast_core::meter::archive_method(&paths.first().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), action == "compress"),
                 }
             };
             let _ = app.emit("delete-progress", snapshot(DeletePhase::Scanning, 0, 0, "", "", None));
@@ -1655,6 +1656,53 @@ pub async fn show_properties(state: State<'_, Shared>, paths: Vec<String>) -> Cm
 #[tauri::command]
 pub fn history_info(state: State<'_, Shared>) -> HistoryInfo {
     state.history.lock().info(&state.paths.history)
+}
+
+/// What the Transfers group in Advanced settings shows about copy methods.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MethodsReport {
+    /// Methods this computer can use at all (tools found on it), the built-in engine first.
+    pub installed: Vec<fast_core::transfer::method::Method>,
+    /// How each has done on this computer's remembered transfers.
+    pub stats: Vec<fast_core::history::MethodStat>,
+    /// How the other kinds of job (delete, trash, compress, unpack) have done.
+    pub jobs: Vec<fast_core::history::JobKindStat>,
+    /// Moves inside one drive that were remembered.
+    pub instant_moves: u32,
+}
+
+#[tauri::command]
+pub async fn transfer_methods(state: State<'_, Shared>) -> CmdResult<MethodsReport> {
+    let st = state.inner().clone();
+    // Looking for the tools runs them once, so it is not done on the interface's thread.
+    blocking(move || {
+        let h = st.history.lock();
+        Ok(MethodsReport { installed: fast_core::transfer::method::installed().to_vec(), stats: h.method_stats(), jobs: h.job_stats(), instant_moves: h.instant_moves() })
+    }).await
+}
+
+/// One row of extra column values.
+#[derive(Serialize)]
+pub struct ColumnRow {
+    pub name: String,
+    pub values: std::collections::BTreeMap<String, String>,
+}
+
+/// The values of the extra Details columns (`keys`) for some items of one folder on this computer.
+#[tauri::command]
+pub async fn column_values(state: State<'_, Shared>, dir: String, names: Vec<String>, keys: Vec<String>) -> CmdResult<Vec<ColumnRow>> {
+    use rayon::prelude::*;
+    let st = state.inner().clone();
+    guard(&st, &dir)?;
+    if fast_core::remote::is_remote(&dir) || fast_core::browse::is_loc(&dir) {
+        return Err("These details are not available for this kind of location.".into());
+    }
+    blocking(move || {
+        let base = PathBuf::from(dir);
+        Ok(names.par_iter().map(|n| ColumnRow { name: n.clone(), values: fast_core::columns::values(&base.join(n), &keys) }).collect())
+    })
+    .await
 }
 
 #[tauri::command]

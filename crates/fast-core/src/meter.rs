@@ -125,6 +125,41 @@ impl Meter {
     }
 }
 
+/// How a job to or from a server travels, by the kind of server at each end.
+pub fn server_method(places: &[&str]) -> String {
+    let mut kinds: Vec<&str> = Vec::new();
+    for p in places {
+        let scheme = p.split("://").next().filter(|_| p.contains("://")).unwrap_or("").to_ascii_lowercase();
+        let k = match scheme.as_str() {
+            "sftp" => "SFTP (over SSH)",
+            "ftp" => "FTP",
+            "dav" | "davs" => "WebDAV",
+            "mtp" => "MTP (phone or camera on a cable)",
+            _ => continue,
+        };
+        if !kinds.contains(&k) {
+            kinds.push(k);
+        }
+    }
+    if kinds.is_empty() { "Server connection".into() } else { kinds.join(" → ") }
+}
+
+/// What reads or writes an archive, by its name.
+pub fn archive_method(archive: &str, writing: bool) -> String {
+    let n = archive.to_ascii_lowercase();
+    let n = n.split('!').next().unwrap_or("");
+    let built_in = |what: &str| format!("Built-in {what} {}", if writing { "writer" } else { "reader" });
+    if n.ends_with(".zip") {
+        built_in("zip")
+    } else if [".tar", ".tgz", ".tbz2", ".tbz", ".txz", ".gz", ".bz2", ".xz", ".zst"].iter().any(|e| n.ends_with(e)) {
+        built_in("tar and gzip / bzip2 / xz")
+    } else if n.ends_with(".7z") {
+        built_in("7z")
+    } else {
+        "7-Zip or bsdtar, whichever is installed".into()
+    }
+}
+
 /// Where a job of this `kind` ("delete", "compress", "extract") runs, for the history. The kind takes
 /// the place of a destination, so deleting is judged against earlier deletes and not against copies.
 pub fn route_for(kind: &str, path: &Path, drives: &[Drive]) -> Route {
@@ -178,6 +213,17 @@ mod tests {
         let s = m.update(0.2, 0, 1000, 0, 0);
         assert_eq!(s.eta_secs.map(|e| e.round()), Some(30.0));
         assert_eq!((s.typical_secs, s.samples), (Some(30.0), 3));
+    }
+
+    #[test]
+    fn says_how_a_job_travels() {
+        assert_eq!(server_method(&["sftp://nas/a", "/home/me"]), "SFTP (over SSH)");
+        assert_eq!(server_method(&["/x", "ftp://h/y"]), "FTP");
+        assert_eq!(server_method(&["sftp://a/x", "davs://b/y"]), "SFTP (over SSH) → WebDAV");
+        assert_eq!(server_method(&["/x", "/y"]), "Server connection");
+        assert_eq!(archive_method("/a/b.zip", true), "Built-in zip writer");
+        assert_eq!(archive_method("archive:///a/b.tar.gz!/docs", false), "Built-in tar and gzip / bzip2 / xz reader");
+        assert!(archive_method("/a/b.rar", false).starts_with("7-Zip"));
     }
 
     #[test]

@@ -356,6 +356,8 @@ struct Reporter {
     skipped: AtomicU64,
     /// Speed and time left, measured like a transfer's.
     meter: parking_lot::Mutex<fast_core::meter::Meter>,
+    /// How the job travels, shown in Settings > Advanced > Transfers.
+    method: String,
 }
 
 impl Reporter {
@@ -389,6 +391,7 @@ impl Reporter {
                 skipped: self.skipped.load(Ordering::Relaxed),
                 conflict,
                 stats,
+                method: self.method.clone(),
             },
         );
     }
@@ -480,13 +483,13 @@ struct Outcome {
     local_dirs: Vec<PathBuf>,
 }
 
-fn spawn_job(app: AppHandle, st: Shared, action: &'static str, selected: u64, first_name: String, body: impl FnOnce(&Reporter) -> CmdResult<Outcome> + Send + 'static) -> CmdResult<u64> {
+fn spawn_job(app: AppHandle, st: Shared, action: &'static str, method: String, selected: u64, first_name: String, body: impl FnOnce(&Reporter) -> CmdResult<Outcome> + Send + 'static) -> CmdResult<u64> {
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     let cancel = Arc::new(AtomicBool::new(false));
     st.deletes.lock().insert(id, cancel.clone());
     let ask = Arc::new(crate::state::JobAsk::default());
     st.job_asks.lock().insert(id, ask.clone());
-    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)), ask, skipped: AtomicU64::new(0), meter: parking_lot::Mutex::new(fast_core::meter::Meter::new(None)) };
+    let reporter = Reporter { app: app.clone(), id, action, selected, first_name, started: Instant::now(), cancel, last: parking_lot::Mutex::new(Instant::now() - Duration::from_secs(1)), ask, skipped: AtomicU64::new(0), method, meter: parking_lot::Mutex::new(fast_core::meter::Meter::new(None)) };
     std::thread::Builder::new()
         .name(format!("remote-{id}"))
         .spawn(move || {
@@ -546,7 +549,8 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
     let first = base_name(&sources[0]);
     let n = sources.len() as u64;
     let st2 = st.clone();
-    spawn_job(app, st, action, n, first, move |rep| {
+    let method = fast_core::meter::server_method(&[sources[0].as_str(), dest.as_str()]);
+    spawn_job(app, st, action, method, n, first, move |rep| {
         let st = st2;
         let done = AtomicU64::new(0);
         let total = AtomicU64::new(0);
@@ -718,7 +722,8 @@ pub async fn remote_remove_start(app: AppHandle, state: State<'_, Shared>, paths
     let first = base_name(&paths[0]);
     let n = paths.len() as u64;
     let st2 = st.clone();
-    spawn_job(app, st, "remote-delete", n, first, move |rep| {
+    let method = fast_core::meter::server_method(&[paths[0].as_str()]);
+    spawn_job(app, st, "remote-delete", method, n, first, move |rep| {
         let st = st2;
         let items = AtomicU64::new(0);
         let on_bytes = |_: u64| {};
@@ -820,7 +825,8 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
     let n = locs.len() as u64;
     let policy: fast_core::transfer::Conflict = serde_json::from_value(serde_json::Value::String(st.settings.read().transfer.conflict.clone())).unwrap_or(fast_core::transfer::Conflict::Ask);
     let st2 = st.clone();
-    spawn_job(app, st, action, n, first, move |rep| {
+    let method = fast_core::meter::archive_method(&sources[0], false);
+    spawn_job(app, st, action, method, n, first, move |rep| {
         let into = if open { st2.paths.remote_tmp.join(format!("archive-{}", rep.id)) } else { PathBuf::from(&dest) };
         std::fs::create_dir_all(&into).map_err(err)?;
         let mut groups: Vec<(PathBuf, Vec<String>)> = Vec::new();
@@ -897,7 +903,8 @@ pub async fn archive_paste_start(app: AppHandle, state: State<'_, Shared>, sourc
     let first = sources.first().map(|s| s.rsplit(['/', '\\']).next().unwrap_or("").to_string()).unwrap_or_default();
     let n = sources.len() as u64;
     let st2 = st.clone();
-    spawn_job(app, st, "pack", n, first, move |rep| {
+    let method = fast_core::meter::archive_method(&dest.archive.to_string_lossy(), true);
+    spawn_job(app, st, "pack", method, n, first, move |rep| {
         let mut out = Outcome::default();
         let mut report = |done: u64, total: u64, current: &str| rep.running((done, total), (0, 0), current);
         // Moves inside the same archive are only renames of entries.

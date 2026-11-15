@@ -8,7 +8,8 @@ export type AdvControl =
   | { type: "toggle" }
   | { type: "number"; min: number; max: number; step?: number; unit?: string }
   | { type: "select"; options: { value: string; label: string }[] }
-  | { type: "color" };
+  | { type: "color" }
+  | { type: "methods" };
 
 export interface AdvDef {
   key: string;
@@ -88,17 +89,20 @@ export const ADVANCED: AdvDef[] = [
   num(15, "files.sizeCacheFreshMin", "Files and lists", "A remembered folder size counts as current for", 0, 10080, "min", "Older sizes are still shown first, then measured again quietly. 0 measures every time."),
   num(20000, "files.sizeCacheMax", "Files and lists", "Folder sizes to remember", 100, 500000, undefined, "The oldest are forgotten first."),
   sel("chooser", "files.noAppAction", "Files and lists", "When no app is set to open a file", [["chooser", "Ask with this app's own chooser"], ["system", "Ask with the system's chooser (Windows; other systems use this app's)"], ["message", "Only say so"]], "Applies when a file type has no program, or its program is gone. Right-click > Open with always shows the chooser."),
-  yn(false, "files.singleClickOpen", "Files and lists", "Open items with a single click"),
+  yn(false, "files.singleClickOpen", "Files and lists", "Open items with a single click", "Files and folders. To do it for folders only, leave this off and turn on the next one."),
+  yn(false, "files.singleClickFolders", "Files and lists", "Open folders with a single click", "A single click on a folder opens it; files still open with a double click. Selecting folders is then done with the selection checkboxes (below) or Ctrl + click."),
+  yn(false, "files.checkboxes", "Files and lists", "Show selection checkboxes", "A checkbox to the left of each item (and a Select all box in the column heading). Clicking an item or its box ticks it; clicking again unticks it. Ticked items stay ticked when you click elsewhere or on empty space. Shift + click turns over every item between the last click and this one: ticked ones become unticked and the others ticked. Space ticks the item the arrow keys are on. Details view and icon views on computers; not on phones."),
+  yn(true, "files.perFolderView", "Files and lists", "Remember sort order, filter and columns for each folder", "Every folder keeps the order, filter and columns you gave it (Details > Choose details). Folders you have not changed use the defaults. Turn off to use one sort order, one filter and one set of columns everywhere, as set by the two options below."),
   yn(false, "files.foldersInNewTab", "Files and lists", "Open folders in a new tab"),
   sel("newTab", "files.middleClick", "Files and lists", "Middle-clicking a folder", [["newTab", "Opens it in a background tab"], ["nothing", "Does nothing"]]),
   sel("decimal", "files.sizeUnits", "Files and lists", "Size units", [["decimal", "KB, MB, GB: 1 MB = 1,000,000 bytes (as on a drive's label)"], ["binary", "KiB, MiB, GiB: 1 MiB = 1,048,576 bytes"], ["windows", "KB, MB, GB, but counted in 1,024s (what Windows Explorer shows)"]]),
   sel("system", "files.dateFormat", "Files and lists", "Dates", [["system", "Match my system"], ["iso", "2026-11-11 19:42"], ["relative", "Today, Yesterday, 3 days ago"]]),
   sel("auto", "files.clock", "Files and lists", "Clock", [["auto", "Match my system"], ["12", "12-hour"], ["24", "24-hour"]]),
   yn(true, "files.openArchives", "Files and lists", "Open archives like folders", "Double-clicking a zip, 7z, rar, tar or similar file shows what is inside it. Items can be opened, copied out or dragged into other programs, and files can be dragged in (zip, tar, 7z and most others; the User guide lists which). Turn off to open archives with another program instead (Open with… and Extract still work)."),
-  yn(true, "files.rememberSort", "Files and lists", "Use the same sort order in every folder", "The column and direction you pick (for example newest first) stay when you open another folder, and are still there next time you start the app. Turn off to start every visit sorted by name."),
+  yn(true, "files.rememberSort", "Files and lists", "Use the same sort order in every folder", "Used only when each folder does not keep its own (above). The column and direction you pick (for example newest first) stay when you open another folder, and are still there next time you start the app. Turn off to start every visit sorted by name."),
   sel("name", "files.sortKey", "Files and lists", "Sorted by", [["name", "Name"], ["modified", "Date modified"], ["created", "Date created"], ["type", "Type"], ["size", "Size"], ["extension", "Extension"]], "Changes when you click a column heading or use Sort."),
   yn(true, "files.sortAsc", "Files and lists", "Sort ascending", "A to Z, oldest first, smallest first. Off reverses it."),
-  yn(true, "files.keepFilter", "Files and lists", "Use the same filter in every folder", "What is typed or ticked in the Filter menu stays when you open another folder, until you clear it. The Filter button shows a dot while one is on. Turn off to start every folder unfiltered."),
+  yn(true, "files.keepFilter", "Files and lists", "Use the same filter in every folder", "Used only when each folder does not keep its own (above). What is typed or ticked in the Filter menu stays when you open another folder, until you clear it. The Filter button shows a dot while one is on. Turn off to start every folder unfiltered."),
   yn(true, "files.rememberView", "Files and lists", "Use the same view in every folder", "The view you pick in the View menu (Details, List, icons of any size) stays when you open another folder, and is still there next time you start the app. Turn off to have a view you pick apply only to the folder you are in; every other folder opens in the view chosen under Appearance > Folder view."),
   yn(true, "files.sortAfterJobs", "Files and lists", "Sort and filter when a job finishes", "When copying, moving or deleting is done, the folders it touched are reloaded and the current sort and filter are applied straight away, so new files land in their sorted place and hidden ones stay hidden. Turn off to leave folders as they are until you refresh."),
   yn(true, "files.selectionBox", "Files and lists", "Selection box", "Drag over empty space in a folder or in search results to select everything the box touches, as in Windows Explorer. Turn off and dragging over empty space only clears the selection."),
@@ -154,6 +158,7 @@ export const ADVANCED: AdvDef[] = [
   yn(false, "notify.sound", "Notifications", "Play a soft beep with each notice"),
 
   // ---- Transfers ----
+  { key: "transfers.methods", group: "Transfers", label: "Transfer methods in use", description: "How every kind of job is being carried out right now: copies and moves (the built-in engine, Robocopy, rsync, rclone), deletes, compressing and unpacking, copies into archives, servers and phones (SFTP over SSH, FTP, WebDAV, MTP) and update downloads. Also what this computer can use and how each has done. The copy method itself is chosen under File transfers > Copy method.", control: { type: "methods" }, default: false },
   yn(true, "transfers.skipIdentical", "Transfers", "Skip files that are already there", "A file at the destination with the same name, size and modified time (and, for files up to 8 MB, the same contents) is the same file: it is kept as it is and skipped, without asking, whatever \"When a file already exists\" says. Turn off to treat it like any other clash."),
   num(4, "transfers.dismissSecs", "Transfers", "Hide a finished transfer after", 0, 120, "sec", "0 keeps it until you close it."),
   yn(false, "transfers.openWindow", "Transfers", "Open the larger transfer window automatically"),

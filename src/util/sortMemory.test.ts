@@ -6,9 +6,9 @@ vi.mock("../api", async (orig) => {
 });
 
 describe("sort, filter and view memory", () => {
-  it("keeps the order across navigation and saves it, and the filter stays unless turned off", async () => {
+  it("with views not kept per folder: keeps the order across navigation and saves it, and the filter stays unless turned off", async () => {
     const { useStore } = await import("../store");
-    const base = { general: {}, appearance: {}, advanced: {}, profiles: [] } as never;
+    const base = { general: {}, appearance: {}, advanced: { "files.perFolderView": false }, profiles: [] } as never;
     useStore.setState({ settings: base, tabs: [{ id: "t", location: "/a", history: ["/a"], historyIndex: 0 }] as never, activeTab: "t" });
     useStore.getState().setSort({ key: "modified", asc: false });
     expect(useStore.getState().settings!.advanced["files.sortKey"]).toBe("modified");
@@ -25,6 +25,31 @@ describe("sort, filter and view memory", () => {
     // Changed in Settings -> applied live.
     useStore.getState().updateSettings((s) => void (s.advanced["files.sortKey"] = "size"));
     expect(useStore.getState().sort.key).toBe("size");
+  });
+
+  it("keeps the order, filter and columns of each folder by default", async () => {
+    const { useStore } = await import("../store");
+    const { DEFAULT_SET } = await import("./columns");
+    const base = { general: {}, appearance: {}, advanced: {}, profiles: [] } as never;
+    useStore.setState({ ready: true, settings: base, folderViews: {}, columnSet: DEFAULT_SET, tabs: [{ id: "t", location: "/a", history: ["/a"], historyIndex: 0 }] as never, activeTab: "t" });
+    useStore.getState().setSort({ key: "modified", asc: false });
+    useStore.getState().setFilter({ text: "x" });
+    useStore.getState().setColumns({ order: ["name", "size", "accessed"], widths: { size: 90 } }, "here");
+    // Nothing leaks into the defaults for other folders…
+    expect(useStore.getState().settings!.advanced["files.sortKey"]).toBeUndefined();
+    expect(useStore.getState().columnSet).toEqual(DEFAULT_SET);
+    useStore.getState().navigate("/b");
+    expect(useStore.getState().sort).toEqual({ key: "name", asc: true });
+    expect(useStore.getState().filter.text).toBe("");
+    // …and the first folder has what it was given when you come back.
+    useStore.getState().navigate("/a");
+    expect(useStore.getState().sort).toEqual({ key: "modified", asc: false });
+    expect(useStore.getState().filter.text).toBe("x");
+    expect(useStore.getState().folderViews["/a"]?.columns?.order).toEqual(["name", "size", "accessed"]);
+    // "All folders" clears the per-folder columns and sets the shared ones.
+    useStore.getState().setColumns({ order: ["name", "type"], widths: {} }, "all");
+    expect(useStore.getState().columnSet.order).toEqual(["name", "type"]);
+    expect(useStore.getState().folderViews["/a"]?.columns).toBeUndefined();
   });
 
   it("keeps the view in every folder, or only in the open one when turned off", async () => {

@@ -157,6 +157,8 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   search: (a) => ({ id: a.id, hits: [], total: 0, truncated: false, indexed: false, tookMs: 1 }),
   locks_list: () => ({ locks: [], hasMain: false, unlocked: [] }),
   history_info: () => ({ entries: 0, bytes: 0 }),
+  transfer_methods: () => ({ installed: ["native", "robocopy", "smb", "rclone"], stats: [{ method: "native", uses: 14, avgBytesPerSec: 210e6 }, { method: "robocopy", uses: 6, avgBytesPerSec: 340e6 }], jobs: [{ kind: "delete", uses: 9, avgItemsPerSec: 4200 }, { kind: "trash", uses: 12, avgItemsPerSec: 6.5 }, { kind: "extract", uses: 2, avgItemsPerSec: 800 }], instantMoves: 31 }),
+  column_values: (a) => (a.names as string[]).map((n, i) => ({ name: n, values: Object.fromEntries((a.keys as string[]).map((k) => [k, k === "accessed" ? String(1.7e12 + i * 3.6e6) : k === "items" ? String(i * 3) : `${k} ${i}`])) })),
   clipboard_get: () => ({ paths: [], cut: false, virtualFiles: false }),
   check_conflicts: () => [],
   resource_usage: () => ({ cpuPercent: 3, memoryMb: 120, cores: system.cpus, totalRamMb: system.totalRamMb }),

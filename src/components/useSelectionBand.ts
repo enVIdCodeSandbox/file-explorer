@@ -16,6 +16,8 @@ interface Options {
   /** A key for each item in list order (names, or paths). */
   keys: string[];
   selected: Set<string>;
+  /** Checkbox mode: what is ticked stays ticked, so the box adds to it instead of replacing it. */
+  sticky?: boolean;
   commit: (next: Set<string>) => void;
   /** The last item the box touched, so the keyboard carries on from there. */
   onLast: (index: number) => void;
@@ -37,7 +39,7 @@ export function useSelectionBand(o: Options) {
     const fastest = settings ? adv<number>(settings, "band.scrollSpeed") : 48;
     if (!on) {
       // No box: a press on empty space only clears the selection (with Ctrl or Shift it keeps it).
-      if (!ev.ctrlKey && !ev.shiftKey && !ev.metaKey) o.commit(new Set());
+      if (!ev.ctrlKey && !ev.shiftKey && !ev.metaKey && !o.sticky) o.commit(new Set());
       return;
     }
     const rect = el.getBoundingClientRect();
@@ -46,7 +48,7 @@ export function useSelectionBand(o: Options) {
     ev.preventDefault();
     el.focus();
     const ctrl = ev.ctrlKey || ev.metaKey;
-    const add = ev.shiftKey;
+    const add = ev.shiftKey || !!o.sticky;
     const before = new Set(o.selected);
     if (!ctrl && !add) o.commit(new Set());
     const startX = ev.clientX - rect.left + el.scrollLeft;

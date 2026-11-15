@@ -256,6 +256,8 @@ pub fn run() {
             commands::delete_control,
             commands::show_properties,
             commands::history_info,
+            commands::transfer_methods,
+            commands::column_values,
             commands::clear_history,
             commands::rename_item,
             commands::create_item,

@@ -341,6 +341,7 @@ function closeTopmost(): boolean {
   if (s.batchRename) return useStore.setState({ batchRename: null }), true;
   if (s.openWith) return s.closeChooser(), true;
   if (s.connect) return s.closeConnect(), true;
+  if (s.chooseDetailsOpen) return useStore.setState({ chooseDetailsOpen: false }), true;
   if (s.lockDialog) return useStore.setState({ lockDialog: null }), true;
   if (s.settingsOpen) return useStore.setState({ settingsOpen: false }), true;
   if (s.transfersOpen) return useStore.setState({ transfersOpen: false }), true;

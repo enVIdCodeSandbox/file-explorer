@@ -3,10 +3,11 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { api, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
+import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
 import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
+import { ALL_METHODS, METHOD_NAME, METHOD_NOTE, jobGroup } from "../util/methods";
 import { isMobileOs, openAppDefaults } from "../util/native";
 import { pickFolder } from "../util/pickFile";
 import { RULES_KEY, cacheRules } from "../util/cacheRules";
@@ -279,6 +280,111 @@ export function LayoutEditor() {
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
+
+/** What each kind of job is carried out with, right now and in general. */
+const OTHER_OPERATIONS: { label: string; kind?: string; method: string }[] = [
+  { label: "Move inside one drive", method: "Rename: nothing is copied" },
+  { label: "Delete permanently", kind: "delete", method: "Direct removal, in parallel" },
+  { label: "Move to the Recycle Bin / Trash", kind: "trash", method: "The operating system, one item at a time" },
+  { label: "Compress to a zip", kind: "compress", method: "Built-in zip writer" },
+  { label: "Unpack an archive", kind: "extract", method: "Built-in readers; 7-Zip or bsdtar for rar, cab, iso and the like" },
+  { label: "Copy into or out of an archive", method: "Built-in archive reader and writer" },
+  { label: "Servers and phones", method: "SFTP over SSH, FTP, WebDAV or MTP, by the kind of server" },
+  { label: "Updates", method: "HTTPS download from GitHub" },
+];
+
+/** Which way every kind of job is being done, what can be used, and how each has done. */
+export function TransferMethodsPanel() {
+  const [report, setReport] = useState<MethodsReport | null>(null);
+  const transfers = useStore((s) => s.transfers);
+  const deletes = useStore((s) => s.deletes);
+  const last = useStore((s) => s.lastMethods);
+  const chosen = useStore((s) => s.settings?.transfer.method ?? "auto");
+  useEffect(() => {
+    void api.transferMethods().then(setReport).catch(() => {});
+  }, [Object.keys(transfers).length, Object.keys(deletes).length]);
+  const live = Object.values(transfers).filter((p) => p.phase === "running" || p.phase === "paused" || p.phase === "scanning");
+  const others = Object.values(deletes).filter((p) => p.phase === "running" || p.phase === "scanning");
+  const stat = (m: CopyMethod) => report?.stats.find((s) => s.method === m);
+  const kindStat = (k?: string) => (k ? report?.jobs.find((j) => j.kind === k) : undefined);
+  const lastEntries = Object.entries(last);
+  return (
+    <div className="methods-panel">
+      <dl className="details-list transfer-facts">
+        <dt>Copy method setting</dt>
+        <dd>{chosen === "auto" ? "Automatic: learns which method is fastest for each pair of drives" : `Always ${METHOD_NAME[chosen as CopyMethod] ?? chosen}, where it can run`}</dd>
+        <dt>In use now</dt>
+        <dd>
+          {live.length + others.length === 0 && <span className="muted">Nothing is running.</span>}
+          {live.map((p) => (
+            <div key={`t${p.id}`} data-testid="method-live">
+              <strong>{p.method ? METHOD_NAME[p.method] : "Choosing…"}</strong>
+              <span className="muted"> · {p.op === "move" ? "moving" : "copying"} {formatCount(p.filesTotal)} item{p.filesTotal === 1 ? "" : "s"} to {p.destDir}{p.strategy === "rename" ? " (instant, same drive)" : ""}</span>
+            </div>
+          ))}
+          {others.map((p) => (
+            <div key={`d${p.id}`} data-testid="method-live">
+              <strong>{p.method || "Working…"}</strong>
+              <span className="muted"> · {jobGroup(p.action, p.permanent).toLowerCase()}: {p.selected === 1 && p.firstName ? p.firstName : `${formatCount(p.selected)} items`}</span>
+            </div>
+          ))}
+        </dd>
+        <dt>Last used</dt>
+        <dd>
+          {lastEntries.length === 0 && <span className="muted">Nothing since the app started.</span>}
+          {lastEntries.map(([group, l]) => (
+            <div key={group}>
+              <span className="muted">{group}: </span>
+              <strong>{l.method}</strong>
+              {l.what && <span className="muted"> · {l.what}</span>}
+            </div>
+          ))}
+        </dd>
+      </dl>
+      <table className="methods-table">
+        <caption>Copying and moving between folders</caption>
+        <thead>
+          <tr><th>Method</th><th>On this computer</th><th>Copies</th><th>Average speed</th></tr>
+        </thead>
+        <tbody>
+          {ALL_METHODS.map((m) => {
+            const ok = report?.installed.includes(m);
+            const st = stat(m);
+            return (
+              <tr key={m} data-available={ok ? "yes" : "no"}>
+                <td title={METHOD_NOTE[m]}>{METHOD_NAME[m]}</td>
+                <td>{report == null ? "…" : ok ? "Available" : <span className="muted">Not available</span>}</td>
+                <td>{st ? formatCount(st.uses) : <span className="muted">0</span>}</td>
+                <td>{st && st.avgBytesPerSec > 0 ? `${formatSize(st.avgBytesPerSec)}/s` : <span className="muted">—</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <table className="methods-table">
+        <caption>Everything else that moves or removes data</caption>
+        <thead>
+          <tr><th>Operation</th><th>Carried out by</th><th>Done</th><th>Average speed</th></tr>
+        </thead>
+        <tbody>
+          {OTHER_OPERATIONS.map((o) => {
+            const st = kindStat(o.kind);
+            const n = o.kind ? (st?.uses ?? 0) : o.label === "Move inside one drive" ? (report?.instantMoves ?? 0) : undefined;
+            return (
+              <tr key={o.label}>
+                <td>{o.label}</td>
+                <td>{o.method}</td>
+                <td>{n === undefined ? <span className="muted">not counted</span> : n > 0 ? formatCount(n) : <span className="muted">0</span>}</td>
+                <td>{st && st.avgItemsPerSec > 0 ? `${st.avgItemsPerSec >= 10 ? formatCount(st.avgItemsPerSec) : st.avgItemsPerSec.toFixed(1)} items/s` : <span className="muted">—</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="muted">Counts and speeds are from the jobs remembered under File transfers. Servers and phones on a cable use their own connection, never one of the copy methods above.</p>
+    </div>
+  );
+}
 
 export function StoragePanel() {
   const [rows, setRows] = useState<CacheEntry[] | null>(null);

@@ -20,11 +20,13 @@ import {
   renamePath,
   showProperties,
   useStore,
-  type SortKey,
 } from "../store";
 import { useSelectionBand } from "./useSelectionBand";
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
-import { formatDate, formatSize, kindOf, typeLabel } from "../util/format";
+import { formatSize, kindOf } from "../util/format";
+import { cellValue } from "../util/cellValue";
+import { flipRange, toggled } from "../util/checkSelect";
+import { columnDef, hideColumn, showColumn, widthOf, type ColumnDef } from "../util/columns";
 import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
 import { taskFromSelection } from "./Tasks";
@@ -37,22 +39,6 @@ import { Thumb } from "./Thumb";
 import { useShellItems } from "./shellMenu";
 import { Icon } from "./Icons";
 import { shareOutside, useMobile } from "../util/device";
-
-/** Pixel widths of the Details columns. The list is only as wide as these,
- *  so there is always empty space on the right to right-click. */
-const DEFAULT_COLUMNS = { name: 420, modified: 170, type: 140, size: 100 };
-type Columns = typeof DEFAULT_COLUMNS;
-const MIN_COLUMN = { name: 140, modified: 110, type: 80, size: 70 };
-
-function loadColumns(): Columns {
-  try {
-    const saved = JSON.parse(localStorage.getItem("fast.columns") ?? "null");
-    if (saved && typeof saved === "object") return { ...DEFAULT_COLUMNS, ...saved };
-  } catch {
-    /* storage unavailable: use the defaults */
-  }
-  return DEFAULT_COLUMNS;
-}
 
 /** How each icon level lays out its items. */
 function layoutFor(level: string, thumbPx: number) {
@@ -104,7 +90,12 @@ export function FileView({ path }: { path: string }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [width, setWidth] = useState(800);
-  const [columns, setColumns] = useState<Columns>(loadColumns);
+  const perFolder = adv<boolean>(settings, "files.perFolderView");
+  // The columns this folder shows: its own choice, else the one for all folders.
+  const columnSet = useStore((s) => (perFolder ? s.folderViews[path]?.columns : undefined) ?? s.columnSet);
+  const [liveWidths, setLiveWidths] = useState<Record<string, number>>({});
+  const checks = adv<boolean>(settings, "files.checkboxes") && !mobile;
+  const singleOpen = (e: FileEntry) => adv<boolean>(settings, "files.singleClickOpen") || (adv<boolean>(settings, "files.singleClickFolders") && e.isDir);
   const anchor = useRef(0);
   const cursor = useRef(0);
   const scroller = useRef<HTMLDivElement>(null);
@@ -211,9 +202,48 @@ export function FileView({ path }: { path: string }) {
         : (current?.entries ?? []),
     [current, folderSizes, wantSizes],
   );
+  // Details read from the files themselves (date accessed, dimensions, artist…), for the columns shown.
+  const noDiskDetails = isRemote(path) || isArchiveLoc(path);
+  const shown = useMemo(() => columnSet.order.map((id) => columnDef(id)).filter((d): d is ColumnDef => !!d), [columnSet]);
+  const sortDef = columnDef(sort.key);
+  const sortNeedsDisk = !noDiskDetails && sortDef?.source === "disk";
+  const wanted = useMemo(() => {
+    const ids = noDiskDetails || !details ? [] : shown.filter((d) => d.source === "disk").map((d) => d.id);
+    if (sortNeedsDisk && !ids.includes(sort.key)) ids.push(sort.key);
+    return ids;
+  }, [shown, noDiskDetails, details, sortNeedsDisk, sort.key]);
+  const [extra, setExtra] = useState<Record<string, Record<string, string>>>({});
+  const asked = useRef(new Set<string>());
+  useEffect(() => {
+    setExtra({});
+    asked.current = new Set();
+  }, [path, version]);
+  const fetchDetails = (names: string[]) => {
+    if (!wanted.length) return;
+    const missing = names.filter((n) => wanted.some((k) => !asked.current.has(`${n}\0${k}`)));
+    for (let at = 0; at < missing.length; at += 200) {
+      const chunk = missing.slice(at, at + 200);
+      for (const n of chunk) for (const k of wanted) asked.current.add(`${n}\0${k}`);
+      void api
+        .columnValues(path, chunk, wanted)
+        .then((rows) =>
+          setExtra((prev) => {
+            const next = { ...prev };
+            for (const r of rows) next[r.name] = { ...next[r.name], ...r.values };
+            return next;
+          }),
+        )
+        .catch(() => {});
+    }
+  };
   const sorted = useMemo(
-    () => (current ? sortEntries(sized, sort.key, sort.asc, settings.general.foldersFirst) : []),
-    [current, sized, sort, settings.general.foldersFirst],
+    () =>
+      current
+        ? sortEntries(sized, sort.key, sort.asc, settings.general.foldersFirst, sortDef && (sortDef.source === "disk" || sortDef.kind === "number") ? { kind: sortDef.kind, get: (name) => extra[name]?.[sort.key] } : undefined)
+        : [],
+    // The fetched values only matter for the order when the order is by one of them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [current, sized, sort, settings.general.foldersFirst, sortNeedsDisk ? extra : null],
   );
   const entries = useMemo(() => applyFilter(sorted, filter), [sorted, filter]);
 
@@ -324,8 +354,11 @@ export function FileView({ path }: { path: string }) {
   // Name keeps its own width and the list does not stretch to the pane's edge (the free
   // space on the right stays free). In a pane too narrow for that, Name gives way first,
   // so there is no sideways scrollbar unless the other columns alone are wider than the pane.
-  const cols = { ...columns, name: Math.max(MIN_COLUMN.name, Math.min(columns.name, width - 14 - columns.modified - columns.type - columns.size)) };
-  const rowsWidth = mobile ? width : cols.name + cols.modified + cols.type + cols.size;
+  const widthFor = (id: string) => liveWidths[id] ?? widthOf(columnSet, id);
+  const othersWidth = shown.slice(1).reduce((sum, d) => sum + widthFor(d.id), 0);
+  const nameWidth = Math.max(140, Math.min(widthFor("name"), width - 14 - othersWidth));
+  const colWidth = (id: string) => (id === "name" ? nameWidth : widthFor(id));
+  const rowsWidth = mobile ? width : nameWidth + othersWidth;
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller.current,
@@ -337,6 +370,21 @@ export function FileView({ path }: { path: string }) {
     overscan: settings.performance.lazyLoading ? (details ? adv<number>(settings, "perf.overscanRows") : 2) : 40,
   });
   useEffect(() => virtualizer.measure(), [rowHeight, virtualizer]);
+  // Ask for the extra details of the rows on screen, a moment after scrolling settles.
+  const visibleRows = virtualizer.getVirtualItems();
+  const firstRow = visibleRows[0]?.index ?? 0;
+  const lastRow = visibleRows.at(-1)?.index ?? 0;
+  useEffect(() => {
+    if (!wanted.length || !current) return;
+    const t = setTimeout(() => fetchDetails(entries.slice(firstRow * columnsPerRow, (lastRow + 1) * columnsPerRow).map((e) => e.name)), 80);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstRow, lastRow, wanted.join(), entries, path]);
+  // Ordering by one of them needs it for every item, not just those on screen.
+  useEffect(() => {
+    if (sortNeedsDisk && current) fetchDetails(current.entries.map((e) => e.name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortNeedsDisk, sort.key, current]);
 
   // ---- Actions ------------------------------------------------------------
   const fullPath = useCallback((name: string) => joinPath(path, name), [path]);
@@ -395,7 +443,8 @@ export function FileView({ path }: { path: string }) {
   /** Right-clicking an unselected item selects just that item first. */
   const selectedPathsWith = (target: FileEntry): string[] => {
     if (selected.has(target.name)) return selectedPaths();
-    setSelected(new Set([target.name]));
+    // With checkboxes the ticked items stay ticked; the menu acts on the one clicked.
+    if (!checks) setSelected(new Set([target.name]));
     return [fullPath(target.name)];
   };
 
@@ -510,13 +559,14 @@ export function FileView({ path }: { path: string }) {
           {
             id: "sort",
             label: "Sort by",
-            children: (["name", "modified", "created", "type", "extension", "size"] as SortKey[]).map((k) => ({
+            children: [...new Set(["name", "modified", "created", "type", "extension", "size", ...shown.map((d) => d.id)])].map((k) => ({
               id: `sort-${k}`,
-              label: { name: "Name", modified: "Date modified", created: "Date created", type: "Type", extension: "Extension", size: "Size" }[k],
+              label: columnDef(k)?.label ?? k,
               checked: sort.key === k,
               run: () => setSort({ key: k, asc: sort.key === k ? !sort.asc : true }),
             })),
           },
+          { id: "chooseDetails", label: "Choose details…", run: () => useStore.setState({ chooseDetailsOpen: true }) },
           { id: "refresh", label: "Refresh", shortcut: "F5", icon: "refresh", separatorBefore: true, run: refresh },
           { id: "copyPath", label: "Copy folder path", icon: "copy", run: () => void navigator.clipboard.writeText(path) },
           { id: "pin", label: pinned ? "Unpin this folder" : "Pin this folder", icon: "pin", run: () => togglePin(path) },
@@ -570,6 +620,7 @@ export function FileView({ path }: { path: string }) {
     geometry: { count: entries.length, details, rowHeight, headerHeight, rowsWidth, columnsPerRow, tileW, tileH },
     keys: useMemo(() => entries.map((e) => e.name), [entries]),
     selected,
+    sticky: checks,
     commit: (next) => commit(next),
     onLast: (i) => {
       cursor.current = i;
@@ -579,13 +630,30 @@ export function FileView({ path }: { path: string }) {
 
   /** Set when a plain press landed on an item inside a multi-selection; see itemProps. */
   const collapseOnClick = useRef<number | null>(null);
-  const selectIndex = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+  const selectIndex = (i: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, fromKeyboard = false) => {
     const entry = entries[i];
     if (!entry) return;
     cursor.current = i;
     const ctrl = e.ctrlKey || e.metaKey;
     // If the selection was changed some other way (select all, a rubber band), what is selected now is the base.
     if (selected !== lastSet.current) base.current = new Set(selected);
+    if (checks) {
+      // Checkbox mode: what is ticked stays ticked. A click ticks or unticks that one item, and
+      // Shift+click turns over every item between the last click and this one (ticked ones become
+      // unticked, the others ticked). The item clicked first keeps the state its click gave it.
+      if (e.shiftKey) {
+        const next = flipRange(entries.map((x) => x.name), base.current, anchor.current, i);
+        commit(next);
+      } else if (fromKeyboard) {
+        anchor.current = i;
+      } else {
+        const next = toggled(selected, entry.name);
+        base.current = new Set(next);
+        anchor.current = i;
+        commit(next);
+      }
+      return;
+    }
     if (e.shiftKey) {
       const [lo, hi] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
       const next = new Set(base.current);
@@ -607,7 +675,7 @@ export function FileView({ path }: { path: string }) {
 
   const moveCursor = (delta: number, shift: boolean) => {
     const i = Math.max(0, Math.min(entries.length - 1, cursor.current + delta));
-    selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: shift });
+    selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: shift }, true);
     virtualizer.scrollToIndex(Math.floor(i / columnsPerRow));
   };
 
@@ -633,6 +701,7 @@ export function FileView({ path }: { path: string }) {
     else if (e.key === "End") moveCursor(entries.length, e.shiftKey);
     else if (e.key === "PageDown") moveCursor(columnsPerRow * 15, e.shiftKey);
     else if (e.key === "PageUp") moveCursor(-columnsPerRow * 15, e.shiftKey);
+    else if (checks && e.key === " " && entries[cursor.current]) selectIndex(cursor.current, { ctrlKey: false, metaKey: false, shiftKey: false });
     else if (e.key === "Enter" && first) open(first);
     else if (e.key === "Backspace" && typeFind && findText) typeInto(e.key);
     else if (e.key === "Backspace") {
@@ -659,7 +728,7 @@ export function FileView({ path }: { path: string }) {
       t.at = now;
       const i = entries.findIndex((x) => x.name.toLowerCase().startsWith(t.text));
       if (i >= 0) {
-        selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false });
+        selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false }, true);
         virtualizer.scrollToIndex(Math.floor(i / columnsPerRow));
       }
     } else handled = false;
@@ -674,7 +743,7 @@ export function FileView({ path }: { path: string }) {
     findTimer.current = setTimeout(() => setFindText(""), adv<number>(settings, "files.typeFindResetSec") * 1000);
     const i = closestIndex(entries.map((x) => x.name), text);
     if (i >= 0) {
-      selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false });
+      selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false }, true);
       virtualizer.scrollToIndex(Math.floor(i / columnsPerRow));
     }
   };
@@ -802,7 +871,7 @@ export function FileView({ path }: { path: string }) {
       // Ctrl and Shift are for choosing several items, not for dragging.
       if (renaming || ev.ctrlKey || ev.shiftKey || ev.metaKey) return;
       beginDrag(ev, () => {
-        if (!selected.has(e.name)) setSelected(new Set([e.name]));
+        if (!selected.has(e.name) && !checks) setSelected(new Set([e.name]));
         return dragPayload(e);
       });
     },
@@ -813,7 +882,10 @@ export function FileView({ path }: { path: string }) {
     onMouseDown: (ev: React.MouseEvent) => {
       collapseOnClick.current = null;
       const plain = ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey;
-      if (plain && selected.size > 1 && selected.has(e.name) && adv<boolean>(settings, "files.keepSelectionOnDrag")) {
+      if (checks && plain && singleOpen(e)) {
+        // A click that opens the item does not also tick it.
+        cursor.current = i;
+      } else if (plain && !checks && selected.size > 1 && selected.has(e.name) && adv<boolean>(settings, "files.keepSelectionOnDrag")) {
         // Pressing on one of several selected items may start a drag of all of them.
         // The selection narrows to this item only if the button is released without dragging.
         collapseOnClick.current = i;
@@ -826,9 +898,9 @@ export function FileView({ path }: { path: string }) {
         collapseOnClick.current = null;
         selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false });
       }
-      if (adv<boolean>(settings, "files.singleClickOpen") && ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey) open(e);
+      if (singleOpen(e) && ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey) open(e);
     },
-    onDoubleClick: () => !adv<boolean>(settings, "files.singleClickOpen") && open(e),
+    onDoubleClick: () => !singleOpen(e) && open(e),
     onMouseEnter: () => onHover(e),
     onAuxClick: (ev: React.MouseEvent) => {
       if (ev.button === 1 && e.isDir && adv<string>(settings, "files.middleClick") === "newTab") newTab(fullPath(e.name), { background: true });
@@ -864,48 +936,93 @@ export function FileView({ path }: { path: string }) {
       <span className="file-name">{display(e)}</span>
     );
 
+  /** The size shown for a folder: its total when folder sizes are on and it has been worked out. */
+  const sizeText = (e: FileEntry) =>
+    !wantSizes || e.isSymlink || isRemote(path) || isArchiveLoc(path) ? "" : folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "…";
+
+  /** The selection checkbox beside an item (Settings > Files and lists > Show selection checkboxes). */
+  const rowCheck = (e: FileEntry, index: number, tile = false) => (
+    <input
+      type="checkbox"
+      className="row-check"
+      data-tile={tile || undefined}
+      aria-label={`Select ${e.name}`}
+      checked={selected.has(e.name)}
+      tabIndex={-1}
+      // The click is handled on the row (it also takes Shift); this only shows the state.
+      onChange={() => {}}
+      onMouseDown={(ev) => {
+        ev.stopPropagation();
+        selectIndex(index, ev);
+      }}
+      onClick={(ev) => ev.stopPropagation()}
+      onDoubleClick={(ev) => ev.stopPropagation()}
+    />
+  );
+
   // ---- Column header with drag-to-resize -------------------------------------
-  const resize = (key: keyof Columns, ev: React.PointerEvent) => {
+  const setWidths = (widths: Record<string, number>) => useStore.getState().setColumns({ ...columnSet, widths: { ...columnSet.widths, ...widths } }, "here");
+  const resize = (def: ColumnDef, ev: React.PointerEvent) => {
     ev.preventDefault();
     ev.stopPropagation();
     const target = ev.currentTarget;
     target.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
-    const real: keyof Columns = key;
-    const sign = 1;
     // Start from the width the column has now (Name may be narrower than it is set to).
-    const start = cols[real];
-    let latest = columns;
+    const start = colWidth(def.id);
+    let latest = start;
     const move = (m: PointerEvent) => {
-      latest = { ...columns, [real]: Math.max(MIN_COLUMN[real], Math.round(start + sign * (m.clientX - startX))) };
-      setColumns(latest);
+      latest = Math.max(def.min, Math.round(start + (m.clientX - startX)));
+      setLiveWidths({ [def.id]: latest });
     };
     const up = () => {
       target.removeEventListener("pointermove", move as EventListener);
       target.removeEventListener("pointerup", up);
-      try {
-        localStorage.setItem("fast.columns", JSON.stringify(latest));
-      } catch {
-        /* not persisted this time */
-      }
+      setLiveWidths({});
+      setWidths({ [def.id]: latest });
     };
     target.addEventListener("pointermove", move as EventListener);
     target.addEventListener("pointerup", up);
   };
 
-  const header = (key: SortKey, label: string, col: keyof Columns) => (
-    <div className="column-cell" key={key} style={{ width: cols[col] }}>
+  const header = (def: ColumnDef) => (
+    <div className="column-cell" key={def.id} style={{ width: colWidth(def.id) }}>
       <button
         className="column-header"
-        data-column={key}
-        data-sorted={sort.key === key ? (sort.asc ? "asc" : "desc") : undefined}
-        onClick={() => setSort({ key, asc: sort.key === key ? !sort.asc : true })}
+        data-column={def.id}
+        data-sorted={sort.key === def.id ? (sort.asc ? "asc" : "desc") : undefined}
+        data-align={def.kind === "size" ? "end" : undefined}
+        onClick={() => setSort({ key: def.id, asc: sort.key === def.id ? !sort.asc : true })}
       >
-        {label}
+        {def.label}
       </button>
-      <div className="column-grip" role="separator" aria-label={`Resize ${label}`} onPointerDown={(e) => resize(col, e)} onDoubleClick={() => setColumns({ ...columns, [col]: DEFAULT_COLUMNS[col] })} />
+      <div className="column-grip" role="separator" aria-label={`Resize ${def.label}`} onPointerDown={(e) => resize(def, e)} onDoubleClick={() => setWidths({ [def.id]: def.width })} />
     </div>
   );
+
+  // Right-click on the header: tick the columns to show, and "More…" for the whole list.
+  const headerMenu = (x: number, y: number) => {
+    const common = ["modified", "type", "size", "created", "extension", "accessed", "dimensions", "length", "artist"];
+    const here = (set: typeof columnSet) => useStore.getState().setColumns(set, "here");
+    setMenu({
+      x,
+      y,
+      items: [
+        ...common.map((id) => {
+          const d = columnDef(id)!;
+          const on = columnSet.order.includes(id);
+          return {
+            id: `col-${id}`,
+            label: d.label,
+            checked: on,
+            disabled: d.source === "disk" && noDiskDetails,
+            run: () => here(on ? hideColumn(columnSet, id) : showColumn(columnSet, id)),
+          };
+        }),
+        { id: "col-more", label: "More…", separatorBefore: true, run: () => useStore.setState({ chooseDetailsOpen: true }) },
+      ],
+    });
+  };
 
   const totalSize = entries.reduce((s, e) => s + e.size, 0);
   const selectedSize = entries.filter((e) => selected.has(e.name)).reduce((s, e) => s + e.size, 0);
@@ -927,16 +1044,35 @@ export function FileView({ path }: { path: string }) {
           ev.preventDefault();
           // On a phone a long press on empty space does nothing; the menu is in the bar on top.
           if (mobile) return;
-          setSelected(new Set());
+          if (!checks) setSelected(new Set());
           showMenu(ev.clientX, ev.clientY, null);
         }}
       >
         {details && !mobile && (
-          <div className="file-header" style={{ width: rowsWidth + 14 }} onMouseDown={(e) => e.stopPropagation()}>
-            {header("name", "Name", "name")}
-            {header("modified", "Date modified", "modified")}
-            {header("type", "Type", "type")}
-            {header("size", "Size", "size")}
+          <div
+            className="file-header"
+            style={{ width: rowsWidth + 14 }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onContextMenu={(ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              headerMenu(ev.clientX, ev.clientY);
+            }}
+          >
+            {checks && (
+              <span className="row-check-head">
+                <input
+                  type="checkbox"
+                  aria-label="Select all items"
+                  checked={entries.length > 0 && selected.size === entries.length}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selected.size > 0 && selected.size < entries.length;
+                  }}
+                  onChange={() => setSelected(selected.size === entries.length ? new Set() : new Set(entries.map((x) => x.name)))}
+                />
+              </span>
+            )}
+            {shown.map(header)}
           </div>
         )}
         {error && isRemote(path) && /^(needs-login|untrusted-host|changed-host):/.test(error) ? (
@@ -970,7 +1106,12 @@ export function FileView({ path }: { path: string }) {
                         <span className="m-text">
                           {nameCell(e)}
                           <span className="m-meta">
-                            {[formatDate(e.modified), e.isDir ? (folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "") : formatSize(e.size)].filter(Boolean).join("  ·  ")}
+                            {shown
+                              .filter((d) => d.id !== "name" && d.id !== "type")
+                              .slice(0, 3)
+                              .map((d) => (d.id === "size" && e.isDir ? sizeText(e) : cellValue(d, e, extra[e.name])))
+                              .filter(Boolean)
+                              .join("  ·  ")}
                           </span>
                         </span>
                         {e.isDir && <span className="m-chevron" aria-hidden="true"><Icon name="chevron" size={14} /></span>}
@@ -996,13 +1137,19 @@ export function FileView({ path }: { path: string }) {
                       style={{ transform: `translateY(${row.start - headerHeight}px)`, height: rowHeight, width: rowsWidth }}
                       {...itemProps(e, row.index)}
                     >
-                      <div className="cell cell-name" style={{ width: cols.name }}>
-                        <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={18} iconSize={16} view="details" />
-                        {nameCell(e)}
-                      </div>
-                      <div className="cell cell-date" style={{ width: columns.modified }}>{formatDate(e.modified)}</div>
-                      <div className="cell cell-type" style={{ width: columns.type }}>{typeLabel(e.name, e.isDir)}</div>
-                      <div className="cell cell-size" style={{ width: columns.size }}>{!e.isDir ? formatSize(e.size) : !wantSizes || e.isSymlink || isRemote(path) || isArchiveLoc(path) ? "" : folderSizes[e.name] ? `${folderSizes[e.name].complete ? "" : "≥ "}${formatSize(folderSizes[e.name].bytes)}` : "…"}</div>
+                      {shown.map((d) =>
+                        d.id === "name" ? (
+                          <div className="cell cell-name" key="name" style={{ width: nameWidth }}>
+                            {checks && rowCheck(e, row.index)}
+                            <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={18} iconSize={16} view="details" />
+                            {nameCell(e)}
+                          </div>
+                        ) : (
+                          <div className="cell" key={d.id} data-kind={d.kind} data-column={d.id} style={{ width: colWidth(d.id) }}>
+                            {d.id === "size" && e.isDir ? sizeText(e) : cellValue(d, e, extra[e.name])}
+                          </div>
+                        ),
+                      )}
                     </div>
                   );
                 })()
@@ -1018,6 +1165,7 @@ export function FileView({ path }: { path: string }) {
                       {...itemProps(e, row.index * columnsPerRow + k)}
                     >
                       {mobile && <span className="m-check" aria-hidden="true"><Icon name="check" size={14} /></span>}
+                      {checks && rowCheck(e, row.index * columnsPerRow + k, true)}
                       <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={tileLayout.icon} view={level} />
                       {nameCell(e)}
                     </div>

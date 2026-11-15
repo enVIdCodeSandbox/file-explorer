@@ -24,7 +24,8 @@ export type Control =
   | { type: "resources" }
   | { type: "locks" }
   | { type: "defaultFm" }
-  | { type: "updates" };
+  | { type: "updates" }
+  | { type: "methods" };
 
 export interface SettingDef {
   /** Dotted path into the Settings object, e.g. "general.showHidden". */
@@ -190,8 +191,9 @@ export const SETTINGS: SettingDef[] = [
 ];
 
 /** Advanced options appear in Settings like any other entry (and in search). */
+const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes", "files.perFolderView"];
 const sectionOf = (d: (typeof ADVANCED)[number]) =>
-  d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+  SHOWN_IN_GENERAL.includes(d.key) ? "General" : d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
 
 for (const d of ADVANCED) {
   SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });

@@ -157,7 +157,54 @@ pub struct HistoryInfo {
     pub routes: usize,
 }
 
+/// How one copy method has done on this computer's own transfers.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MethodStat {
+    pub method: Method,
+    /// Transfers it has done.
+    pub uses: u32,
+    /// All the bytes it moved over all the time it took.
+    pub avg_bytes_per_sec: f64,
+}
+
+/// How one kind of job that is not a copy has done: "delete", "trash", "compress" or "extract".
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JobKindStat {
+    pub kind: String,
+    pub uses: u32,
+    pub avg_items_per_sec: f64,
+}
+
 impl History {
+    /// Remembered deletes, compresses and unpacks, by kind.
+    pub fn job_stats(&self) -> Vec<JobKindStat> {
+        let mut sums: std::collections::BTreeMap<String, (u32, f64, f64)> = Default::default();
+        for r in &self.records {
+            let Some(name) = self.names.get(r.dst as usize).filter(|n| n.starts_with('<')) else { continue };
+            let e = sums.entry(name.trim_matches(['<', '>']).to_string()).or_default();
+            *e = (e.0 + 1, e.1 + r.files as f64, e.2 + r.secs as f64);
+        }
+        sums.into_iter().map(|(kind, (uses, files, secs))| JobKindStat { kind, uses, avg_items_per_sec: if secs > 0.0 { files / secs } else { 0.0 } }).collect()
+    }
+
+    /// Moves inside one drive that were remembered (they are renames, not copies).
+    pub fn instant_moves(&self) -> u32 {
+        self.records.iter().filter(|r| r.strategy == 0).count() as u32
+    }
+
+    /// Per method: how many remembered transfers used it and how fast they went. Instant moves
+    /// and deletes, compresses and unpacks are not copies, so they are left out.
+    pub fn method_stats(&self) -> Vec<MethodStat> {
+        let mut sums: std::collections::BTreeMap<u8, (u32, f64, f64)> = Default::default();
+        for r in self.records.iter().filter(|r| r.strategy != 0 && r.errors == 0 && !self.names.get(r.dst as usize).is_some_and(|n| n.starts_with('<'))) {
+            let e = sums.entry(r.method).or_default();
+            *e = (e.0 + 1, e.1 + r.bytes as f64, e.2 + r.secs as f64);
+        }
+        sums.into_iter().map(|(code, (uses, bytes, secs))| MethodStat { method: Method::from_code(code), uses, avg_bytes_per_sec: if secs > 0.0 { bytes / secs } else { 0.0 } }).collect()
+    }
+
     pub fn load(file: &Path) -> History {
         let Ok(bytes) = std::fs::read(file) else { return History::default() };
         let Ok(stored) = bincode::deserialize::<Stored>(&bytes) else { return History::default() };
@@ -562,6 +609,32 @@ mod tests {
         assert!(!h.record(&done(r.clone(), 100, 10_000_000, 0.05, 0.01, 0.01), NOW, 50), "too short to time");
         assert!(!h.record(&done(r, 100, 10_000_000, 3.0, 0.01, 0.01), NOW, 0), "limit 0 stores nothing");
         assert_eq!(h.len(), 2);
+    }
+
+    #[test]
+    fn counts_how_each_method_has_done() {
+        let mut h = History::default();
+        let r = route("C:\\", "D:\\", Media::Ssd, Media::Hdd);
+        for _ in 0..3 {
+            let mut p = done(r.clone(), 10, 10_000_000, 2.0, 0.01, 0.01);
+            p.method = Some(Method::Robocopy);
+            assert!(h.record(&p, NOW, 50));
+        }
+        let mut native = done(r.clone(), 10, 10_000_000, 1.0, 0.01, 0.01);
+        native.method = Some(Method::Native);
+        assert!(h.record(&native, NOW, 50));
+        let jobs = crate::meter::route_for("delete", Path::new("C:\\x"), &[]);
+        assert!(h.record_job(&jobs, true, 100, 0, 5.0, 0, NOW, 50));
+        let jobs = h.job_stats();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].kind.as_str(), jobs[0].uses), ("delete", 1));
+        assert!((jobs[0].avg_items_per_sec - 20.0).abs() < 0.01);
+        assert_eq!(h.instant_moves(), 0);
+        let stats = h.method_stats();
+        let robo = stats.iter().find(|s| s.method == Method::Robocopy).unwrap();
+        assert_eq!(robo.uses, 3);
+        assert!((robo.avg_bytes_per_sec - 5_000_000.0).abs() < 1.0);
+        assert_eq!(stats.iter().find(|s| s.method == Method::Native).unwrap().uses, 1, "a delete is not a copy method");
     }
 
     #[test]

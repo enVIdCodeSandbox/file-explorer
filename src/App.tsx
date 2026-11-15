@@ -9,6 +9,7 @@ import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
+import { ChooseDetails } from "./components/ChooseDetails";
 import { PickBar } from "./components/PickBar";
 import { Setup } from "./components/Setup";
 import { latestLabel } from "./components/UpdatesPanel";
@@ -248,6 +249,7 @@ export default function App() {
             <PropertiesDialog />
             <OpenWithDialog />
             <LockDialog />
+            <ChooseDetails />
             <ShareDialog />
             <BatchRename />
             <ConnectServer />
@@ -315,6 +317,7 @@ export default function App() {
       <PropertiesDialog />
       <OpenWithDialog />
       <LockDialog />
+            <ChooseDetails />
       <ShareDialog />
       <BatchRename />
       <ConnectServer />

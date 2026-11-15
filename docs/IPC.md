@@ -57,6 +57,8 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `delete_control` | `deleteControl` | `id: u64, action: String` | `()` |  |
 | `show_properties` | `showProperties` | `paths: Vec<String>` | `bool` | Show the operating system's own properties window. Returns false when it has none for this request (or the person turned that off in settings), so the app shows its own. |
 | `history_info` | `historyInfo` | `—` | `HistoryInfo` |  |
+| `column_values` | `columnValues` | `dir: String, names: Vec<String>, keys: Vec<String>` | `Vec<ColumnRow>` | The values of the extra Details columns (see `src/util/columns.ts`) for some items of one folder on this computer: date accessed, size on disk, item count, attributes, owner, content type, link target, picture dimensions, and what a photo, song or video says about itself. Dates are milliseconds and sizes bytes, as text; a value the file does not have is left out. Not available inside archives or on servers and phones. |
+| `transfer_methods` | `transferMethods` | `—` | `MethodsReport` | Which copy methods this computer can use (the built-in engine, and Robocopy, rsync, rclone, SMB-tuned and NFS-tuned where found) and how many remembered transfers used each, with their average speed. Shown in Settings > Advanced > Transfers. |
 | `clear_history` | `clearHistory` | `—` | `()` |  |
 | `rename_item` | `renameItem` | `path: String, new_name: String` | `String` |  |
 | `create_item` | `createItem` | `dir: String, name: String, folder: bool` | `String` |  |
