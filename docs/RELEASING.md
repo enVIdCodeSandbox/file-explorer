@@ -41,6 +41,20 @@ The workflow imports the certificate into the runner's store and builds with its
 
 Packages are not signed. AppImage signing with GPG and repository signing for `.deb`/`.rpm` are left for when there is a package repository.
 
+## Version numbers
+
+Every update that is handed out raises the version, in step with how big it is:
+
+```
+npm run bump -- patch   # small fixes and tweaks   0.2.0 -> 0.2.1
+npm run bump -- minor   # a feature or several     0.2.1 -> 0.3.0
+npm run bump -- major   # a big change             0.3.0 -> 1.0.0
+```
+
+The script rewrites `Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json`, `package-lock.json` and the two entries of `Cargo.lock` together.
+
 ## Automatic updates
 
-Not set up. It needs the Tauri updater plugin, a signing key pair for update files (`tauri signer generate`), and a place to host the update manifest (GitHub Releases works). Do this after the installers are signed, because the update check should only ever download builds you signed.
+The app updates itself from the builds this repository's `build.yml` workflow publishes as Actions artifacts (see *Updates* in the user guide). The artifact names (`fast-file-explorer-build-<platform>`) are what the app looks for, so renaming them in the workflow breaks updating. The workflow's `GITHUB_SHA` is compiled into each build; that is how a build knows which commit it came from.
+
+These builds are **not signed**, so the app checks only the SHA-256 GitHub reports for the download. For signed, verified updates use the Tauri updater plugin instead: it needs a signing key pair (`tauri signer generate`) and somewhere to host the update manifest (GitHub Releases works). Do that after the installers are signed.

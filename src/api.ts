@@ -241,7 +241,12 @@ export interface TransferError {
 export interface Progress {
   id: number;
   op: TransferOp;
-  phase: "scanning" | "running" | "paused" | "done" | "cancelled" | "failed";
+  phase: "queued" | "scanning" | "running" | "paused" | "done" | "cancelled" | "failed";
+  priority?: number;
+  limitBps?: number;
+  maxSecs?: number;
+  timedOut?: boolean;
+  queuedAhead?: number;
   strategy: "rename" | "largeSequential" | "smallParallel" | "mixed" | null;
   method?: "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs" | null;
   destDir: string;
@@ -316,7 +321,7 @@ export interface DeleteProgress {
   /** Name of the first selected item. */
   firstName: string;
   /** "delete", or "compress" / "extract" for an archive job shown on the same card. */
-  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete";
+  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete" | "update";
   /** For a finished archive or server job: what was made (for "open": the downloaded file). */
   result: string;
   /** Server jobs: bytes moved so far and expected in total. */
@@ -469,6 +474,19 @@ export interface Settings {
     thumbnailSize: number;
     predictivePrefetch: boolean;
     reduceOnBattery: boolean;
+    backgroundMode: "off" | "gentle" | "aggressive";
+    backgroundLocked: boolean;
+  };
+  updates: {
+    enabled: boolean;
+    checkOnOpen: boolean;
+    background: boolean;
+    checkHours: number;
+    autoDownload: boolean;
+    notify: boolean;
+    repo: string;
+    branch: string;
+    token: string;
   };
   transfer: {
     conflict: "ask" | Conflict;
@@ -477,6 +495,12 @@ export interface Settings {
     maxParallel: number;
     rememberDeviceSpeeds: boolean;
     historyLimit: number;
+    maxSpeedKb: number;
+    targetSpeedKb: number;
+    maxMinutes: number;
+    onTimeLimit: "stop" | "pause";
+    defaultPriority: "low" | "normal" | "high";
+    maxActive: number;
     method: "auto" | "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs";
     tryOtherMethods: boolean;
     progressIntervalMs: number;
@@ -575,6 +599,8 @@ export interface Budget {
   backgroundIndexing: boolean;
   prefetch: boolean;
   thumbnails: boolean;
+  progressMs?: number;
+  background?: boolean;
 }
 
 export interface IndexStatus {
@@ -727,6 +753,13 @@ export const api = {
   transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>
     invoke<void>("transfer_resolve", { id, answer, all }),
   transferForceStop: (id: number) => invoke<void>("transfer_force_stop", { id }),
+  updateCheck: () => invoke<UpdateInfo>("update_check"),
+  updateStatus: () => invoke<UpdateInfo>("update_status"),
+  updateDownload: () => invoke<number>("update_download"),
+  updateInstall: () => invoke<void>("update_install"),
+  updateDiscard: () => invoke<void>("update_discard"),
+  transferAdjust: (id: number, what: "speed" | "priority" | "time" | "startNow", value?: string, stop?: boolean) =>
+    invoke<void>("transfer_adjust", { id, what, value, stop }),
   transferControl: (id: number, action: "pause" | "resume" | "cancel") =>
     invoke<void>("transfer_control", { id, action }),
   checkAccess: (job: Job) => invoke<AccessCheck>("check_access", { job }),
@@ -828,7 +861,29 @@ export interface FolderSize {
   complete: boolean;
 }
 
+export interface UpdateLatest {
+  runId: number;
+  artifactId: number;
+  sha: string;
+  branch: string;
+  createdAt: string;
+  size: number;
+}
+
+export interface UpdateInfo {
+  status: "off" | "current" | "available" | "unknown" | "unsupported" | "error";
+  version: string;
+  sha: string | null;
+  latest: UpdateLatest | null;
+  ready: { sha: string; createdAt: string; kind: string } | null;
+  message: string;
+  tokenSet: boolean;
+  lastCheck: number;
+}
+
 export interface BackendEvents {
+  "update-available": UpdateInfo;
+  "update-ready": UpdateInfo;
   "transfer-progress": Progress;
   "delete-progress": DeleteProgress;
   "job-finished": JobFinished;

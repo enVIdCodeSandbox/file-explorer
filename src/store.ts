@@ -338,13 +338,30 @@ const deletedFrom = new Map<number, string[]>();
 interface Footprint {
   removes: string[];
   writes?: { dir: string; names: string[] };
+  /** The order jobs were asked for in: a job waits only for those asked for before it. */
+  seq?: number;
 }
 /** Running jobs by key: "d" + id for deletes, "t" + id for copies and moves. */
 const inFlight = new Map<string, Footprint>();
 /** Jobs waiting for others to end: each wakes when none of the jobs it waits for is left. */
 const waiters: { ids: Set<string>; queue: number; wake: () => void }[] = [];
 let queueSeq = 0;
+/** What each waiting paste is, to turn away an identical one. */
+const queuedSignatures = new Map<number, string>();
+/** A job that has been asked for but has no id yet (waiting for a question, an access check or its turn). */
+let pendingSeq = 0;
+function hold(fp: Footprint): string {
+  const key = `p${++pendingSeq}`;
+  inFlight.set(key, { ...fp, seq: pendingSeq });
+  return key;
+}
+const seqOf = (key: string) => inFlight.get(key)?.seq;
+function release(key: string) {
+  inFlight.delete(key);
+  wake();
+}
 const ended = (key: string): boolean => {
+  if (key[0] === "p") return false; // lives until released
   const st = useStore.getState();
   const p = key[0] === "d" ? st.deletes[Number(key.slice(1))] : st.transfers[Number(key.slice(1))];
   return !!p && (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed");
@@ -1008,6 +1025,10 @@ export const useStore = create<State>((set, get) => ({
       inFlight.delete(`d${p.id}`);
       wake();
     }
+    if (p.action === "update") {
+      if (p.phase === "done") setTimeout(() => get().dismissDelete(p.id), 4000);
+      return;
+    }
     if (p.action !== "delete") {
       if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
         if (p.action === "compress" || p.action === "extract") archiveFinished(p);
@@ -1128,69 +1149,98 @@ export const useStore = create<State>((set, get) => ({
     // A job begun earlier that is still working on these folders goes first, so things happen
     // in the order they were asked for: this waits in line, shown with the other jobs, and
     // starts by itself when that job is over.
-    const blockers = jobsInTheWay(sources, destDir);
-    if (blockers.length) {
-      const qid = ++queueSeq;
-      set({
-        queuedJobs: { ...get().queuedJobs, [qid]: { title: `${op === "move" ? "Move" : "Copy"} ${describeItems(sources)} to ${baseName(destDir) || destDir}`, detail: "Waiting for an earlier job on these folders to finish" } },
-        transfersOpen: true,
-      });
-      await new Promise<void>((resolve) => {
-        waiters.push({ ids: new Set(blockers), queue: qid, wake: resolve });
+    // Pasting again while the same paste is already waiting would only make a second copy.
+    const signature = `${op}|${destDir}|${sources.join("\n")}`;
+    if ([...queuedSignatures.values()].includes(signature)) {
+      s.showToast("That paste is already waiting for the earlier job to finish.");
+      return;
+    }
+    // This job is on record from this moment, so pastes asked for after it wait for it, even
+    // while it is still waiting itself or being checked.
+    const key = hold({ removes: op === "move" ? sources : [], writes: { dir: destDir, names: sources.map(baseName) } });
+    const mySeq = seqOf(key) ?? 0;
+    let qid = 0;
+    try {
+      for (;;) {
+        const blockers = jobsInTheWay(sources, destDir).filter((k) => k !== key && (seqOf(k) ?? 0) < mySeq);
+        if (!blockers.length) break;
+        if (!qid) {
+          qid = ++queueSeq;
+          queuedSignatures.set(qid, signature);
+          const what = blockers.some((k) => k[0] === "d") ? "a delete" : "an earlier job";
+          set({
+            queuedJobs: { ...get().queuedJobs, [qid]: { title: `${op === "move" ? "Move" : "Copy"} ${describeItems(sources)} to ${baseName(destDir) || destDir}`, detail: `Waiting for ${what} on these folders to finish, then it starts by itself` } },
+            transfersOpen: true,
+          });
+          s.showToast(`Waiting for ${what} on these folders to finish. The paste starts by itself.`);
+        }
+        await new Promise<void>((resolve) => {
+          waiters.push({ ids: new Set(blockers), queue: qid, wake: resolve });
+          wake();
+        });
+        if (!get().queuedJobs[qid]) return; // taken out of the line
+      }
+      if (qid) {
+        queuedSignatures.delete(qid);
+        get().unqueue(qid);
+        qid = 0;
+      }
+      if (isArchiveLoc(destDir)) {
+        // Into an archive: from disk, from inside it (a move rearranges it) or from another archive.
+        if (isRemote(destDir) || sources.some(isRemote)) {
+          s.showToast("Copy items from a server to a folder on this computer first.");
+          return;
+        }
+        try {
+          await api.archivePasteStart(sources, destDir, op === "move" ? "move" : "copy");
+        } catch (e) {
+          s.showToast(friendlyRemoteError(e));
+        }
+        return;
+      }
+      if (sources.some(isArchiveLoc)) {
+        // Out of an archive: unpacked into the folder; a file already there is handled by the
+        // "When a file already exists" setting, like any other copy.
+        // A move also takes the items out of the archive once they have arrived.
+        if (isRemote(destDir) || !sources.every(isArchiveLoc)) {
+          s.showToast("Copy items out of an archive into a folder on this computer first.");
+          return;
+        }
+        try {
+          await api.archiveCopyStart(sources, destDir, false, op === "move");
+        } catch (e) {
+          s.showToast(friendlyRemoteError(e));
+        }
+        return;
+      }
+      if (isRemote(destDir) || isRemote(sources[0])) {
+        // To or from a server: its own job (no administrator route, no undo).
+        try {
+          remoteJobs.set(await api.remoteCopyStart(sources, destDir, op === "move"), { op });
+        } catch (e) {
+          s.showToast(String(e));
+        }
+        return;
+      }
+      try {
+        const job: Job = { kind: "transfer", spec };
+        const mode = await guardAccess(job, `${op === "move" ? "Moving" : "Copying"} to ${baseName(destDir)}`);
+        if (mode === "cancel") return;
+        const id = mode === "elevated" ? await api.elevatedStart(job) : await api.transferStart(spec);
+        set({ specs: { ...get().specs, [id]: spec } });
+        inFlight.set(`t${id}`, { removes: op === "move" ? sources : [], writes: { dir: destDir, names: sources.map(baseName) }, seq: mySeq });
         wake();
-      });
-      if (!get().queuedJobs[qid]) return; // taken out of the line
-      get().unqueue(qid);
-    }
-    if (isArchiveLoc(destDir)) {
-      // Into an archive: from disk, from inside it (a move rearranges it) or from another archive.
-      if (isRemote(destDir) || sources.some(isRemote)) {
-        s.showToast("Copy items from a server to a folder on this computer first.");
-        return;
-      }
-      try {
-        await api.archivePasteStart(sources, destDir, op === "move" ? "move" : "copy");
-      } catch (e) {
-        s.showToast(friendlyRemoteError(e));
-      }
-      return;
-    }
-    if (sources.some(isArchiveLoc)) {
-      // Out of an archive: unpacked into the folder; a file already there is handled by the
-      // "When a file already exists" setting, like any other copy.
-      // A move also takes the items out of the archive once they have arrived.
-      if (isRemote(destDir) || !sources.every(isArchiveLoc)) {
-        s.showToast("Copy items out of an archive into a folder on this computer first.");
-        return;
-      }
-      try {
-        await api.archiveCopyStart(sources, destDir, false, op === "move");
-      } catch (e) {
-        s.showToast(friendlyRemoteError(e));
-      }
-      return;
-    }
-    if (isRemote(destDir) || isRemote(sources[0])) {
-      // To or from a server: its own job (no administrator route, no undo).
-      try {
-        remoteJobs.set(await api.remoteCopyStart(sources, destDir, op === "move"), { op });
+        const landed = sources.map((src) => ({ from: src, to: joinPath(destDir, baseName(src)) }));
+        get().pushUndo(op === "move" ? { kind: "move", pairs: landed } : { kind: "copy", created: landed.map((l) => l.to) });
       } catch (e) {
         s.showToast(String(e));
       }
-      return;
-    }
-    try {
-      const job: Job = { kind: "transfer", spec };
-      const mode = await guardAccess(job, `${op === "move" ? "Moving" : "Copying"} to ${baseName(destDir)}`);
-      if (mode === "cancel") return;
-      const id = mode === "elevated" ? await api.elevatedStart(job) : await api.transferStart(spec);
-      set({ specs: { ...get().specs, [id]: spec } });
-      inFlight.set(`t${id}`, { removes: op === "move" ? sources : [], writes: { dir: destDir, names: sources.map(baseName) } });
-      wake();
-      const landed = sources.map((src) => ({ from: src, to: joinPath(destDir, baseName(src)) }));
-      get().pushUndo(op === "move" ? { kind: "move", pairs: landed } : { kind: "copy", created: landed.map((l) => l.to) });
-    } catch (e) {
-      s.showToast(String(e));
+    } finally {
+      if (qid) {
+        queuedSignatures.delete(qid);
+        get().unqueue(qid);
+      }
+      release(key);
     }
   },
 
@@ -1518,21 +1568,29 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
     });
     if (!r || r.button !== "ok") return false;
   }
+  // From now on a paste into these folders waits for this delete, even while the access check
+  // below is still running and the delete has no id yet.
+  const held = hold({ removes: paths });
   try {
     const job: Job = { kind: "delete", paths, permanent };
     const mode = await guardAccess(job, "Deleting these items");
     if (mode === "cancel") return false;
-    if (mode === "elevated") await api.elevatedStart(job);
-    else {
+    if (mode === "elevated") {
+      const id = await api.elevatedStart(job);
+      deletedFrom.set(id, paths);
+      inFlight.set(`d${id}`, { removes: paths, seq: seqOf(held) });
+    } else {
       const id = await api.deleteStart(paths, permanent);
       if (!permanent) trashedBy.set(id, paths);
       deletedFrom.set(id, paths);
-      inFlight.set(`d${id}`, { removes: paths });
+      inFlight.set(`d${id}`, { removes: paths, seq: seqOf(held) });
     }
     return true;
   } catch (e) {
     s.showToast(String(e));
     return false;
+  } finally {
+    release(held);
   }
 }
 

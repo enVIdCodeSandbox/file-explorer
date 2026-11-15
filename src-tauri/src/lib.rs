@@ -7,6 +7,7 @@ mod remote;
 mod smartclear;
 mod state;
 mod tasks;
+mod update;
 
 use fast_core::history::History;
 use fast_core::predict::Predictor;
@@ -76,6 +77,7 @@ pub fn run() {
                 settings: RwLock::new(settings),
                 session: Mutex::new(session),
                 budget: RwLock::new(budget),
+                attention: std::sync::atomic::AtomicU8::new(0),
                 index: RwLock::new(Arc::new(fast_core::indexset::IndexSet::default())),
                 index_status: Mutex::new(IndexStatus { state: "idle".into(), ..Default::default() }),
                 index_busy: AtomicBool::new(false),
@@ -97,6 +99,8 @@ pub fn run() {
             launch::start(app.handle());
             commands::start_indexing(app.handle().clone(), state.clone());
             commands::start_drive_watch(app.handle().clone(), state.clone());
+            commands::apply_transfer_limits(&state);
+            update::start(app.handle(), state.clone());
             tasks::start(app.handle(), state.clone());
             // Started with the computer: stay out of the way until the person opens it.
             #[cfg(desktop)]
@@ -141,6 +145,10 @@ pub fn run() {
                     sets.values().flatten().cloned().collect()
                 };
                 st.watcher.set_dirs(all);
+            }
+            #[cfg(desktop)]
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+                commands::attention_changed(window.app_handle());
             }
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let st = window.state::<state::Shared>();
@@ -234,6 +242,12 @@ pub fn run() {
             commands::restore_from_trash,
             commands::transfer_start,
             commands::transfer_control,
+            commands::transfer_adjust,
+            update::update_check,
+            update::update_status,
+            update::update_download,
+            update::update_install,
+            update::update_discard,
             commands::transfer_force_stop,
             commands::transfer_resolve,
             commands::check_access,

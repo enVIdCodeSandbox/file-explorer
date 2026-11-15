@@ -43,6 +43,7 @@ const ICONS = {
   route: svg(<><circle cx="6" cy="18" r="2" /><circle cx="18" cy="6" r="2" /><path d="M8 18h6a3 3 0 0 0 0-6h-4a3 3 0 0 1 0-6h6" /></>),
   search: svg(<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>),
   eyeoff: svg(<><path d="M3 3l18 18" /><path d="M10.6 6.2A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a15 15 0 0 1-3.2 3.7M6.6 7.6C4.3 9.2 3 12 3 12s4 6 9 6c1.3 0 2.5-.3 3.6-.8" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>),
+  refresh: svg(<><path d="M20 11a8 8 0 0 0-14.5-4M4 13a8 8 0 0 0 14.5 4" /><path d="M20 4v5h-5M4 20v-5h5" /></>),
   shield: svg(<><path d="M12 3 4 6v6c0 4.5 3.2 8 8 9 4.8-1 8-4.5 8-9V6z" /><path d="m9 12 2 2 4-4" /></>),
 };
 
@@ -75,7 +76,7 @@ const OS_CARDS: { id: Platform; name: string; tagline: string }[] = [
   { id: "apple", name: "Apple", tagline: "Like Files on an iPhone" },
 ];
 
-const STEPS = ["Welcome", "Interface", "Colors", "Performance", "Saving", "Privacy", "Review"] as const;
+const STEPS = ["Welcome", "Interface", "Colors", "Performance", "Saving", "Privacy", "Updates", "Review"] as const;
 
 export function Setup() {
   const t = useT();
@@ -192,6 +193,7 @@ export function Setup() {
     [t("Folders you open next"), yes(adv(settings, "cache.predictions")), ""],
     [t("Previous searches"), adv<number>(settings, "search.historyLimit") > 0 ? t("Last {n}", { n: adv<number>(settings, "search.historyLimit") }) : t("Off"), ""],
     [t("Hide server addresses"), yes(settings.appearance.hideNetworkAddress), ""],
+    ...(mobile ? [] : ([[t("Updates"), settings.updates.enabled ? (settings.updates.autoDownload ? t("Download automatically") : t("Check only")) : t("Off"), settings.updates.enabled ? t("You choose when to restart") : ""]] as [string, string, string][])),
   ];
 
   const ram = hw ? `${(hw.totalRamMb / 1024).toFixed(hw.totalRamMb >= 10240 ? 0 : 1)} GB` : "";
@@ -226,7 +228,7 @@ export function Setup() {
         </div>
 
         <div className="setup-view" key={STEPS[step]}>
-          <div className="setup-stage" data-hero={step === 0 || undefined} data-fill={(step >= 1 && step <= 5) || undefined}>
+          <div className="setup-stage" data-hero={step === 0 || undefined} data-fill={(step >= 1 && step <= 6) || undefined}>
             {step === 0 && (
               <div className="setup-hero">
                 <h1>{t("Welcome to FAST File Explorer")}</h1>
@@ -362,6 +364,25 @@ export function Setup() {
               </>
             )}
             {step === 6 && (
+              <>
+                <h2>{t("Updates")}</h2>
+                {mobile ? (
+                  <p className="lead">{t("Phones and tablets are updated through the file you install them from.")}</p>
+                ) : (
+                  <>
+                    <p className="lead">{t("The app can keep itself up to date from the builds published on GitHub. A new version is downloaded with your other transfers and installed without extra screens; you choose when to restart.")}</p>
+                    <div className="setup-tiles">
+                      <Tile icon={ICONS.refresh} title="Check for updates" hint="Look for a newer build now and then." on={settings.updates.enabled} onToggle={(v) => updateSettings((s) => void (s.updates.enabled = v))} />
+                      <Tile icon={ICONS.refresh} title="Check when it opens" hint="Look once each time the app starts." on={settings.updates.checkOnOpen} onToggle={(v) => updateSettings((s) => void (s.updates.checkOnOpen = v))} />
+                      <Tile icon={ICONS.refresh} title="Keep checking" hint="Look again every few hours while the app stays open." on={settings.updates.background} onToggle={(v) => updateSettings((s) => void (s.updates.background = v))} />
+                      <Tile icon={ICONS.refresh} title="Download automatically" hint="Fetch a new build as soon as it is found. You still choose when to restart." on={settings.updates.autoDownload} onToggle={(v) => updateSettings((s) => void (s.updates.autoDownload = v))} />
+                      <Tile icon={ICONS.shield} title="Tell me about new builds" hint="A short note in the notifications, once for each build." on={settings.updates.notify} onToggle={(v) => updateSettings((s) => void (s.updates.notify = v))} />
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+            {step === 7 && (
               <>
                 <h2>{t("Here is what you chose")}</h2>
                 <dl className="setup-summary">

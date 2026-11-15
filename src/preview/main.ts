@@ -102,7 +102,7 @@ const info: AppInfo = {
   version: "preview",
   separator: sep,
   home: root,
-  budget: { tier: "balanced", ioThreads: 2, indexThreads: 1, thumbThreads: 1, cacheMb: 64, indexMaxEntries: 100_000, listingCacheDirs: 32, backgroundIndexing: false, prefetch: false, thumbnails: false },
+  budget: { tier: "balanced", ioThreads: 2, indexThreads: 1, thumbThreads: 1, cacheMb: 64, indexMaxEntries: 100_000, listingCacheDirs: 32, backgroundIndexing: false, prefetch: false, thumbnails: false, background: false },
   system,
   index: { state: "idle", entries: 0, memoryBytes: 0, builtAt: 0, truncated: false, roots: [], drivesReady: 0, drivesTotal: 0 },
   thumbnailTypes: [],
@@ -177,6 +177,8 @@ const sampleRuns = [0, 1, 2, 3, 4].map((i) => ({ taskId: "t1", started: now - (i
 const lists = /^(servers_list|get_devices|frequent_folders|record_visit|shell_menu|list_assets|share_list|cache_usage|clipboard_get_files)$/;
 
 Object.assign(answers, {
+  update_status: () => ({ status: "current", version: "0.2.0", sha: "a1b2c3d4e5f6", latest: null, ready: null, message: "", tokenSet: false, lastCheck: 0 }),
+  update_check: () => ({ status: "available", version: "0.2.0", sha: "a1b2c3d4e5f6", latest: { runId: 1, artifactId: 2, sha: "f6e5d4c3b2a1", branch: "main", createdAt: new Date(now - 3600_000).toISOString(), size: 61_000_000 }, ready: null, message: "A newer build is available.", tokenSet: false, lastCheck: Math.floor(Date.now() / 1000) }),
   tasks_list: () => ({ tasks: sampleTasks, running: [], next: { t1: now + 5 * hour, t2: now + 20 * hour }, last: { t1: sampleRuns[0] }, enabled: true }),
   tasks_history: () => sampleRuns,
   tasks_stats: () => ({

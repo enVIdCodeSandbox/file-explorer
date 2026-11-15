@@ -27,7 +27,7 @@ export function PerfSlider({ presets, index, recIndex, onPick, mobile, usedIndex
   return (
     <div className="perf-slider">
       <div className="perf-wrap" style={{ "--n": presets.length - 1, "--i": index, "--r": recIndex } as CSSProperties}>
-        <div className="perf-rec">
+        <div className="perf-rec" data-edge={recIndex === presets.length - 1 ? "end" : recIndex === 0 ? "start" : undefined}>
           <span>{t("Recommended")}</span>
           <svg viewBox="0 0 24 14" width="26" height="15" aria-hidden="true"><path d="M2 1h20L12 13z" fill="currentColor" /></svg>
         </div>

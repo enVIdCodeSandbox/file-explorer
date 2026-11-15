@@ -45,6 +45,8 @@ pub struct Budget {
     /// How often a running transfer reports progress, in milliseconds. Slower
     /// on weak machines and laptops, where redrawing costs real battery and CPU.
     pub progress_ms: u64,
+    /// The app is minimized or behind other windows and is running on a reduced budget.
+    pub background: bool,
 }
 
 /// Rough bytes per index entry: 40-byte node plus two copies of an average name.
@@ -65,8 +67,56 @@ impl Budget {
             prefetch: false,
             thumbnails: true,
             progress_ms: 500,
+            background: false,
         }
     }
+}
+
+/// How far from the person's attention the window is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Attention {
+    /// In front, or at least in use.
+    Active,
+    /// Visible but another window has the focus.
+    Behind,
+    /// Minimized or hidden.
+    Away,
+}
+
+/// The budget while the window is out of the way. "gentle" acts only when the window is minimized or
+/// hidden and halves the work; "aggressive" also acts when it is merely behind other windows and drops
+/// to the minimum: one thread each, no thumbnails, indexing or preloading, a small cache, slow progress.
+/// Running transfers are never slowed, only how often they report.
+pub fn dimmed(b: &Budget, mode: &str, attention: Attention) -> Budget {
+    let mut d = b.clone();
+    match (mode, attention) {
+        (_, Attention::Active) | ("off", _) => return d,
+        ("gentle", Attention::Behind) => return d,
+        ("gentle", Attention::Away) => {
+            d.io_threads = (d.io_threads / 2).max(1);
+            d.index_threads = (d.index_threads / 2).max(1);
+            d.thumb_threads = 1;
+            d.cache_mb = (d.cache_mb / 2).max(8);
+            d.prefetch = false;
+            d.progress_ms = d.progress_ms.max(1000);
+        }
+        _ => {
+            d.io_threads = 1;
+            d.index_threads = 1;
+            d.thumb_threads = 1;
+            d.cache_mb = d.cache_mb.min(32);
+            d.listing_cache_dirs = d.listing_cache_dirs.min(32);
+            d.background_indexing = false;
+            d.prefetch = false;
+            d.thumbnails = false;
+            d.progress_ms = d.progress_ms.max(if attention == Attention::Away { 2000 } else { 1000 });
+        }
+    }
+    if d.index_max_entries != 0 {
+        d.index_max_entries = d.index_max_entries.min(d.cache_mb * 1024 * 1024 * 3 / 4 / BYTES_PER_ENTRY);
+    }
+    d.background = true;
+    d
 }
 
 pub fn compute(perf: &Performance, sys: &SystemSnapshot) -> Budget {
@@ -137,6 +187,7 @@ pub fn compute(perf: &Performance, sys: &SystemSnapshot) -> Budget {
             Tier::Balanced => 250,
             Tier::Saver => 500,
         },
+        background: false,
     }
 }
 
@@ -286,5 +337,19 @@ mod tests {
         let s = snapshot();
         assert!(s.cpus >= 1);
         assert!(s.total_ram_mb > 0);
+    }
+
+    #[test]
+    fn background_modes() {
+        let b = compute(&Performance::default(), &sys(16, 32, false, None));
+        assert_eq!(dimmed(&b, "off", Attention::Away), b);
+        assert_eq!(dimmed(&b, "aggressive", Attention::Active), b);
+        assert_eq!(dimmed(&b, "gentle", Attention::Behind), b, "gentle waits until minimized");
+        let g = dimmed(&b, "gentle", Attention::Away);
+        assert!(g.background && g.io_threads == b.io_threads / 2 && !g.prefetch && g.thumbnails);
+        let a = dimmed(&b, "aggressive", Attention::Behind);
+        assert!(a.background && a.io_threads == 1 && !a.thumbnails && !a.background_indexing && a.cache_mb <= 32 && a.progress_ms >= 1000);
+        assert!(a.index_max_entries <= b.index_max_entries);
+        assert_eq!(dimmed(&b, "aggressive", Attention::Away).progress_ms, 2000);
     }
 }

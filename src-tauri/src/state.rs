@@ -51,6 +51,9 @@ pub struct Paths {
     pub tasks: PathBuf,
     pub task_history: PathBuf,
     pub task_state: PathBuf,
+    /// Downloaded builds waiting to be installed, and what was already announced.
+    pub update_dir: PathBuf,
+    pub update_state: PathBuf,
 }
 
 impl Paths {
@@ -73,6 +76,8 @@ impl Paths {
             tasks: config.join("tasks.json"),
             task_history: config.join("task-history.jsonl"),
             task_state: config.join("task-state.json"),
+            update_dir: cache.join("updates"),
+            update_state: config.join("update-state.json"),
         }
     }
 }
@@ -180,6 +185,8 @@ pub struct AppState {
     pub settings: RwLock<Settings>,
     pub session: Mutex<Session>,
     pub budget: RwLock<Budget>,
+    /// 0 in use, 1 visible behind other windows, 2 minimized or hidden (see `resources::Attention`).
+    pub attention: std::sync::atomic::AtomicU8,
     /// One index per drive, each swapped in as soon as it is ready.
     pub index: RwLock<Arc<IndexSet>>,
     pub index_status: Mutex<IndexStatus>,

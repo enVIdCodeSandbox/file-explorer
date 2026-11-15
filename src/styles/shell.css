@@ -676,6 +676,11 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .perf-slider { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 8px 0; }
 .perf-wrap { --thumb: 30px; position: relative; padding-top: 52px; }
 .perf-rec { position: absolute; top: 0; left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--r) / var(--n)); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; color: var(--accent); pointer-events: none; }
+/* At either end of the track the bubble would hang over the edge of its panel: line its outer edge up with the thumb's and let the arrow keep pointing at the thumb. */
+.perf-rec[data-edge="end"] { transform: translateX(calc(-100% + var(--thumb) / 2 + 2px)); align-items: flex-end; }
+.perf-rec[data-edge="start"] { transform: translateX(calc(-1 * var(--thumb) / 2 - 2px)); align-items: flex-start; }
+.perf-rec[data-edge="end"] svg { margin-right: calc(var(--thumb) / 2 - 11px); }
+.perf-rec[data-edge="start"] svg { margin-left: calc(var(--thumb) / 2 - 11px); }
 .perf-rec span { padding: 4px 14px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; margin-bottom: 2px; }
 .perf-range { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: var(--thumb); margin: 0; background: transparent; cursor: pointer; --fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--i) / var(--n)); }
 .perf-range::-webkit-slider-runnable-track { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--accent) var(--fill), var(--surface-active) var(--fill)); }
@@ -827,3 +832,13 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .default-fm p[data-on] { color: var(--text); }
 .default-fm-limits { margin: 4px 0 0; padding-left: 18px; }
 .default-fm-limits li { margin: 2px 0; }
+
+/* Interface-style and other preset cards: centred, and a short last row sits in the middle instead of hugging the left. */
+.preset-panel .preset-grid { display: flex; flex-wrap: wrap; justify-content: center; }
+.preset-panel .preset-card { flex: 1 1 250px; max-width: 360px; align-items: center; text-align: center; }
+.setup .preset-panel .preset-card { flex-basis: 300px; max-width: 420px; }
+.preset-card .preset-pick { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; }
+.preset-card .preset-for { text-align: center; }
+
+/* Minimized or behind other windows with the background saver on: nothing animates. */
+:root[data-background] *, :root[data-background] *::before, :root[data-background] *::after { animation-play-state: paused !important; transition: none !important; }

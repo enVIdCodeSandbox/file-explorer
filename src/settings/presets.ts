@@ -183,6 +183,8 @@ function perfPatch(l: Level): Patch {
     "performance.thumbnails": l.thumbs,
     "performance.thumbnailSize": l.thumbPx,
     "performance.reduceOnBattery": l.batterySaver,
+    // Machines that can spare it only halve the work while minimized; the rest drop to the minimum.
+    "performance.backgroundMode": l.threads === 0 || l.threads >= 16 ? "gentle" : "aggressive",
     "advanced.perf.overscanRows": l.overscan,
     "advanced.ui.animations": l.animations,
     "advanced.files.folderSizes": l.folderSizes,
@@ -546,6 +548,7 @@ export function mobilePlatformFor(os: string | undefined, maker?: string): Platf
 /** Apply a preset's patch to a settings object (mutates it). */
 export function applyPatch(settings: Settings, patch: Patch): void {
   for (const [key, value] of Object.entries(patch)) {
+    if (key === "performance.backgroundMode" && settings.performance.backgroundLocked) continue;
     if (key === "keys") settings.keys = { ...(value as Record<string, string>) };
     else setSetting(settings, key, structuredClone(value));
   }
@@ -570,6 +573,7 @@ function stable(v: unknown): string {
 export function differences(settings: Settings, patch: Patch): string[] {
   return Object.entries(patch)
     .filter(([key, value]) => {
+      if (key === "performance.backgroundMode" && settings.performance.backgroundLocked) return false;
       if (key === "keys") return stable(sorted(settings.keys ?? {})) !== stable(sorted(value as Record<string, string>));
       return stable(getSetting(settings, key)) !== stable(value);
     })
@@ -589,6 +593,8 @@ export function snapshotOf(settings: Settings): Record<string, unknown> {
   delete copy.profiles;
   delete copy.activeProfile;
   delete copy.setupDone;
+  // The access token belongs to this computer, not to a profile or an export.
+  if (isObject(copy.updates)) delete copy.updates.token;
   return copy;
 }
 

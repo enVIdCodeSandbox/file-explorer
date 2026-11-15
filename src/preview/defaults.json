@@ -1,1 +1,116 @@
-{"general":{"showHidden":false,"showExtensions":true,"openSearchResultInNewTab":true,"restoreSession":true,"confirmDelete":true,"deleteToTrash":true,"startPage":"home","foldersFirst":true,"nativeProperties":true,"shellExtras":true,"liveRefresh":true},"appearance":{"theme":"dark","accent":"#4cc2ff","density":"compact","customCss":"","driveChart":"bar","driveMetric":"used","showDetailsPane":true,"viewLevel":0,"sidebarWidth":220,"sidebarCollapsed":false,"showFrequent":true,"showPinned":true,"showDrives":true,"showDriveSpace":true,"hideNetworkAddress":true,"driveNames":{},"layout":null,"style":{"font":"system","fontSize":13,"menu":"glass","icons":"outline","folderColor":"classic","background":"gradient","backgroundImage":"","radius":8,"enabledSheets":[]}},"performance":{"priority":"dynamic","maxThreads":0,"maxCacheMb":256,"maxCpuPercent":0,"maxMemoryPercent":0,"backgroundIndexing":true,"indexDrives":true,"lazyLoading":true,"metadataCaching":true,"thumbnails":true,"thumbnailSize":128,"predictivePrefetch":true,"reduceOnBattery":true},"transfer":{"conflict":"ask","preserveTimestamps":true,"largeFileThresholdMb":32,"maxParallel":0,"rememberDeviceSpeeds":true,"historyLimit":300,"method":"auto","tryOtherMethods":true,"progressIntervalMs":0},"search":{"limit":500,"includeHidden":false,"scopeToCurrentFolder":true},"contextMenu":{"hidden":[]},"terminal":{"windowsShell":"cmd","linuxTerminal":"","macTerminal":"Terminal","startupCommand":"","customCommand":"","windowsProfile":"","shellProgram":"","newTab":false,"useSelectedFolder":true,"defaultFolder":"here"},"advanced":{},"keys":{},"customActions":[],"profiles":[],"activeProfile":"","setupDone":false}
+{
+  "general": {
+    "showHidden": false,
+    "showExtensions": true,
+    "openSearchResultInNewTab": true,
+    "restoreSession": true,
+    "confirmDelete": true,
+    "deleteToTrash": true,
+    "startPage": "home",
+    "foldersFirst": true,
+    "nativeProperties": true,
+    "shellExtras": true,
+    "liveRefresh": true
+  },
+  "appearance": {
+    "theme": "dark",
+    "accent": "#4cc2ff",
+    "density": "compact",
+    "customCss": "",
+    "driveChart": "bar",
+    "driveMetric": "used",
+    "showDetailsPane": true,
+    "viewLevel": 0,
+    "sidebarWidth": 220,
+    "sidebarCollapsed": false,
+    "showFrequent": true,
+    "showPinned": true,
+    "showDrives": true,
+    "showDriveSpace": true,
+    "hideNetworkAddress": true,
+    "driveNames": {},
+    "layout": null,
+    "style": {
+      "font": "system",
+      "fontSize": 13,
+      "menu": "glass",
+      "icons": "outline",
+      "folderColor": "classic",
+      "background": "gradient",
+      "backgroundImage": "",
+      "radius": 8,
+      "enabledSheets": []
+    }
+  },
+  "performance": {
+    "priority": "dynamic",
+    "maxThreads": 0,
+    "maxCacheMb": 256,
+    "maxCpuPercent": 0,
+    "maxMemoryPercent": 0,
+    "backgroundIndexing": true,
+    "indexDrives": true,
+    "lazyLoading": true,
+    "metadataCaching": true,
+    "thumbnails": true,
+    "thumbnailSize": 128,
+    "predictivePrefetch": true,
+    "reduceOnBattery": true,
+    "backgroundMode": "aggressive",
+    "backgroundLocked": false
+  },
+  "transfer": {
+    "conflict": "ask",
+    "preserveTimestamps": true,
+    "largeFileThresholdMb": 32,
+    "maxParallel": 0,
+    "rememberDeviceSpeeds": true,
+    "historyLimit": 300,
+    "method": "auto",
+    "tryOtherMethods": true,
+    "progressIntervalMs": 0,
+    "maxSpeedKb": 0,
+    "targetSpeedKb": 0,
+    "maxMinutes": 0,
+    "onTimeLimit": "pause",
+    "defaultPriority": "normal",
+    "maxActive": 0
+  },
+  "search": {
+    "limit": 500,
+    "includeHidden": false,
+    "scopeToCurrentFolder": true
+  },
+  "contextMenu": {
+    "hidden": []
+  },
+  "terminal": {
+    "windowsShell": "cmd",
+    "linuxTerminal": "",
+    "macTerminal": "Terminal",
+    "startupCommand": "",
+    "customCommand": "",
+    "windowsProfile": "",
+    "shellProgram": "",
+    "newTab": false,
+    "useSelectedFolder": true,
+    "defaultFolder": "here"
+  },
+  "advanced": {},
+  "keys": {},
+  "customActions": [],
+  "profiles": [],
+  "activeProfile": "",
+  "setupDone": false,
+  "updates": {
+    "enabled": true,
+    "checkOnOpen": true,
+    "background": true,
+    "checkHours": 6,
+    "autoDownload": true,
+    "notify": true,
+    "repo": "enVIdPluginSuite/file-explorer",
+    "branch": "main",
+    "token": ""
+  }
+}

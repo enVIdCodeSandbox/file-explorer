@@ -9,7 +9,7 @@ export type Control =
   | { type: "toggle" }
   | { type: "select"; options: { value: string; label: string }[] }
   | { type: "number"; min: number; max: number; step?: number; unit?: string }
-  | { type: "text"; placeholder?: string }
+  | { type: "text"; placeholder?: string; secret?: boolean }
   | { type: "color" }
   | { type: "css" }
   | { type: "menuItems" }
@@ -23,7 +23,8 @@ export type Control =
   | { type: "profiles" }
   | { type: "resources" }
   | { type: "locks" }
-  | { type: "defaultFm" };
+  | { type: "defaultFm" }
+  | { type: "updates" };
 
 export interface SettingDef {
   /** Dotted path into the Settings object, e.g. "general.showHidden". */
@@ -52,6 +53,7 @@ export const SECTIONS = [
   "File transfers",
   "Search",
   "Notifications",
+  "Updates",
   "Right-click menu",
   "Terminal",
   "Advanced",
@@ -119,6 +121,8 @@ export const SETTINGS: SettingDef[] = [
   { key: "performance.maxCpuPercent", section: "Performance", label: "Processor limit", description: "The most of your processor the app may use, as a share of all its cores. It limits how many worker threads run at once. 0 means no limit. Each performance preset sets this; God-like sets none.", control: { type: "number", min: 0, max: 100, step: 5, unit: "%" }, keywords: "cpu cap limit threads share percent" },
   { key: "performance.maxMemoryPercent", section: "Performance", label: "Memory limit", description: "The most of your computer's memory the app's caches may hold, as a share of what is installed. 0 means no limit. Each performance preset sets this; God-like sets none.", control: { type: "number", min: 0, max: 100, step: 1, unit: "%" }, keywords: "ram memory cap limit percent" },
   { key: "performance.maxCacheMb", section: "Performance", label: "Maximum memory for caches", description: "Upper limit for the file index and cached folder listings, in megabytes. 0 means no limit. The lower of this and the memory limit applies.", control: { type: "number", min: 0, max: 65536, step: 16, unit: "MB" }, keywords: "ram memory" },
+  { key: "performance.backgroundMode", section: "Performance", label: "When minimized or in the background", description: "Cuts the app's work while it is out of your way. Aggressive: one thread, no thumbnails, indexing or preloading, a small cache, and slow progress updates, as soon as the window is minimized, hidden or has been behind other windows for a few seconds. Gentle: halves the work, only while minimized or hidden. Running file transfers are never slowed down. Changing this yourself keeps performance presets from changing it.", control: { type: "select", options: [{ value: "aggressive", label: "Aggressive" }, { value: "gentle", label: "Gentle" }, { value: "off", label: "Off (keep working as usual)" }] }, keywords: "minimize minimised background idle battery save power cpu hidden" },
+  { key: "performance.backgroundLocked", section: "Performance", label: "Keep my background setting when I apply a preset", description: "On: performance presets leave the setting above alone. This turns on by itself when you change it. Turn it off to let presets set it again.", control: toggle, keywords: "preset lock override" },
   { key: "performance.reduceOnBattery", section: "Performance", label: "Do less on battery", description: "Pauses background indexing and uses fewer threads when unplugged.", control: toggle, keywords: "laptop power" },
   { key: "performance.backgroundIndexing", section: "Performance", label: "Index files in the background", description: "Keeps search instant. Without it, searches scan the folder each time.", control: toggle, keywords: "cache search" },
   { key: "performance.indexDrives", section: "Performance", label: "Index all local drives", description: "Every local drive is indexed in the background so search answers instantly. Turn off to index only your home folder. Network shares are never indexed automatically.", control: toggle },
@@ -131,6 +135,18 @@ export const SETTINGS: SettingDef[] = [
   // ---- Storage ----
   { key: "storage.caches", section: "Storage", label: "What the app stores", description: "Each kind of cache, how much space it takes, and a button to clear just that one.", control: { type: "storage" }, keywords: "cache clear thumbnails index disk usage snapshots history space" },
 
+  // ---- Updates ----
+  { key: "updates.panel", section: "Updates", label: "Version and updates", description: "Which build this is, whether a newer one is out, and a button to install it.", control: { type: "updates" }, keywords: "update upgrade version latest download install restart check" },
+  { key: "updates.enabled", section: "Updates", label: "Check for updates", description: "Looks at the builds published on GitHub. Nothing else is sent anywhere, and nothing is installed without the steps below.", control: toggle, keywords: "auto update automatic" },
+  { key: "updates.checkOnOpen", section: "Updates", label: "Check when the app opens", control: toggle, keywords: "startup launch" },
+  { key: "updates.background", section: "Updates", label: "Keep checking while the app is open", description: "Looks again every few hours. Paused while the window is minimized and the background saver is on.", control: toggle, keywords: "background periodic" },
+  { key: "updates.checkHours", section: "Updates", label: "Hours between checks", control: { type: "number", min: 1, max: 168, unit: "h" }, keywords: "interval frequency" },
+  { key: "updates.autoDownload", section: "Updates", label: "Download new builds automatically", description: "The download appears with your other transfers. When it is done you are asked whether to restart now or later; nothing restarts by itself. Off: use the Update button above.", control: toggle, keywords: "auto update download install background" },
+  { key: "updates.notify", section: "Updates", label: "Tell me when a new build is out", description: "A short note in the notifications, once for each new build.", control: toggle, keywords: "notification alert announce" },
+  { key: "updates.repo", section: "Updates", label: "Repository", description: "owner/name on GitHub whose builds are used.", control: { type: "text", placeholder: "enVIdPluginSuite/file-explorer" }, keywords: "github source fork" },
+  { key: "updates.branch", section: "Updates", label: "Branch", description: "Only builds made from this branch are offered.", control: { type: "text", placeholder: "main" }, keywords: "github channel" },
+  { key: "updates.token", section: "Updates", label: "GitHub access token (optional)", description: "GitHub lets only signed-in accounts download builds from its Actions page. With a token that may read Actions the app downloads from GitHub itself. Without one it uses nightly.link, which works only for repositories that have it installed. The token stays on this computer and is never part of exports or profiles.", control: { type: "text", secret: true, placeholder: "github_pat_…" }, keywords: "pat key secret password nightly" },
+
   // ---- File transfers ----
   { key: "transfer.conflict", section: "File transfers", label: "When a file already exists", description: "Ask me shows, for each file that exists on both sides, how the two compare and lets you Replace, Skip or Keep both, for that file or for all that follow. Folders with the same name are merged, and the files inside are asked about one by one.", control: { type: "select", options: [{ value: "ask", label: "Ask me" }, { value: "keepBoth", label: "Keep both" }, { value: "overwrite", label: "Replace" }, { value: "skip", label: "Skip" }] }, keywords: "conflict duplicate overwrite" },
   { key: "transfer.maxParallel", section: "File transfers", label: "Parallel file streams", description: "0 lets the app choose per job from file sizes and drive types.", control: { type: "number", min: 0, max: 64 }, keywords: "threads workers" },
@@ -140,6 +156,12 @@ export const SETTINGS: SettingDef[] = [
   { key: "transfer.historyLimit", section: "File transfers", label: "Transfers to remember", description: "A few bytes each. The most recent ones teach the app how long similar copies take. 0 remembers none; clear them in Storage.", control: { type: "number", min: 0, max: 5000, step: 50 }, keywords: "history prediction model" },
   { key: "transfer.method", section: "File transfers", label: "Copy method", description: "Automatic starts with the built-in engine, then learns from your own transfers which method is fastest for each pair of drives. SMB-tuned and NFS-tuned only apply when a network share of that kind is involved; rclone only when it is installed. A method that cannot run on a particular job falls back to the built-in engine.", control: { type: "select", options: [{ value: "auto", label: "Automatic (learn from results)" }, { value: "native", label: "Built-in engine" }, { value: "robocopy", label: "Robocopy (Windows)" }, { value: "rsync", label: "rsync (macOS / Linux)" }, { value: "smb", label: "SMB-tuned (Windows shares; Robocopy with compression)" }, { value: "nfs", label: "NFS-tuned (rsync, whole-file)" }, { value: "rclone", label: "rclone (if installed)" }] }, keywords: "robocopy rsync rclone smb nfs algorithm engine network share" },
   { key: "transfer.tryOtherMethods", section: "File transfers", label: "Try other methods on big copies", description: "Lets a large copy now and then use another available method so the app can measure which is faster on your drives. Off keeps everything on the built-in engine.", control: toggle, keywords: "learn explore robocopy rsync" },
+  { key: "transfer.maxSpeedKb", section: "File transfers", label: "Maximum total speed", description: "The most all transfers together may move, in KB per second (1024 KB/s = 1 MB/s). 0 means no limit. A transfer held to a limit uses the built-in engine, since copy tools cannot be held to one.", control: { type: "number", min: 0, max: 100_000_000, step: 256, unit: "KB/s" }, keywords: "bandwidth throttle limit speed network cap download" },
+  { key: "transfer.targetSpeedKb", section: "File transfers", label: "Target speed for each transfer", description: "Every new transfer is held to this speed, in KB per second. 0 means none. You can change it for one transfer while it runs, in the expanded Transfers window.", control: { type: "number", min: 0, max: 100_000_000, step: 256, unit: "KB/s" }, keywords: "bandwidth throttle individual per transfer speed" },
+  { key: "transfer.maxMinutes", section: "File transfers", label: "Longest a transfer may run", description: "After this many minutes of work a transfer pauses or stops (next setting). 0 means no limit.", control: { type: "number", min: 0, max: 10080, step: 5, unit: "min" }, keywords: "time limit timeout duration" },
+  { key: "transfer.onTimeLimit", section: "File transfers", label: "When the time limit is reached", description: "Pausing keeps your place so you can resume; stopping ends the transfer and keeps what was copied.", control: { type: "select", options: [{ value: "pause", label: "Pause it" }, { value: "stop", label: "Stop it" }] }, keywords: "timeout" },
+  { key: "transfer.defaultPriority", section: "File transfers", label: "Priority of new transfers", description: "High transfers go first when others are waiting. Low ones go last and give way to other programs on your computer. Change it for one transfer while it runs.", control: { type: "select", options: [{ value: "high", label: "High" }, { value: "normal", label: "Normal" }, { value: "low", label: "Low" }] }, keywords: "priority importance order queue" },
+  { key: "transfer.maxActive", section: "File transfers", label: "Transfers at the same time", description: "How many transfers work at once; the rest wait in a queue, highest priority first, and can be started early. 0 runs them all at once.", control: { type: "number", min: 0, max: 32 }, keywords: "queue simultaneous concurrent" },
   { key: "transfer.progressIntervalMs", section: "File transfers", label: "Progress update rate", description: "Milliseconds between progress updates. 0 chooses by power: 100 on desktops, 250 on laptops and mid-range machines, 500 on weak ones or low battery.", control: { type: "number", min: 0, max: 2000, step: 50, unit: "ms" }, keywords: "polling refresh rate interval" },
 
   // ---- Search ----

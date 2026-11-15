@@ -148,7 +148,7 @@
 .m-app .settings-nav .side-item { flex: none; width: auto; height: 40px; padding: 0 14px; border-radius: 20px; white-space: nowrap; background: var(--surface-raised); }
 .m-app .settings-nav .side-item[data-active] { background: var(--accent); color: var(--accent-text); }
 .m-app .settings-nav .side-item::before { display: none; }
-.m-app .settings-body { padding: 4px 14px calc(24px + var(--safe-bottom)); }
+.m-app .settings-scroll { padding: 4px 14px 24px; }
 .m-app .settings-close { position: fixed; top: calc(8px + var(--safe-top)); right: 8px; float: none; background: transparent; z-index: 3; }
 .m-app .settings-close .icon-button { width: 40px; height: 40px; border-radius: 50%; background: var(--surface-raised); }
 .m-app .settings-close [aria-label="Open in its own window"], .m-app .transfer-window [aria-label*="own window"], .m-app .transfer-window [title*="own window"] { display: none; }
@@ -357,7 +357,7 @@
 .m-app .connect-server .dialog-buttons { position: sticky; bottom: 0; background: var(--panel, var(--bg)); padding-bottom: 6px; }
 .m-app .connect-server .connect-error, .m-app .connect-server .connect-warning, .m-app .connect-server .batch-hint { overflow-wrap: anywhere; }
 .m-app .connect-server .dialog-buttons { background: var(--surface-raised, var(--surface)); }
-.m-app .save-bar { margin: 14px -14px 0; padding: 10px 14px calc(10px + var(--safe-bottom, 0px)); flex-wrap: wrap; bottom: calc(-1 * var(--safe-bottom, 0px)); gap: 8px; }
+.m-app .save-bar { margin: 0; padding: 10px 14px calc(10px + var(--safe-bottom, 0px)); flex-wrap: wrap; gap: 8px; }
 .m-app .save-bar .muted { display: none; }
 .m-app .save-bar .save-auto { flex: 1 1 100%; white-space: normal; }
 .m-app .save-bar button { flex: 1; }
@@ -373,3 +373,13 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .m-app .setting select, .m-app .setting input[type="text"], .m-app .setting .number-field { max-width: 100%; }
 .m-app .dialog-buttons { flex-wrap: wrap; }
 .m-app .dialog-buttons button { flex: 1 1 auto; min-width: 0; }
+.m-app .preset-panel .preset-card { max-width: none; flex-basis: 100%; }
+
+/* Setup on a narrow screen: a "1fr" column grows to its widest content (a long line, a switch), pushing the cards past the edge. Let the columns shrink and wrap their text. */
+.setup[data-mobile] .os-grid, .setup[data-mobile] .setup-modes, .setup[data-mobile] .setup-tiles, .setup[data-mobile] .setup-summary { grid-template-columns: minmax(0, 1fr); }
+.setup[data-mobile] .setup-tile, .setup[data-mobile] .privacy-local, .setup[data-mobile] .os-card, .setup[data-mobile] .setup-mode { min-width: 0; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+.setup[data-mobile] .setup-stage { min-width: 0; max-width: 100%; }
+
+/* First-run setup, privacy step: the tiles shrink to the screen instead of pushing it wider. */
+.setup[data-mobile] .privacy-grid { grid-template-columns: minmax(0, 1fr); }
+.setup[data-mobile] .privacy-grid > *, .setup[data-mobile] .privacy-local, .setup[data-mobile] .setup-tile { min-width: 0; max-width: 100%; box-sizing: border-box; }

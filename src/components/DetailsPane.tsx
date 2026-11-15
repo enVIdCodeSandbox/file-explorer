@@ -142,7 +142,7 @@ function LoadingNotice() {
   const [, tick] = useState(0);
   useEffect(() => {
     if (!p) return;
-    const t = setInterval(() => tick((n) => n + 1), 500);
+    const t = setInterval(() => !document.hidden && tick((n) => n + 1), 500);
     return () => clearInterval(t);
   }, [p]);
   if (!p) return null;

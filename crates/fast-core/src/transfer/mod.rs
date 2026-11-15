@@ -5,6 +5,7 @@ pub mod eta;
 pub mod method;
 pub mod probe;
 pub mod strategy;
+pub mod throttle;
 
 pub use engine::{start, start_with, Conflict, ConflictInfo, Op, Resolution, Phase, Predictor, Progress, TransferHandle, TransferSpec};
 pub use eta::{DisplayMode, EtaModel, EtaParams};

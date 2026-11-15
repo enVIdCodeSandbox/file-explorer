@@ -493,6 +493,11 @@ mod tests {
             }),
             prediction: None,
             conflict: None,
+            priority: 1,
+            limit_bps: 0,
+            max_secs: 0,
+            timed_out: false,
+            queued_ahead: 0,
             method: Some(Method::Native),
         }
     }

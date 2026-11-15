@@ -21,13 +21,14 @@ const MEDIA_LABEL: Record<string, string> = { ssd: "SSD", hdd: "hard disk", netw
 type Job = { kind: "transfer"; p: Progress } | { kind: "delete"; p: DeleteProgress };
 
 function isActive(j: Job): boolean {
-  return j.p.phase === "running" || j.p.phase === "scanning" || (j.kind === "transfer" && j.p.phase === "paused");
+  return j.p.phase === "running" || j.p.phase === "scanning" || (j.kind === "transfer" && j.p.phase === "queued") || (j.kind === "transfer" && j.p.phase === "paused");
 }
 
 function titleOf(j: Job): string {
   if (j.kind === "delete") {
     const p = j.p;
     const what = p.selected === 1 ? `"${p.firstName}"` : `${formatCount(p.selected)} items`;
+    if (p.action === "update") return p.phase === "done" ? "Update downloaded" : p.phase === "cancelled" ? "Update download cancelled" : p.phase === "failed" ? "Could not download the update" : "Downloading the update";
     if (p.action === "compress") return p.phase === "done" ? `Compressed ${what}` : p.phase === "cancelled" ? "Compressing cancelled" : p.phase === "failed" ? `Could not compress ${what}` : `Compressing ${what}`;
     if (p.action === "extract") return p.phase === "done" ? `Extracted ${what}` : p.phase === "cancelled" ? "Extracting cancelled" : p.phase === "failed" ? `Could not extract ${what}` : `Extracting ${what}`;
     if (p.action === "upload" || p.action === "download") {
@@ -47,6 +48,7 @@ function titleOf(j: Job): string {
   const p = j.p;
   const dest = baseName(p.destDir);
   const verb = p.op === "move" ? ["Moving", "Moved"] : ["Copying", "Copied"];
+  if (p.phase === "queued") return `${p.op === "move" ? "Move" : "Copy"} waiting for its turn${p.queuedAhead ? ` (${p.queuedAhead} ahead)` : ""}`;
   if (p.phase === "scanning") return `Preparing to ${p.op}…`;
   if (p.phase === "done") return `${verb[1]} ${formatCount(p.filesDone)} item${p.filesDone === 1 ? "" : "s"} to ${dest}`;
   if (p.phase === "cancelled") return `${p.op === "move" ? "Move" : "Copy"} cancelled`;
@@ -125,7 +127,8 @@ function Card({ job }: { job: Job }) {
   const spec = useStore((s) => (job.kind === "transfer" ? s.specs[job.p.id] : undefined));
   const { dismissTransfer, dismissDelete } = useStore.getState();
   const active = isActive(job);
-  const scanning = job.p.phase === "scanning";
+  const queued = job.kind === "transfer" && job.p.phase === "queued";
+  const scanning = job.p.phase === "scanning" || queued;
   const p = job.p;
   const needsAdmin = !active && p.errors.some((e) => e.needsElevation);
   const dismiss = () => (job.kind === "delete" ? dismissDelete(p.id) : dismissTransfer(p.id));
@@ -135,6 +138,11 @@ function Card({ job }: { job: Job }) {
       <div className="transfer-head">
         <strong>{titleOf(job)}</strong>
         <div className="transfer-actions">
+          {queued && (
+            <button className="link-button" onClick={() => void api.transferAdjust(p.id, "startNow")} title="Skip the queue and begin now">
+              Start now
+            </button>
+          )}
           {job.kind === "transfer" && active && !scanning && (
             <button
               className="icon-button"
@@ -286,6 +294,43 @@ function EtaNote({ p }: { p: Progress }) {
   );
 }
 
+const PRIORITY = ["low", "normal", "high"] as const;
+
+/** Speed limit, priority and time limit of one transfer, changeable while it runs. */
+function TransferControls({ p }: { p: Progress }) {
+  const [speed, setSpeed] = useState(String(Math.round((p.limitBps ?? 0) / 1024)));
+  const [minutes, setMinutes] = useState(String(Math.round((p.maxSecs ?? 0) / 60)));
+  const [stop, setStop] = useState(useStore.getState().settings?.transfer.onTimeLimit === "stop");
+  const apply = (what: "speed" | "time", v: string) => void api.transferAdjust(p.id, what, String(Math.max(0, Math.round(Number(v) || 0))), what === "time" ? stop : undefined);
+  return (
+    <dl className="details-list transfer-facts transfer-controls">
+      <dt>Priority</dt>
+      <dd>
+        <select aria-label="Priority of this transfer" value={PRIORITY[p.priority ?? 1]} onChange={(e) => void api.transferAdjust(p.id, "priority", e.target.value)}>
+          <option value="high">High: first in the queue</option>
+          <option value="normal">Normal</option>
+          <option value="low">Low: last, and gives way to other programs</option>
+        </select>
+      </dd>
+      <dt>Speed limit</dt>
+      <dd>
+        <input type="number" min={0} step={256} aria-label="Speed limit in kilobytes per second" value={speed} onChange={(e) => setSpeed(e.target.value)} onBlur={() => apply("speed", speed)} onKeyDown={(e) => e.key === "Enter" && apply("speed", speed)} />
+        <span className="muted"> KB/s ({Number(speed) > 0 ? `${(Number(speed) / 1024).toFixed(1)} MB/s` : "no limit"})</span>
+      </dd>
+      <dt>Time limit</dt>
+      <dd>
+        <input type="number" min={0} aria-label="Time limit in minutes" value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={() => apply("time", minutes)} onKeyDown={(e) => e.key === "Enter" && apply("time", minutes)} />
+        <span className="muted"> min, then </span>
+        <select aria-label="At the time limit" value={stop ? "stop" : "pause"} onChange={(e) => { setStop(e.target.value === "stop"); void api.transferAdjust(p.id, "time", String(Math.round(Number(minutes) || 0)), e.target.value === "stop"); }}>
+          <option value="pause">pause</option>
+          <option value="stop">stop</option>
+        </select>
+        {p.timedOut && <span className="muted"> · limit reached</span>}
+      </dd>
+    </dl>
+  );
+}
+
 function TransferDetail({ p }: { p: Progress }) {
   const fraction = useStore((s) => s.shown[p.id] ?? 0);
   const series = useStore((s) => s.series[p.id]) ?? [];
@@ -306,6 +351,7 @@ function TransferDetail({ p }: { p: Progress }) {
         <span className="bytes">● Megabytes per second</span>
         {typical ? <span className="typical">┆ Typical finish</span> : null}
       </div>
+      {active && <TransferControls p={p} />}
       <dl className="details-list transfer-facts">
         <dt>Name</dt>
         <dd className="path">{p.current ? baseName(p.current) : "—"}</dd>
@@ -455,7 +501,7 @@ function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
                 <Icon name={expanded ? "expand" : "chevron"} size={11} />
                 <span className="grow file-name">{titleOf(j)}</span>
                 {!expanded && active && <SmallBar job={j} />}
-                {j.kind === "transfer" && active && j.p.phase !== "scanning" && (
+                {j.kind === "transfer" && active && j.p.phase !== "scanning" && j.p.phase !== "queued" && (
                   <button
                     className="icon-button"
                     aria-label={j.p.phase === "paused" ? "Resume" : "Pause"}

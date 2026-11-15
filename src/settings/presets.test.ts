@@ -23,7 +23,7 @@ const blank = (): Settings =>
   ({
     general: { showHidden: false },
     appearance: { theme: "dark", accent: "#4cc2ff", density: "compact", hideNetworkAddress: true, layout: {}, style: { icons: "outline", radius: 8, menu: "glass", folderColor: "classic", font: "system" }, showDetailsPane: true },
-    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, maxCpuPercent: 0, maxMemoryPercent: 0, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true },
+    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, maxCpuPercent: 0, maxMemoryPercent: 0, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true, backgroundMode: "aggressive", backgroundLocked: false },
     transfer: {},
     search: {},
     contextMenu: { hidden: [] },
@@ -54,6 +54,21 @@ describe("performance presets", () => {
         else expect(getSetting(blank(), key), `${p.id}: ${key}`).not.toBeUndefined();
       }
     }
+  });
+  it("sets the background saver, unless the person chose their own", () => {
+    const s = blank();
+    applyPatch(s, PERF_PRESETS[0].patch);
+    expect(s.performance.backgroundMode).toBe("aggressive");
+    applyPatch(s, PERF_PRESETS[PERF_PRESETS.length - 1].patch);
+    expect(s.performance.backgroundMode).toBe("gentle");
+    s.performance.backgroundMode = "off";
+    s.performance.backgroundLocked = true;
+    applyPatch(s, PERF_PRESETS[0].patch);
+    expect(s.performance.backgroundMode, "kept").toBe("off");
+    expect(differences(s, { "performance.backgroundMode": "aggressive" })).toEqual([]);
+    s.performance.backgroundLocked = false;
+    applyPatch(s, PERF_PRESETS[0].patch);
+    expect(s.performance.backgroundMode).toBe("aggressive");
   });
   it("grows the cache and thread limit step by step", () => {
     const caches = PERF_PRESETS.slice(0, -1).map((p) => p.patch["performance.maxCacheMb"] as number);

@@ -1346,6 +1346,12 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
         let _ = app.emit("transfer-progress", p);
     };
     let handle = transfer::start_with(id, spec, budget, drive_list, predict, choose, on_progress);
+    {
+        let s = st.settings.read();
+        handle.set_priority(transfer::throttle::priority_from(&s.transfer.default_priority));
+        handle.set_speed_limit(s.transfer.target_speed_kb * 1024);
+        handle.set_time_limit(s.transfer.max_minutes * 60, s.transfer.on_time_limit == "stop");
+    }
     let mut transfers = st.transfers.lock();
     transfers.insert(id, handle.clone());
     // A tiny job can finish before the handle is stored; do not leak it.
@@ -1353,6 +1359,31 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
         transfers.remove(&id);
     }
     Ok(id)
+}
+
+/// Change one transfer while it runs: its speed limit (KB per second, 0 = none), its priority
+/// ("low", "normal", "high"), its time limit (minutes, 0 = none, stopping or pausing at the end), or
+/// leave the queue now. `what` is `speed`, `priority`, `time` or `startNow`.
+#[tauri::command]
+pub fn transfer_adjust(state: State<'_, Shared>, id: u64, what: String, value: Option<String>, stop: Option<bool>) -> CmdResult<()> {
+    let transfers = state.transfers.lock();
+    let h = transfers.get(&id).ok_or("transfer not found")?;
+    let number = || value.as_deref().unwrap_or("0").trim().parse::<u64>().map_err(|_| "not a number".to_string());
+    match what.as_str() {
+        "speed" => h.set_speed_limit(number()? * 1024),
+        "priority" => h.set_priority(transfer::throttle::priority_from(value.as_deref().unwrap_or("normal"))),
+        "time" => h.set_time_limit(number()? * 60, stop.unwrap_or(false)),
+        "startNow" => h.start_now(),
+        other => return Err(format!("unknown setting {other}")),
+    }
+    Ok(())
+}
+
+/// Apply the transfer settings that are not per transfer: the combined speed cap and the queue length.
+pub fn apply_transfer_limits(st: &Shared) {
+    let s = st.settings.read();
+    transfer::throttle::global_limiter().set_rate(s.transfer.max_speed_kb * 1024);
+    transfer::throttle::gate().set_max(s.transfer.max_active);
 }
 
 /// Ask an administrator helper to stop (it cannot be signalled directly).
@@ -1786,13 +1817,61 @@ pub fn start_drive_watch(app: AppHandle, st: Shared) {
 }
 
 pub fn apply_budget(app: &AppHandle, st: &Shared) {
-    let budget = resources::compute(&st.settings.read().performance, &resources::snapshot());
+    let (perf_mode, base) = {
+        let s = st.settings.read();
+        (s.performance.background_mode.clone(), resources::compute(&s.performance, &resources::snapshot()))
+    };
+    let attention = match st.attention.load(Ordering::Relaxed) {
+        0 => resources::Attention::Active,
+        1 => resources::Attention::Behind,
+        _ => resources::Attention::Away,
+    };
+    let budget = resources::dimmed(&base, &perf_mode, attention);
     let changed = *st.budget.read() != budget;
     if changed {
+        let entering = budget.background && !st.budget.read().background;
         st.listings.lock().set_capacity(budget.listing_cache_dirs);
         *st.budget.write() = budget.clone();
         let _ = app.emit("budget-changed", budget);
+        if entering && attention == resources::Attention::Away {
+            // Out of sight: give back what is only kept for speed.
+            st.listings.lock().clear();
+            fast_core::browse::clear_cache();
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            // SAFETY: malloc_trim only returns unused heap pages to the system.
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        }
     }
+}
+
+/// Works out whether the main window is in use, behind others, or minimized, and applies the budget.
+/// Being behind other windows counts only after a few seconds, so switching to another app and back is free.
+#[cfg(desktop)]
+pub fn attention_changed(app: &AppHandle) {
+    use tauri::Manager;
+    let Some(win) = app.get_webview_window("main") else { return };
+    let away = win.is_minimized().unwrap_or(false) || !win.is_visible().unwrap_or(true);
+    let focused = win.is_focused().unwrap_or(true);
+    let st = app.state::<Shared>().inner().clone();
+    let level = if away { 2 } else if focused { 0 } else { 1 };
+    if level == 1 {
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let st = app2.state::<Shared>().inner().clone();
+            if let Some(w) = app2.get_webview_window("main") {
+                let away = w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true);
+                let level = if away { 2 } else if w.is_focused().unwrap_or(true) { 0 } else { 1 };
+                st.attention.store(level, Ordering::Relaxed);
+                apply_budget(&app2, &st);
+            }
+        });
+        return;
+    }
+    st.attention.store(level, Ordering::Relaxed);
+    apply_budget(app, &st);
 }
 
 #[tauri::command]
@@ -1819,6 +1898,7 @@ pub async fn set_settings(app: AppHandle, state: State<'_, Shared>, settings: Se
             }
         }
         apply_budget(&app, &st);
+        apply_transfer_limits(&st);
         // Other windows (a detached Settings window, tabs in their own windows) follow.
         let _ = app.emit("settings-changed", st.settings.read().clone());
         Ok(())

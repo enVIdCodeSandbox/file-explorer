@@ -45,6 +45,10 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `servers_forget_host` | `serversForgetHost` | `host: String, port: u16` | `()` | Drop a remembered SFTP fingerprint. |
 | `transfer_start` | `transferStart` | `mut spec: TransferSpec` | `u64` |  |
 | `transfer_control` | `transferControl` | `id: u64, action: String` | `()` |  |
+| `transfer_adjust` | `transferAdjust` | `id: u64, what: String, value: Option<String>, stop: Option<bool>` | `()` | Change a running transfer: `speed` (KB/s, 0 = none), `priority` (`low`/`normal`/`high`), `time` (minutes, 0 = none; `stop` picks stop or pause at the end) or `startNow` (leave the queue). |
+| `update_check` / `update_status` | `updateCheck` / `updateStatus` | | `UpdateInfo` | Look for a newer build now (network) / what is known without looking. |
+| `update_download` | `updateDownload` | | `u64` | Download the newest build as a job on the Transfers card (`delete-progress` with `action: "update"`); `update-ready` follows. |
+| `update_install` / `update_discard` | `updateInstall` / `updateDiscard` | | `()` | Install the downloaded build and restart / throw it away. |
 | `transfer_resolve` | `transferResolve` | `id: u64, answer: String, all: bool` | `()` | Answer the "file already exists" question a running transfer is showing. `answer` is `skip`, `replace` or `keepBoth`; with `all`, it applies to every later conflict in the same transfer. |
 | `transfer_force_stop` | `transferForceStop` | `id: u64` | `()` | Stop a transfer without waiting for it to answer. A normal cancel is a request the copy has to notice, and one stuck waiting on a dead network drive never does. This asks it to stop, stops any copy tool outright, and lets go of the job at once; whatever it is stuck in is abandoned and ends whenever the drive finally answers (or when the app closes). |
 | `check_access` | `checkAccess` | `job: Job` | `AccessCheck` | Would the current user be refused if this job ran now? The app calls this *before* running anything and asks the person first if the answer is yes. |
@@ -137,7 +141,9 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 | `folder-size` | One folder's computed size arrived |
 | `search-hits` | A batch of search results |
 | `index-status` | Indexing progress for a volume |
-| `budget-changed` | The resource budget was re-evaluated |
+| `update-available` | A newer build was found (once for each build, if notifications are on) |
+| `update-ready` | An update finished downloading and waits for a restart |
+| `budget-changed` | The resource budget was re-evaluated (also when the window is minimized or comes back; `background: true` while it runs on the reduced budget) |
 | `settings-changed` | Settings were saved in some window; every window reloads them |
 | `detached` | A settings/transfers window opened or closed |
 | `analysis-partial`, `analysis-done`, `analysis-failed` | Disk usage map progress |

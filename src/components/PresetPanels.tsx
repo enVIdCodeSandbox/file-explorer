@@ -319,7 +319,7 @@ export function ResourcesPanel() {
       setMem((m) => [...m.slice(-(HISTORY - 1)), u.memoryBytes]);
     };
     void tick();
-    const id = setInterval(() => void tick(), 1500);
+    const id = setInterval(() => !document.hidden && void tick(), 1500);
     return () => {
       alive = false;
       clearInterval(id);

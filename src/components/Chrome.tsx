@@ -702,11 +702,29 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
           }}
         />
         {base && (
-          <select className="search-mode" aria-label="How far to search" title="How far searching reaches" value={mode} onChange={(e) => applyMode(e.target.value as SearchMode)}>
-            <option value="level">This folder</option>
-            <option value="tree">+ subfolders</option>
-            <option value="global">Everywhere</option>
-          </select>
+          <button
+            type="button"
+            className="search-mode"
+            aria-label="How far to search"
+            aria-haspopup="menu"
+            title="How far searching reaches"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu({
+                x: r.right - 190,
+                y: r.bottom + 4,
+                items: [
+                  { id: "search-level", label: "This folder only", checked: mode === "level", run: () => applyMode("level") },
+                  { id: "search-tree", label: "This folder and its subfolders", checked: mode === "tree", run: () => applyMode("tree") },
+                  { id: "search-global", label: "Everywhere", checked: mode === "global", run: () => applyMode("global") },
+                ],
+              });
+            }}
+          >
+            {mode === "level" ? "This folder" : mode === "tree" ? "+ subfolders" : "Everywhere"}
+            <Icon name="expand" size={9} />
+          </button>
         )}
         {boxFocused && historyLimit > 0 && searches.length > 0 && (
           <div className="search-history" role="listbox" aria-label="Previous searches">

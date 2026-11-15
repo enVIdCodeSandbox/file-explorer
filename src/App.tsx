@@ -21,7 +21,7 @@ import { AnalyzerView } from "./components/Analyzer";
 import { SmartClearView } from "./components/SmartClear";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
-import { onJobFinished, redoLast, undoLast, useStore } from "./store";
+import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
 import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } from "./util/path";
 import { Tooltips } from "./components/Tooltip";
@@ -75,7 +75,7 @@ export default function App() {
     s.init().catch((e) => setFatal(String(e)));
     s.refreshLink();
     // A cable plugged in or Wi-Fi taking over changes what thumbnails of network shares do in automatic mode.
-    const linkTimer = setInterval(() => useStore.getState().refreshLink(), 10_000);
+    const linkTimer = setInterval(() => !document.hidden && useStore.getState().refreshLink(), 10_000);
     const subscriptions = [
       on("transfer-progress", (p) => useStore.getState().onProgress(p)),
       on("delete-progress", (p) => useStore.getState().onDeleteProgress(p)),
@@ -83,7 +83,16 @@ export default function App() {
       on("fs-changed", (dirs) => useStore.getState().bumpDirs(dirs)),
       on("dir-updated", (l) => useStore.getState().bumpDirs([l.path])),
       on("index-status", (indexStatus) => useStore.setState({ indexStatus })),
-      on("budget-changed", (budget) => useStore.setState({ budget })),
+      on("update-available", (u) =>
+        useStore.getState().notify("info", "A new version is out", `Build ${u.latest?.sha.slice(0, 7) ?? ""} is ready to download`, {
+          facts: [["Your build", u.sha?.slice(0, 7) ?? u.version], ["New build", u.latest?.sha.slice(0, 7) ?? ""], ["Where", "Settings > Updates"]],
+        }),
+      ),
+      on("update-ready", () => void askToRestart()),
+      on("budget-changed", (budget) => {
+        document.documentElement.toggleAttribute("data-background", !!budget.background);
+        useStore.setState({ budget });
+      }),
       on("drives-changed", (p) => useStore.getState().onDrivesChanged(p)),
       on("detached", ({ kind, open }) => {
         const s = useStore.getState();
@@ -331,5 +340,26 @@ function recalledDetached(): { settings: boolean; transfers: boolean } {
     return { settings: false, transfers: false, ...JSON.parse(localStorage.getItem(DETACHED_KEY) ?? "{}") };
   } catch {
     return { settings: false, transfers: false };
+  }
+}
+
+let asking = false;
+/** An update has been downloaded: restart now (the new version is installed and opens again) or wait. */
+async function askToRestart() {
+  if (asking) return;
+  asking = true;
+  try {
+    const r = await ask({
+      title: "The update is ready",
+      message: "The new version has been downloaded. Restart FAST File Explorer to finish installing it. It reopens on its own, and transfers still running are stopped, so you may want to wait for them.",
+      buttons: [
+        { id: "restart", label: "Restart now", primary: true },
+        { id: "later", label: "Later" },
+      ],
+    });
+    if (r?.button === "restart") await api.updateInstall().catch((e) => useStore.getState().notify("error", "Could not install the update", String(e)));
+    else useStore.getState().notify("info", "Update waiting", "Restart from Settings > Updates when you are ready");
+  } finally {
+    asking = false;
   }
 }

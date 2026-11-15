@@ -43,7 +43,7 @@ export function ShareDialog() {
   useEffect(() => {
     if (!files) return;
     refresh();
-    const t = setInterval(refresh, 2000);
+    const t = setInterval(() => !document.hidden && refresh(), 2000);
     return () => clearInterval(t);
   }, [files, refresh]);
 

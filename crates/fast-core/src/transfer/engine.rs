@@ -7,6 +7,7 @@ use crate::history::{Prediction, Query, Route};
 use super::method::{self, Method, MethodChooser, MethodPref};
 use super::probe;
 use super::strategy::{self, JobProfile, Plan, Strategy};
+use super::throttle;
 use crate::drives::{self, Drive};
 use crate::resources::Budget;
 use crossbeam_channel as chan;
@@ -115,6 +116,8 @@ fn yes() -> bool {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
+    /// Waiting for its turn (see `throttle::Gate`).
+    Queued,
     Scanning,
     Running,
     Paused,
@@ -176,6 +179,16 @@ pub struct Progress {
     pub prediction: Option<Prediction>,
     /// A file that exists on both sides and needs an answer (see `TransferHandle::resolve`).
     pub conflict: Option<ConflictInfo>,
+    /// 0 low, 1 normal, 2 high.
+    pub priority: u8,
+    /// This transfer's own speed limit in bytes per second (0 = none).
+    pub limit_bps: u64,
+    /// Stops after this many seconds of work (0 = no time limit).
+    pub max_secs: u64,
+    /// The time limit ran out.
+    pub timed_out: bool,
+    /// While queued: how many transfers go first.
+    pub queued_ahead: u32,
 }
 
 /// Asked once, after the sources are scanned, what similar past transfers say.
@@ -215,9 +228,70 @@ struct Shared {
     /// One question at a time: workers queue on `ask_gate`.
     ask_gate: Mutex<()>,
     asker: Mutex<Asker>,
+    priority: Arc<AtomicU8>,
+    start_now: Arc<AtomicBool>,
+    limiter: throttle::Limiter,
+    max_secs: AtomicU64,
+    /// What to do when the time limit runs out: stop (true) or pause (false).
+    stop_on_timeout: AtomicBool,
+    timed_out: AtomicBool,
+    run_started: Mutex<Option<Instant>>,
+}
+
+thread_local! {
+    static LOWERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Shared {
+    /// Is any speed limit (this transfer's or the whole app's) in force?
+    fn limited(&self) -> bool {
+        self.limiter.rate() > 0 || throttle::global_limiter().rate() > 0
+    }
+    /// A block size that keeps a limited copy smooth: about an eighth of a second of the limit.
+    fn chunk_len(&self, buffer: usize) -> usize {
+        let rate = [self.limiter.rate(), throttle::global_limiter().rate()].into_iter().filter(|r| *r > 0).min();
+        match rate {
+            Some(r) => ((r / 8) as usize).clamp(64 * 1024, buffer.max(64 * 1024)),
+            None => buffer,
+        }
+    }
+    /// After moving `n` bytes: wait as long as the limits ask, and let a low priority transfer yield to
+    /// other programs. Returns false if the job was cancelled meanwhile.
+    fn pace(&self, n: u64) -> bool {
+        if self.priority.load(Ordering::Relaxed) == throttle::LOW && !LOWERED.with(|l| l.replace(true)) {
+            crate::proc::lower_thread_priority();
+        }
+        let mut wait = self.limiter.reserve(n).max(throttle::global_limiter().reserve(n));
+        while wait > Duration::ZERO {
+            let slice = wait.min(Duration::from_millis(50));
+            std::thread::sleep(slice);
+            wait -= slice;
+            if !self.checkpoint() {
+                return false;
+            }
+        }
+        self.checkpoint()
+    }
+    /// Apply the time limit once it has run out.
+    fn check_deadline(&self) {
+        let max = self.max_secs.load(Ordering::Relaxed);
+        if max == 0 || self.timed_out.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(t) = *self.run_started.lock() else { return };
+        if t.elapsed().as_secs() >= max {
+            self.timed_out.store(true, Ordering::Relaxed);
+            let to = if self.stop_on_timeout.load(Ordering::Relaxed) { ST_CANCEL } else { ST_PAUSE };
+            let _ = self.control.compare_exchange(ST_RUN, to, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+    fn fill(&self, p: &mut Progress) {
+        p.priority = self.priority.load(Ordering::Relaxed);
+        p.limit_bps = self.limiter.rate();
+        p.max_secs = self.max_secs.load(Ordering::Relaxed);
+        p.timed_out = self.timed_out.load(Ordering::Relaxed);
+    }
+
     /// What to do about `dst`, which already exists. With the Ask policy this
     /// blocks until the person answers (or the job is cancelled, giving None).
     fn resolve(&self, policy: Conflict, src: &Path, dst: &Path) -> Option<Conflict> {
@@ -269,6 +343,7 @@ impl Shared {
     /// Block while paused. Returns false if the job was cancelled.
     fn checkpoint(&self) -> bool {
         loop {
+            self.check_deadline();
             match self.control.load(Ordering::Relaxed) {
                 ST_CANCEL => return false,
                 ST_PAUSE => std::thread::sleep(Duration::from_millis(50)),
@@ -314,6 +389,23 @@ impl TransferHandle {
         if a.pending.is_some() {
             a.answer = Some((answer, all));
         }
+    }
+    /// Limit this transfer's speed, in bytes per second (0 removes the limit). Takes effect at once.
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        self.shared.limiter.set_rate(bytes_per_sec);
+    }
+    /// 0 low, 1 normal, 2 high: the order of the queue, and low yields to other programs.
+    pub fn set_priority(&self, priority: u8) {
+        self.shared.priority.store(priority.min(throttle::HIGH), Ordering::Relaxed);
+    }
+    /// Stop after `secs` seconds of work (0 = no limit); `stop` ends it, otherwise it pauses.
+    pub fn set_time_limit(&self, secs: u64, stop: bool) {
+        self.shared.stop_on_timeout.store(stop, Ordering::Relaxed);
+        self.shared.max_secs.store(secs, Ordering::Relaxed);
+    }
+    /// Leave the queue now, whatever the limit on simultaneous transfers says.
+    pub fn start_now(&self) {
+        self.shared.start_now.store(true, Ordering::Relaxed);
     }
     pub fn is_finished(&self) -> bool {
         self.done.load(Ordering::Relaxed)
@@ -368,6 +460,13 @@ pub fn start_with(
         model: Mutex::new(EtaModel::new(None)),
         ask_gate: Mutex::new(()),
         asker: Mutex::new(Asker::default()),
+        priority: Arc::new(AtomicU8::new(throttle::NORMAL)),
+        start_now: Arc::new(AtomicBool::new(false)),
+        limiter: throttle::Limiter::new(0),
+        max_secs: AtomicU64::new(0),
+        stop_on_timeout: AtomicBool::new(true),
+        timed_out: AtomicBool::new(false),
+        run_started: Mutex::new(None),
     });
     let done = Arc::new(AtomicBool::new(false));
     let handle = TransferHandle { id, shared: shared.clone(), done: done.clone() };
@@ -424,7 +523,45 @@ fn run(
         plan: None,
         prediction: None,
         conflict: None,
+        priority: throttle::NORMAL,
+        limit_bps: 0,
+        max_secs: 0,
+        timed_out: false,
+        queued_ahead: 0,
     };
+    // Wait for a turn when too many transfers are already working.
+    {
+        let gate = throttle::gate();
+        gate.join(id, shared.priority.clone(), shared.start_now.clone());
+        let mut last = Instant::now() - Duration::from_secs(1);
+        while !gate.try_enter(id) {
+            if shared.cancelled() {
+                gate.withdraw(id);
+                shared.fill(&mut progress);
+                progress.phase = Phase::Cancelled;
+                on_progress(progress);
+                return;
+            }
+            if last.elapsed() >= Duration::from_millis(250) {
+                last = Instant::now();
+                progress.phase = Phase::Queued;
+                progress.queued_ahead = gate.ahead_of(id);
+                shared.fill(&mut progress);
+                on_progress(progress.clone());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        progress.queued_ahead = 0;
+    }
+    struct Turn;
+    impl Drop for Turn {
+        fn drop(&mut self) {
+            throttle::gate().leave();
+        }
+    }
+    let _turn = Turn;
+    *shared.run_started.lock() = Some(Instant::now());
+    shared.fill(&mut progress);
     on_progress(progress.clone());
 
     // ---- Phase 1: fast path for moves, then scan what is left ----------------
@@ -555,7 +692,9 @@ fn run(
         && plan.strategy != Strategy::Rename
         && !plan.try_clone
         && !tops.is_empty()
-        && tops.iter().all(method::can_run);
+        && tops.iter().all(method::can_run)
+        // A system tool cannot be held to a speed limit, so a limited job uses the built-in engine.
+        && !shared.limited();
     let mut method = Method::Native;
     if tool_ok {
         let can = method::candidates(&tops);
@@ -738,6 +877,7 @@ fn run(
             let bytes_left = bytes_total.saturating_sub(bytes);
             let est = shared.model.lock().estimate(files_left, bytes_left, alive.max(1));
 
+            shared.fill(&mut progress);
             progress.phase = if state == ST_PAUSE { Phase::Paused } else { Phase::Running };
             progress.files_done = files;
             progress.bytes_done = bytes;
@@ -812,6 +952,7 @@ fn run(
     progress.peak_bytes_per_sec = peak_bps.max(progress.avg_bytes_per_sec);
     progress.peak_files_per_sec = peak_fps.max(progress.avg_files_per_sec);
     progress.fraction = if cancelled || errors > 0 && progress.files_done == 0 { last_fraction } else { 1.0 };
+    shared.fill(&mut progress);
     progress.phase = if cancelled {
         Phase::Cancelled
     } else if errors > 0 && progress.files_done == 0 {
@@ -1100,7 +1241,7 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         }
     }
 
-    if size < plan.large_threshold {
+    if size < plan.large_threshold && !shared.limited() {
         // 2. Small/medium file: one call into the OS fast path
         //    (copy_file_range on Linux, CopyFileEx on Windows, fcopyfile on macOS).
         let n = fs::copy(src, dst)?;
@@ -1116,6 +1257,7 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         #[cfg(not(unix))]
         let _ = output.set_len(size);
         let mut chunk_start = Instant::now();
+        let block = shared.chunk_len(plan.buffer_bytes);
         // Linux: let the kernel move each chunk without bringing it into this
         // program (measured about 1.6x faster than read and write here).
         loop {
@@ -1124,13 +1266,16 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
             }
             #[cfg(target_os = "linux")]
             {
-                match kernel_copy_chunk(&input, &output, plan.buffer_bytes) {
+                match kernel_copy_chunk(&input, &output, block) {
                     Ok(0) => break,
                     Ok(n) => {
                         shared.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
                         let now = Instant::now();
                         shared.model.lock().observe_chunk(n as u64, now.duration_since(chunk_start).as_secs_f64());
                         chunk_start = now;
+                        if !shared.pace(n as u64) {
+                            return Ok(false);
+                        }
                         continue;
                     }
                     // Not possible between these two files (another filesystem,
@@ -1140,7 +1285,7 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
             }
             // Everything that is not a kernel-side copy: read ahead on a second thread while
             // this one writes, so the source and the destination are busy at the same time.
-            match pipelined_copy(&mut input, &mut output, plan.buffer_bytes, shared, &mut chunk_start)? {
+            match pipelined_copy(&mut input, &mut output, block, shared, &mut chunk_start)? {
                 true => break,
                 false => return Ok(false),
             }
@@ -1223,7 +1368,11 @@ fn pipelined_copy(input: &mut fs::File, output: &mut fs::File, block: usize, sha
                 let now = Instant::now();
                 shared.model.lock().observe_chunk(buf.len() as u64, now.duration_since(*chunk_start).as_secs_f64());
                 *chunk_start = now;
+                let n = buf.len() as u64;
                 let _ = free_tx.send(buf);
+                if !shared.pace(n) {
+                    return Ok(false);
+                }
             }
         })();
         // Let go of both channels before the scope waits for the reader, or a reader that is
@@ -1332,7 +1481,48 @@ mod tests {
             model: Mutex::new(EtaModel::new(None)),
             ask_gate: Mutex::new(()),
             asker: Mutex::new(Asker::default()),
+            priority: Arc::new(AtomicU8::new(throttle::NORMAL)),
+            start_now: Arc::new(AtomicBool::new(false)),
+            limiter: throttle::Limiter::new(0),
+            max_secs: AtomicU64::new(0),
+            stop_on_timeout: AtomicBool::new(true),
+            timed_out: AtomicBool::new(false),
+            run_started: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn a_speed_limit_holds_a_copy_back_and_stays_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let data: Vec<u8> = (0..1_000_000usize).map(|i| (i * 7 % 253) as u8).collect();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        fs::write(&a, &data).unwrap();
+        let shared = test_shared();
+        shared.limiter.set_rate(1_000_000);
+        let plan = strategy::choose(&JobProfile { file_count: 1, total_bytes: 1_000_000, large_bytes: 0, large_count: 0, same_volume: false, is_move: false, src: crate::drives::Media::Ssd, dst: crate::drives::Media::Ssd }, &Budget::minimal(), 64 * 1024 * 1024, 0);
+        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 0, max_parallel: 0, method: MethodPref::Native, skip_identical: true };
+        shared.clone_ok.store(false, Ordering::Relaxed);
+        let t = Instant::now();
+        assert!(copy_one(&a, &b, 1_000_000, &plan, &spec, &shared).unwrap());
+        assert!(t.elapsed() >= Duration::from_millis(700), "1 MB at 1 MB/s took {:?}", t.elapsed());
+        assert_eq!(fs::read(&b).unwrap(), data);
+        assert_eq!(shared.bytes_done.load(Ordering::Relaxed), 1_000_000);
+    }
+
+    #[test]
+    fn the_time_limit_stops_or_pauses() {
+        let s = test_shared();
+        *s.run_started.lock() = Some(Instant::now() - Duration::from_secs(10));
+        s.max_secs.store(5, Ordering::Relaxed);
+        assert!(!s.checkpoint(), "stopped");
+        assert!(s.timed_out.load(Ordering::Relaxed));
+        let p = test_shared();
+        *p.run_started.lock() = Some(Instant::now() - Duration::from_secs(10));
+        p.max_secs.store(5, Ordering::Relaxed);
+        p.stop_on_timeout.store(false, Ordering::Relaxed);
+        p.check_deadline();
+        assert_eq!(p.control.load(Ordering::Relaxed), ST_PAUSE, "paused, ready to resume");
+        assert!(p.timed_out.load(Ordering::Relaxed) && p.max_secs.load(Ordering::Relaxed) == 5);
     }
 
     #[test]

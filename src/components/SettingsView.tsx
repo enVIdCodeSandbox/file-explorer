@@ -14,6 +14,7 @@ import { adv } from "../settings/advanced";
 import { MENU_CATALOG } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
+import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
 import { CustomActionsPanel, DefaultFileManagerPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
@@ -22,7 +23,12 @@ function ControlFor({ def }: { def: SettingDef }) {
   const settings = useStore((s) => s.settings)!;
   const { updateSettings } = useStore.getState();
   const value = getSetting(settings, def.key);
-  const set = (v: unknown) => updateSettings((s) => setSetting(s, def.key, v));
+  const set = (v: unknown) =>
+    updateSettings((s) => {
+      setSetting(s, def.key, v);
+      // A hand-made choice is kept when a performance preset is applied.
+      if (def.key === "performance.backgroundMode") s.performance.backgroundLocked = true;
+    });
   const c = def.control;
 
   // Text-like fields save when editing stops, not on every keystroke.
@@ -80,6 +86,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return (
         <input
           className="text-input"
+          type={c.secret ? "password" : "text"}
+          autoComplete="off"
           aria-label={def.label}
           value={draft}
           placeholder={c.placeholder}
@@ -121,6 +129,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <LocksPanel />;
     case "defaultFm":
       return <DefaultFileManagerPanel />;
+    case "updates":
+      return <UpdatesPanel />;
     case "menuItems": {
       const hidden = new Set(value as string[]);
       return (
@@ -266,6 +276,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
           ))}
         </aside>
         <div className="settings-body">
+          <div className="settings-scroll">
           <div className="settings-close">
             {detached ? (
               <button className="secondary reattach" title="Put Settings back inside the main window" onClick={() => void api.reattach("settings").catch((err) => useStore.getState().showToast(String(err)))}>
@@ -315,13 +326,14 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             </>
           )}
           {!q && section === "Documentation" && <Docs />}
-          <SaveBar />
           {!q && section === "About" && (
             <section>
               <h3>About</h3>
               <About />
             </section>
           )}
+          </div>
+          <SaveBar />
         </div>
       </div>
   );

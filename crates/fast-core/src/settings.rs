@@ -13,6 +13,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub performance: Performance,
     pub transfer: Transfer,
+    pub updates: Updates,
     pub search: Search,
     pub context_menu: ContextMenu,
     pub terminal: Terminal,
@@ -241,6 +242,11 @@ pub struct Performance {
     pub thumbnail_size: u32,
     pub predictive_prefetch: bool,
     pub reduce_on_battery: bool,
+    /// What the app does while it is minimized, hidden or (aggressive only) behind other windows:
+    /// "off" keeps working as usual, "gentle" halves the work, "aggressive" drops to the minimum.
+    pub background_mode: String,
+    /// The person chose `background_mode` themselves, so applying a performance preset leaves it alone.
+    pub background_locked: bool,
 }
 
 impl Default for Performance {
@@ -259,6 +265,8 @@ impl Default for Performance {
             thumbnail_size: 128,
             predictive_prefetch: true,
             reduce_on_battery: true,
+            background_mode: "aggressive".into(),
+            background_locked: false,
         }
     }
 }
@@ -282,6 +290,18 @@ pub struct Transfer {
     pub try_other_methods: bool,
     /// Milliseconds between progress updates. 0 = automatic (by device power).
     pub progress_interval_ms: u64,
+    /// The most all transfers together may move, in KB per second. 0 = no limit.
+    pub max_speed_kb: u64,
+    /// The speed each new transfer is held to, in KB per second. 0 = none. Changeable per transfer.
+    pub target_speed_kb: u64,
+    /// Longest a transfer may work before `on_time_limit` applies, in minutes. 0 = no limit.
+    pub max_minutes: u64,
+    /// "stop" or "pause" when a transfer reaches its time limit.
+    pub on_time_limit: String,
+    /// "low", "normal" or "high": the order of the queue, and low yields to other programs.
+    pub default_priority: String,
+    /// How many transfers work at once; the rest wait their turn. 0 = all of them.
+    pub max_active: usize,
 }
 
 impl Default for Transfer {
@@ -296,6 +316,52 @@ impl Default for Transfer {
             method: "auto".into(),
             try_other_methods: true,
             progress_interval_ms: 0,
+            max_speed_kb: 0,
+            target_speed_kb: 0,
+            max_minutes: 0,
+            on_time_limit: "pause".into(),
+            default_priority: "normal".into(),
+            max_active: 0,
+        }
+    }
+}
+
+/// How the app keeps itself up to date from the builds its repository publishes.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Updates {
+    /// Look for new builds at all.
+    pub enabled: bool,
+    /// Look once each time the app opens.
+    pub check_on_open: bool,
+    /// Keep looking while the app stays open.
+    pub background: bool,
+    /// Hours between looks while it stays open.
+    pub check_hours: u32,
+    /// Download a new build as soon as it is found (otherwise only when asked).
+    pub auto_download: bool,
+    /// Say so in the notifications when a new build comes out (once for each).
+    pub notify: bool,
+    /// "owner/name" of the repository whose builds are used.
+    pub repo: String,
+    pub branch: String,
+    /// A GitHub access token that may read Actions, needed to download a build straight from GitHub.
+    /// Without one, downloads go through nightly.link where the repository allows it.
+    pub token: String,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Updates {
+            enabled: true,
+            check_on_open: true,
+            background: true,
+            check_hours: 6,
+            auto_download: true,
+            notify: true,
+            repo: crate::update::DEFAULT_REPO.into(),
+            branch: crate::update::DEFAULT_BRANCH.into(),
+            token: String::new(),
         }
     }
 }

@@ -45,6 +45,7 @@ Copies, moves and deletes appear as cards at the bottom. Each shows speed, time 
 * **Time remaining** starts as a rough guess (it says so) and improves as the transfer settles. For big jobs the app first runs a very short speed test of the drives involved; it leaves nothing behind.
 * **The graph** shows bytes/s and files/s over time. The dashed line at the right edge is the current speed.
 * **Algorithm.** *Automatic* uses the built-in engine and learns, from your own transfers, whether a system tool is faster for a given pair of drives: Robocopy on Windows, rsync on macOS and Linux, rclone if installed, and settings tuned for SMB and NFS shares when a share is involved. Small jobs always use the built-in engine. You can force one in Settings → File transfers.
+* **Speed, priority and the queue.** In the expanded Transfers window every running transfer has its own **priority** (high goes first when others are waiting; low goes last and gives way to other programs), **speed limit** (KB/s, 0 = none) and **time limit** (minutes, then pause or stop). Settings → File transfers sets the defaults: a *maximum total speed* for all transfers together, a *target speed* for each new transfer, the *longest a transfer may run*, the *priority of new transfers*, and how many transfers work *at the same time* (the rest show as *waiting for its turn*, and **Start now** skips the queue). A transfer held to a speed limit uses the built-in engine, because copy tools such as Robocopy and rsync cannot be held to one here. Instant copies (copy-on-write) and same-drive moves move no data, so a limit does not apply to them.
 * **Update rate.** Settings → File transfers lets you set how often progress is redrawn. Automatic is slower on laptops and weaker machines to save power.
 
 ## When a file already exists
@@ -61,6 +62,8 @@ Folders with the same name are merged, and the files inside them are asked about
 ## Deleting
 
 Delete (or the toolbar button) sends items to the Recycle Bin / Trash after the usual confirmation. **Shift+Delete**, or **Shift-click on the toolbar Delete button**, deletes permanently after a confirmation. As administrator, items cannot go to the bin and are deleted permanently; the prompt says so.
+
+Pasting into a folder that a delete is still working on does not race it: the paste waits in line (shown at the bottom with the other jobs, with a ✕ to take it out) and starts by itself when the delete is over, so the files that were deleted are replaced by the pasted ones. Pastes that overlap wait for each other in the order you made them, and pasting the very same thing again while it waits does nothing new.
 
 ## Undo and redo
 
@@ -235,6 +238,22 @@ The first time the app starts it shows one setup page: the interface style (Wind
 ## Language
 
 The app follows the system language when it is one of English, Spanish, French, German, Portuguese, Italian, Russian, Simplified Chinese, Japanese or Korean, and uses English otherwise. Change it on the first welcome view or in Settings > Interface > Language. The setup wizard, the language setting and the Settings group names are translated; other labels still appear in English and will follow as they are translated. The translations were written without a native-speaker review, so wording fixes are welcome. To add a language, add a file in `src/i18n/locales`, list it in `src/i18n/keys.ts` order, and add one line to `LANGUAGES`.
+
+## Working in the background
+
+Settings > Performance > *When minimized or in the background* decides how much the app does while you are not looking at it. **Aggressive** (the default) drops to the minimum, one thread, no thumbnails, indexing or preloading, a small cache, slow progress updates, once the window is minimized or hidden, or has been behind other windows for a few seconds; animations and timers stop too. **Gentle** halves the work and only acts while the window is minimized or hidden. **Off** keeps working as usual. File transfers that are running are never slowed; only how often they report changes. When you come back, everything returns at once.
+
+Performance presets set this too (the heaviest ones use Gentle, the rest Aggressive). As soon as you change it yourself, *Keep my background setting when I apply a preset* turns on and presets leave it alone. Turn that off to let presets set it again.
+
+## Updates
+
+Settings → Updates (also asked on first run, everything on by default). The app looks at the builds the repository's GitHub Actions workflow publishes for your kind of computer and compares the newest one with the commit it was built from.
+
+* **Checking.** When the app opens and then every few hours while it stays open (not while it is minimized with the background saver on). *Check now* checks at once.
+* **Telling you.** A short note appears in the notifications once for each new build, then never again until the next one.
+* **Downloading.** With *Download new builds automatically* the build downloads as a job with your other transfers (cancel it there like any transfer). Otherwise press *Update now*.
+* **Installing.** No installer screens: on Windows the setup program runs silently after the app closes and the app starts again; an AppImage is replaced in place and restarted. For `.deb`, `.rpm` and macOS `.dmg` the system's own installer opens, because a program cannot install those silently without administrator rights. When a download finishes you are asked to **restart now** or **later**; if you wait, *Restart to finish updating* stays in Settings → Updates and you are asked again next time the app opens.
+* **GitHub's rule.** GitHub lets only signed-in accounts download a build from its Actions page, even for a public repository. Either paste an access token that may read Actions into *GitHub access token* (it stays on this computer and is never part of exports or profiles), or install [nightly.link](https://nightly.link) on the repository, which the app uses when no token is set. A build made by hand (not by the workflow) does not know which commit it came from, so it offers the newest build without comparing.
 
 ## Presets and profiles
 
