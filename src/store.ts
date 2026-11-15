@@ -31,7 +31,7 @@ import { adv } from "./settings/advanced";
 import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
-import { HOME, THIS_PC, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
+import { HOME, THIS_PC, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
@@ -1769,7 +1769,7 @@ export const isArchiveName = isArchiveFile;
 
 
 /** Archive jobs that are running, by job id, with whether the person asked to extract "here". */
-const archiveJobs = new Map<number, { here: boolean }>();
+const archiveJobs = new Map<number, { here: boolean; /** Called with the folder that was unpacked, once it is done. */ then?: (folder: string) => void }>();
 
 /** Put the items into a zip next to them. Progress and Cancel are on the transfers card. */
 export async function compressPaths(paths: string[]): Promise<void> {
@@ -1790,6 +1790,29 @@ export async function extractArchive(path: string, here: boolean): Promise<void>
   }
 }
 
+/**
+ * A terminal needs a real folder, and a folder inside an archive is not one. So the archive is unpacked
+ * first (into a folder next to it, or straight into the folder it is in) and the terminal opens in the
+ * unpacked copy of the folder that was being looked at.
+ */
+export async function extractAndOpenTerminal(location: string, mode: "here" | "admin", intoParent = false): Promise<void> {
+  const arc = splitArchive(location);
+  if (!arc) return;
+  try {
+    const id = await api.archiveStart("extract", [arc.archive], intoParent);
+    useStore.getState().showToast("Unpacking first, the terminal opens when it is done.");
+    archiveJobs.set(id, {
+      here: intoParent,
+      then: (folder) => {
+        const dir = arc.inner ? arc.inner.split("/").reduce((d, part) => joinPath(d, part), folder) : folder;
+        void api.openTerminal(dir, mode).catch(() => api.openTerminal(folder, mode).catch((e) => useStore.getState().showToast(String(e))));
+      },
+    });
+  } catch (e) {
+    useStore.getState().showToast(String(e instanceof Error ? e.message : e));
+  }
+}
+
 /** A compress or extract job ended: say so, make it undoable and select what it made. */
 function archiveFinished(p: DeleteProgress) {
   const s = useStore.getState();
@@ -1804,6 +1827,7 @@ function archiveFinished(p: DeleteProgress) {
   else s.notify("create", `Extracted ${name}`, files);
   if (p.action === "compress" || !job?.here) s.pushUndo({ kind: "create", path: p.result });
   s.setSelection([p.result]);
+  job?.then?.(p.result);
 }
 
 /** Server jobs that are running, by job id. */

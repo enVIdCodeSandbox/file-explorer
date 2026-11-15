@@ -1725,6 +1725,10 @@ pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: Termina
                 new_tab: t.new_tab,
             }
         };
+        // Only a real folder on this computer can hold a terminal (not one inside an archive or on a server).
+        if matches!(mode, TerminalMode::Here | TerminalMode::Admin) && !Path::new(&path).is_dir() {
+            return Err(format!("\"{path}\" is not a folder on this computer, so a terminal cannot open there."));
+        }
         platform::open_terminal(Path::new(&path), mode, &opts).map_err(err)
     })
     .await

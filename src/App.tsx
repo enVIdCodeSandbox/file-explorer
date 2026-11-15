@@ -11,6 +11,7 @@ import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./
 import { LockDialog } from "./components/Locks";
 import { PickBar } from "./components/PickBar";
 import { Setup } from "./components/Setup";
+import { latestLabel } from "./components/UpdatesPanel";
 import { ShareDialog } from "./components/Share";
 import { BatchRename } from "./components/BatchRename";
 import { ConnectServer } from "./components/ConnectServer";
@@ -84,8 +85,8 @@ export default function App() {
       on("dir-updated", (l) => useStore.getState().bumpDirs([l.path])),
       on("index-status", (indexStatus) => useStore.setState({ indexStatus })),
       on("update-available", (u) =>
-        useStore.getState().notify("info", "A new version is out", `Build ${u.latest?.sha.slice(0, 7) ?? ""} is ready to download`, {
-          facts: [["Your build", u.sha?.slice(0, 7) ?? u.version], ["New build", u.latest?.sha.slice(0, 7) ?? ""], ["Where", "Settings > Updates"]],
+        useStore.getState().notify("info", "A new version is out", `${latestLabel(u.latest)} is ready to download`, {
+          facts: [["Your build", u.sha?.slice(0, 7) ?? u.version], ["New version", latestLabel(u.latest)], ["Where", "Settings > Updates"]],
         }),
       ),
       on("update-ready", () => void askToRestart()),

@@ -23,9 +23,31 @@ pub fn artifact_name() -> Option<&'static str> {
     }
 }
 
+impl Latest {
+    /// Names this build: its commit when known (the same build found in two places has one name),
+    /// otherwise its release version.
+    pub fn key(&self) -> String {
+        if !self.sha.is_empty() { self.sha.clone() } else { format!("release-{}", self.version.as_deref().unwrap_or("?")) }
+    }
+}
+
+/// Where a build was found.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Source {
+    /// An artifact of the workflow run (downloading needs a token or nightly.link).
+    #[default]
+    Actions,
+    /// An installer attached to a published release (public, no token).
+    Release,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Latest {
+    pub source: Source,
+    /// "0.2.1" for a release.
+    pub version: Option<String>,
     pub run_id: u64,
     pub artifact_id: u64,
     pub sha: String,
@@ -53,6 +75,8 @@ pub fn pick_latest(listing: &Value, name: &str, branch: &str) -> Option<Latest> 
         }
         let created = a.get("created_at").and_then(Value::as_str).unwrap_or("").to_string();
         let item = Latest {
+            source: Source::Actions,
+            version: None,
             run_id: run.get("id").and_then(Value::as_u64).unwrap_or(0),
             artifact_id: a.get("id").and_then(Value::as_u64)?,
             sha: run.get("head_sha").and_then(Value::as_str)?.to_string(),
@@ -100,6 +124,147 @@ pub enum InstallerKind {
     Dmg,
 }
 
+/// What kind of installer a file is, by its name.
+pub fn kind_of_name(name: &str) -> Option<InstallerKind> {
+    let name = name.to_lowercase();
+    Some(if name.ends_with(".exe") && (name.contains("setup") || name.contains("install")) {
+        InstallerKind::Nsis
+    } else if name.ends_with(".msi") {
+        InstallerKind::Msi
+    } else if name.ends_with(".appimage") {
+        InstallerKind::AppImage
+    } else if name.ends_with(".deb") {
+        InstallerKind::Deb
+    } else if name.ends_with(".rpm") {
+        InstallerKind::Rpm
+    } else if name.ends_with(".dmg") {
+        InstallerKind::Dmg
+    } else {
+        return None;
+    })
+}
+
+/// What this computer is, for choosing among the files of a release.
+#[derive(Clone, Copy, Debug)]
+pub struct Target {
+    pub os: &'static str,
+    pub arm: bool,
+    /// Running from an AppImage: that kind can replace itself, the others need the system installer.
+    pub appimage: bool,
+}
+
+impl Target {
+    pub fn here() -> Target {
+        Target {
+            os: if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" },
+            arm: cfg!(target_arch = "aarch64"),
+            appimage: std::env::var_os("APPIMAGE").is_some(),
+        }
+    }
+}
+
+/// Does this file name belong to this kind of processor? Names say "x64", "amd64" or "x86_64" for
+/// Intel and AMD, "arm64" or "aarch64" for ARM, "universal" for both (macOS).
+fn fits_arch(name: &str, arm: bool) -> bool {
+    let n = name.to_lowercase();
+    if n.contains("universal") {
+        return true;
+    }
+    let is_arm = n.contains("arm64") || n.contains("aarch64");
+    let is_x64 = n.contains("x64") || n.contains("amd64") || n.contains("x86_64");
+    if arm { is_arm || !is_x64 } else { is_x64 || !is_arm }
+}
+
+/// The best installer among a release's files for this computer: the kind that installs without
+/// questions first.
+pub fn pick_asset<'a>(assets: &'a [Value], t: Target) -> Option<&'a Value> {
+    let rank = |k: InstallerKind| -> Option<u8> {
+        match (t.os, k) {
+            ("windows", InstallerKind::Nsis) => Some(0),
+            ("windows", InstallerKind::Msi) => Some(1),
+            ("linux", InstallerKind::AppImage) => Some(if t.appimage { 0 } else { 2 }),
+            ("linux", InstallerKind::Deb) => Some(1),
+            ("linux", InstallerKind::Rpm) => Some(3),
+            ("macos", InstallerKind::Dmg) => Some(0),
+            _ => None,
+        }
+    };
+    assets
+        .iter()
+        .filter_map(|a| {
+            let name = a.get("name")?.as_str()?;
+            let r = rank(kind_of_name(name)?)?;
+            fits_arch(name, t.arm).then_some((r, a))
+        })
+        .min_by_key(|(r, _)| *r)
+        .map(|(_, a)| a)
+}
+
+/// The newest published release (not a draft or pre-release) that has an installer for this computer, out of
+/// the answer to `GET /repos/{repo}/releases`.
+pub fn pick_release(listing: &Value, t: Target) -> Option<Latest> {
+    let mut best: Option<Latest> = None;
+    for r in listing.as_array()? {
+        if r.get("draft").and_then(Value::as_bool).unwrap_or(false) || r.get("prerelease").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let Some(assets) = r.get("assets").and_then(Value::as_array) else { continue };
+        let Some(asset) = pick_asset(assets, t) else { continue };
+        let tag = r.get("tag_name").and_then(Value::as_str).unwrap_or("");
+        let commit = r.get("target_commitish").and_then(Value::as_str).unwrap_or("");
+        let created = r.get("published_at").or_else(|| r.get("created_at")).and_then(Value::as_str).unwrap_or("").to_string();
+        let item = Latest {
+            source: Source::Release,
+            version: Some(tag.trim_start_matches('v').to_string()).filter(|v| !v.is_empty()),
+            run_id: 0,
+            artifact_id: asset.get("id").and_then(Value::as_u64).unwrap_or(0),
+            // Only a full commit id says which commit it was; a branch name does not.
+            sha: if commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()) { commit.to_string() } else { String::new() },
+            branch: commit.to_string(),
+            created_at: created.clone(),
+            size: asset.get("size").and_then(Value::as_u64).unwrap_or(0),
+            name: asset.get("name").and_then(Value::as_str)?.to_string(),
+            download_url: asset.get("browser_download_url").and_then(Value::as_str)?.to_string(),
+            digest: asset.get("digest").and_then(Value::as_str).map(str::to_string),
+        };
+        if best.as_ref().is_none_or(|b| created > b.created_at) {
+            best = Some(item);
+        }
+    }
+    best
+}
+
+/// Is `latest` newer than the build that is running? A commit id decides when both sides have one;
+/// otherwise a release is compared by its version number.
+pub fn newer_than_running(current_sha: Option<&str>, current_version: &str, latest: &Latest) -> Newer {
+    if !latest.sha.is_empty() {
+        let by_sha = is_newer(current_sha, &latest.sha);
+        if by_sha != Newer::Unknown {
+            return by_sha;
+        }
+    }
+    match (&latest.source, &latest.version) {
+        (Source::Release, Some(v)) => {
+            if version_newer(v, current_version) {
+                Newer::Yes
+            } else {
+                Newer::No
+            }
+        }
+        _ => Newer::Unknown,
+    }
+}
+
+/// The build to offer out of everything found: the newest one that is newer than the running build,
+/// and if none is, the newest one at all (to show what the newest is). On a tie a release wins,
+/// because it can be downloaded without a token.
+pub fn best_of(found: Vec<Latest>, current_sha: Option<&str>, current_version: &str) -> Option<(Latest, Newer)> {
+    let mut judged: Vec<(Latest, Newer)> = found.into_iter().map(|l| { let n = newer_than_running(current_sha, current_version, &l); (l, n) }).collect();
+    let key = |(l, n): &(Latest, Newer)| (matches!(n, Newer::Yes | Newer::Unknown), l.created_at.clone(), l.source == Source::Release);
+    judged.sort_by_key(|j| key(j));
+    judged.pop()
+}
+
 /// The installer inside a downloaded build, preferring the kind that can be applied without questions.
 pub fn find_installer(dir: &Path) -> Option<(PathBuf, InstallerKind)> {
     let mut found: Vec<(PathBuf, InstallerKind)> = Vec::new();
@@ -111,22 +276,7 @@ pub fn find_installer(dir: &Path) -> Option<(PathBuf, InstallerKind)> {
                 walk(&p, out, depth + 1);
                 continue;
             }
-            let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let kind = if name.ends_with(".exe") && (name.contains("setup") || name.contains("install")) {
-                InstallerKind::Nsis
-            } else if name.ends_with(".msi") {
-                InstallerKind::Msi
-            } else if name.ends_with(".appimage") {
-                InstallerKind::AppImage
-            } else if name.ends_with(".deb") {
-                InstallerKind::Deb
-            } else if name.ends_with(".rpm") {
-                InstallerKind::Rpm
-            } else if name.ends_with(".dmg") {
-                InstallerKind::Dmg
-            } else {
-                continue;
-            };
+            let Some(kind) = kind_of_name(&p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) else { continue };
             out.push((p, kind));
         }
     }
@@ -240,6 +390,67 @@ mod tests {
         assert_eq!(l.digest.as_deref(), Some("sha256:ABCD"));
         assert!(pick_latest(&list, n, "nope").is_none());
         assert!(pick_latest(&json!({"message": "Not Found"}), n, "main").is_none());
+    }
+
+    fn release(tag: &str, commit: &str, at: &str, files: &[&str]) -> Value {
+        json!({"tag_name": tag, "target_commitish": commit, "draft": false, "prerelease": false, "published_at": at,
+            "assets": files.iter().enumerate().map(|(i, f)| json!({"id": i + 1, "name": f, "size": 5000, "digest": "sha256:AB", "browser_download_url": format!("https://github.com/o/r/releases/download/{tag}/{f}")})).collect::<Vec<_>>()})
+    }
+    const FILES: &[&str] = &["FAST.File.Explorer_0.3.0_x64-setup.exe", "FAST.File.Explorer_0.3.0_x64_en-US.msi", "FAST.File.Explorer_0.3.0_arm64-setup.exe", "FAST.File.Explorer_0.3.0_amd64.AppImage", "FAST.File.Explorer_0.3.0_amd64.deb", "FAST.File.Explorer-0.3.0-1.x86_64.rpm", "FAST.File.Explorer_0.3.0_aarch64.AppImage", "FAST.File.Explorer_0.3.0_universal.dmg", "notes.txt"];
+
+    #[test]
+    fn picks_the_right_file_of_a_release() {
+        let assets = release("v0.3.0", "main", "2026-11-15T10:00:00Z", FILES)["assets"].as_array().unwrap().clone();
+        let name = |t: Target| pick_asset(&assets, t).unwrap()["name"].as_str().unwrap().to_string();
+        assert_eq!(name(Target { os: "windows", arm: false, appimage: false }), "FAST.File.Explorer_0.3.0_x64-setup.exe");
+        assert_eq!(name(Target { os: "windows", arm: true, appimage: false }), "FAST.File.Explorer_0.3.0_arm64-setup.exe");
+        assert_eq!(name(Target { os: "linux", arm: false, appimage: true }), "FAST.File.Explorer_0.3.0_amd64.AppImage");
+        assert_eq!(name(Target { os: "linux", arm: false, appimage: false }), "FAST.File.Explorer_0.3.0_amd64.deb");
+        assert_eq!(name(Target { os: "linux", arm: true, appimage: true }), "FAST.File.Explorer_0.3.0_aarch64.AppImage");
+        assert_eq!(name(Target { os: "macos", arm: true, appimage: false }), "FAST.File.Explorer_0.3.0_universal.dmg");
+        assert!(pick_asset(&assets[8..], Target { os: "windows", arm: false, appimage: false }).is_none());
+    }
+
+    #[test]
+    fn picks_the_newest_published_release() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let list = json!([
+            {"tag_name": "v0.9.0", "draft": true, "prerelease": false, "assets": release("v0.9.0", "main", "2026-11-16T00:00:00Z", FILES)["assets"]},
+            {"tag_name": "v0.8.0", "draft": false, "prerelease": true, "published_at": "2026-11-16T00:00:00Z", "assets": release("v0.8.0", "main", "x", FILES)["assets"]},
+            release("v0.3.0", sha, "2026-11-15T10:00:00Z", FILES),
+            release("v0.2.0", "main", "2026-11-10T10:00:00Z", FILES),
+            release("v0.4.0", "main", "2026-11-17T10:00:00Z", &["only-a-source.zip"]),
+        ]);
+        let t = Target { os: "windows", arm: false, appimage: false };
+        let l = pick_release(&list, t).unwrap();
+        assert_eq!((l.source, l.version.as_deref(), l.sha.as_str()), (Source::Release, Some("0.3.0"), sha), "no drafts, pre-releases or releases without an installer");
+        assert!(l.download_url.ends_with("x64-setup.exe") && l.name.ends_with("x64-setup.exe"));
+        assert_eq!(pick_release(&json!([release("v0.2.0", "main", "t", FILES)]), t).unwrap().sha, "", "a branch name is not a commit");
+        assert!(pick_release(&json!({"message": "Not Found"}), t).is_none());
+    }
+
+    #[test]
+    fn chooses_among_the_places_it_looked() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let rel = |ver: &str, sha: &str, at: &str| Latest { source: Source::Release, version: Some(ver.into()), run_id: 0, artifact_id: 1, sha: sha.into(), branch: "main".into(), created_at: at.into(), size: 1, name: "x".into(), download_url: "u".into(), digest: None };
+        let act = |sha: &str, at: &str| Latest { source: Source::Actions, version: None, ..rel("", sha, at) };
+        // By commit id when both sides have one.
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", &rel("0.2.0", &sha_a, "t")), Newer::No);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", &rel("0.2.1", &sha_b, "t")), Newer::Yes);
+        // By version when this build does not know its commit, or the release does not name one.
+        assert_eq!(newer_than_running(None, "0.2.0", &rel("0.2.1", "", "t")), Newer::Yes);
+        assert_eq!(newer_than_running(None, "0.2.1", &rel("0.2.1", &sha_b, "t")), Newer::No);
+        assert_eq!(newer_than_running(None, "0.2.1", &act(&sha_b, "t")), Newer::Unknown);
+        // The newer of the two places wins; on a tie, the release.
+        let (l, n) = best_of(vec![rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z"), act(&"c".repeat(40), "2026-11-15T11:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        assert_eq!((l.source, n), (Source::Actions, Newer::Yes));
+        let (l, _) = best_of(vec![act(&sha_b, "2026-11-15T10:00:00Z"), rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        assert_eq!(l.source, Source::Release);
+        // Nothing newer: still reports the newest, as "not newer".
+        let (l, n) = best_of(vec![rel("0.2.0", &sha_a, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        assert_eq!((l.version.as_deref(), n), (Some("0.2.0"), Newer::No));
+        assert!(best_of(vec![], None, "0.2.0").is_none());
     }
 
     #[test]

@@ -41,6 +41,10 @@ The workflow imports the certificate into the runner's store and builds with its
 
 Packages are not signed. AppImage signing with GPG and repository signing for `.deb`/`.rpm` are left for when there is a package repository.
 
+## Releases
+
+When everything on `main` has built, the workflow posts the installers on the Releases page as **FAST File Explorer \<version\>**: the version is the one in `package.json`, the description starts with the name and version and is followed by GitHub's own generated change list since the last release. It only posts when every required installer is there (Windows x64 `.exe` and `.msi`, Linux `.AppImage`, `.deb` and `.rpm`, macOS `.dmg`); the optional ARM builds are attached when they succeeded. A version that is already published is left alone, so **raise the version (`npm run bump`) with each update**, or nothing new appears. Pull requests and other branches never publish. The app's updater reads this page.
+
 ## Version numbers
 
 Every update that is handed out raises the version, in step with how big it is:

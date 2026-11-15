@@ -862,6 +862,9 @@ export interface FolderSize {
 }
 
 export interface UpdateLatest {
+  /** Where it was found: a published release, or a workflow run's build. */
+  source: "release" | "actions";
+  version: string | null;
   runId: number;
   artifactId: number;
   sha: string;

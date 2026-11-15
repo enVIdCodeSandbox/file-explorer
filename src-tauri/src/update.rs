@@ -4,7 +4,7 @@
 
 use crate::state::Shared;
 use fast_core::ops::{DeletePhase, DeleteProgress};
-use fast_core::update::{self as core, InstallerKind, Latest, Newer};
+use fast_core::update::{self as core, InstallerKind, Latest, Newer, Source};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -130,19 +130,31 @@ mod http {
     }
 }
 
+/// Everything found at the places builds are published: the repository's releases (public) and the
+/// artifacts of its workflow runs. One place failing does not hide what the other has; the reasons
+/// are returned too.
 #[cfg(desktop)]
-fn find_latest(st: &Shared) -> Result<Option<Latest>, String> {
-    let name = core::artifact_name().ok_or("this kind of computer has no published builds")?;
+fn find_all(st: &Shared) -> (Vec<Latest>, Vec<String>) {
     let (repo, branch, token) = {
         let u = &st.settings.read().updates;
         (u.repo.trim().to_string(), u.branch.trim().to_string(), u.token.clone())
     };
     if repo.split('/').count() != 2 || repo.contains(' ') {
-        return Err(format!("\"{repo}\" is not a repository name (use owner/name)"));
+        return (Vec::new(), vec![format!("\"{repo}\" is not a repository name (use owner/name)")]);
     }
-    let url = format!("https://api.github.com/repos/{repo}/actions/artifacts?name={name}&per_page=50");
-    let listing = http::json(&url, &token).map_err(|e| if e == "not found" { format!("Could not find {repo} on GitHub, or it is private (private repositories need an access token).") } else { e })?;
-    Ok(core::pick_latest(&listing, name, &branch))
+    let missing = |e: String| if e == "not found" { format!("Could not find {repo} on GitHub, or it is private (private repositories need an access token).") } else { e };
+    let (mut found, mut problems) = (Vec::new(), Vec::new());
+    match http::json(&format!("https://api.github.com/repos/{repo}/releases?per_page=30"), &token) {
+        Ok(listing) => found.extend(core::pick_release(&listing, core::Target::here())),
+        Err(e) => problems.push(format!("Releases: {}", missing(e))),
+    }
+    if let Some(name) = core::artifact_name() {
+        match http::json(&format!("https://api.github.com/repos/{repo}/actions/artifacts?name={name}&per_page=50"), &token) {
+            Ok(listing) => found.extend(core::pick_latest(&listing, name, &branch)),
+            Err(e) => problems.push(format!("Actions: {}", missing(e))),
+        }
+    }
+    (found, problems)
 }
 
 /// Look for a newer build. Quiet: it tells nobody; `run_auto` and the commands decide what to say.
@@ -151,16 +163,14 @@ fn check_now(st: &Shared) -> Info {
     if !st.settings.read().updates.enabled {
         return info(st, "off", None, "Updates are turned off.".into());
     }
-    let result = find_latest(st);
+    let (found, problems) = find_all(st);
     remember(st, |m| m.last_check = chrono::Local::now().timestamp());
-    match result {
-        Err(e) => info(st, "error", None, e),
-        Ok(None) => info(st, "current", None, format!("No build of the {} branch is available to download.", st.settings.read().updates.branch)),
-        Ok(Some(latest)) => match core::is_newer(current_sha(), &latest.sha) {
-            Newer::No => info(st, "current", Some(latest), "You have the newest build.".into()),
-            Newer::Yes => info(st, "available", Some(latest), "A newer build is available.".into()),
-            Newer::Unknown => info(st, "unknown", Some(latest), "This copy does not know which build it is, so it cannot tell whether the newest one is newer.".into()),
-        },
+    match core::best_of(found, current_sha(), env!("CARGO_PKG_VERSION")) {
+        None if !problems.is_empty() => info(st, "error", None, problems.join(" ")),
+        None => info(st, "current", None, "No build is published for this kind of computer yet.".into()),
+        Some((latest, Newer::No)) => info(st, "current", Some(latest), "You have the newest build.".into()),
+        Some((latest, Newer::Yes)) => info(st, "available", Some(latest), "A newer build is available.".into()),
+        Some((latest, Newer::Unknown)) => info(st, "unknown", Some(latest), "This copy does not know which build it is, so it cannot tell whether the newest one is newer.".into()),
     }
 }
 
@@ -208,9 +218,10 @@ impl Job {
     }
 }
 
-/// The address a build can be fetched from: GitHub itself with a token, nightly.link without one.
+/// The address a build can be fetched from. A release's file is public. A workflow artifact comes
+/// from GitHub itself with a token, or through nightly.link without one.
 fn download_url(latest: &Latest, repo: &str, token: &str) -> String {
-    if token.is_empty() { format!("https://nightly.link/{repo}/actions/artifacts/{}.zip", latest.artifact_id) } else { latest.download_url.clone() }
+    if latest.source == Source::Release || !token.is_empty() { latest.download_url.clone() } else { format!("https://nightly.link/{repo}/actions/artifacts/{}.zip", latest.artifact_id) }
 }
 
 #[cfg(desktop)]
@@ -220,13 +231,17 @@ fn download_and_unpack(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready,
         let u = &st.settings.read().updates;
         (u.repo.trim().to_string(), u.token.clone())
     };
-    let dir = st.paths.update_dir.join(&latest.sha);
+    let dir = st.paths.update_dir.join(latest.key());
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let zip_path = dir.join("build.zip");
+    // A release hands over the installer itself; a workflow artifact is a zip that holds it.
+    let is_release = latest.source == Source::Release;
+    let zip_path = dir.join(if is_release { latest.name.as_str() } else { "build.zip" });
+    // Only the file's own name, whatever the release called it.
+    let zip_path = if is_release { dir.join(zip_path.file_name().unwrap_or_default()) } else { zip_path };
     let url = download_url(latest, &repo, &token);
-    let resp = http::open(&url, &token, "application/octet-stream").map_err(|e| {
-        if e == "not found" && token.is_empty() {
+    let resp = http::open(&url, if is_release { "" } else { &token }, "application/octet-stream").map_err(|e| {
+        if e == "not found" && token.is_empty() && !is_release {
             "GitHub only lets signed-in accounts download builds. Add an access token under Settings > Updates, or install nightly.link on the repository.".to_string()
         } else {
             e
@@ -258,11 +273,16 @@ fn download_and_unpack(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready,
     if !core::digest_matches(latest.digest.as_deref(), &actual) {
         return Err("the download does not match what GitHub published for it".into());
     }
-    let unpacked = dir.join("build");
-    core::unzip(&zip_path, &unpacked).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&zip_path);
-    let (installer, kind) = core::find_installer(&unpacked).ok_or("the build holds no installer for this computer")?;
-    Ok(Ready { sha: latest.sha.clone(), installer, kind, created_at: latest.created_at.clone() })
+    let (installer, kind) = if is_release {
+        let kind = core::kind_of_name(&latest.name).ok_or("the release file is not an installer")?;
+        (zip_path, kind)
+    } else {
+        let unpacked = dir.join("build");
+        core::unzip(&zip_path, &unpacked).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&zip_path);
+        core::find_installer(&unpacked).ok_or("the build holds no installer for this computer")?
+    };
+    Ok(Ready { sha: latest.key(), installer, kind, created_at: latest.created_at.clone() })
 }
 
 #[cfg(not(desktop))]
@@ -294,7 +314,7 @@ fn start_download(app: &AppHandle, st: &Shared, latest: Latest) -> CmdResult<u64
                     }
                     Err(e) if e == "cancelled" => job.emit(DeletePhase::Cancelled, 0, 0, "", None),
                     Err(e) => {
-                        let _ = std::fs::remove_dir_all(st.paths.update_dir.join(&latest.sha));
+                        let _ = std::fs::remove_dir_all(st.paths.update_dir.join(latest.key()));
                         job.emit(DeletePhase::Failed, 0, 0, "", Some(&e));
                     }
                 }
@@ -371,11 +391,11 @@ fn run_auto(app: &AppHandle, st: &Shared) {
         let u = &st.settings.read().updates;
         (u.notify, u.auto_download)
     };
-    if notify && memory(st).notified_sha != latest.sha {
-        remember(st, |m| m.notified_sha = latest.sha.clone());
+    if notify && memory(st).notified_sha != latest.key() {
+        remember(st, |m| m.notified_sha = latest.key());
         let _ = app.emit("update-available", result);
     }
-    if auto && memory(st).ready.as_ref().is_none_or(|r| r.sha != latest.sha) {
+    if auto && memory(st).ready.as_ref().is_none_or(|r| r.sha != latest.key()) {
         let _ = start_download(app, st, latest);
     }
 }

@@ -1,7 +1,10 @@
 name: Build
 
-# Tests on every push and pull request, builds for every supported
-# platform, and a draft GitHub release when a version tag is pushed:
+# Tests on every push and pull request and builds for every supported platform. When
+# everything on the main branch has built, the installers are posted on the Releases page as
+# "FAST File Explorer <version>" (the version in package.json; raise it with `npm run bump`),
+# with GitHub's own change list as the notes. A version that is already published is left alone.
+# A tag pushed by hand also works:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
@@ -205,21 +208,50 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Draft release
+    name: Publish release
     needs: bundle
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only real builds of the main line: not pull requests, not side branches. A version tag
+    # pushed by hand (git tag v0.3.0 && git push origin v0.3.0) is published the same way.
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: build-files
           merge-multiple: true
-      - name: List what will be attached
-        run: find build-files -type f | sort
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: build-files/**
+      - name: Check that every installer is there
+        run: |
+          find build-files -type f | sort
+          missing=0
+          for pattern in '*x64-setup.exe' '*x64_en-US.msi' '*.AppImage' '*.deb' '*.rpm' '*universal.dmg'; do
+            if ! find build-files -type f -iname "$pattern" | grep -q .; then
+              echo "::error::No installer matching $pattern: not publishing."
+              missing=1
+            fi
+          done
+          exit $missing
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+            VERSION="${TAG#v}"
+            TARGET=()
+          else
+            VERSION="$(node -p "require('./package.json').version")"
+            TAG="v$VERSION"
+            TARGET=(--target "$GITHUB_SHA")
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already published (the version was not raised), so nothing new is posted."
+            exit 0
+          fi
+          # The description opens with the name and version; GitHub's own change list follows it.
+          gh release create "$TAG" build-files/* "${TARGET[@]}" \
+            --title "FAST File Explorer $VERSION" \
+            --notes "FAST File Explorer $VERSION" \
+            --generate-notes

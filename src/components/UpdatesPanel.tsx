@@ -5,6 +5,9 @@ import { api, on, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { formatDate, formatSize } from "../util/format";
 
+/** "0.3.0 (release)" or "f6e5d4c (build)". */
+export const latestLabel = (l: UpdateInfo["latest"]) => (!l ? "" : l.source === "release" ? `${l.version ?? l.sha.slice(0, 7)} (release)` : `${l.sha.slice(0, 7)} (build)`);
+
 export function UpdatesPanel() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState<"check" | "download" | "install" | null>(null);
@@ -47,7 +50,7 @@ export function UpdatesPanel() {
           <>
             <dt>Newest build</dt>
             <dd>
-              {latest.sha.slice(0, 7)} <span className="muted">· {formatDate(Date.parse(latest.createdAt))} · {formatSize(latest.size)}</span>
+              {latestLabel(latest)} <span className="muted">· {formatDate(Date.parse(latest.createdAt))} · {formatSize(latest.size)}</span>
             </dd>
           </>
         )}

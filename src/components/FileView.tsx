@@ -12,6 +12,7 @@ import {
   createPath,
   compressPaths,
   deletePaths,
+  extractAndOpenTerminal,
   extractArchive,
   isArchiveName,
   openFile,
@@ -384,7 +385,10 @@ export function FileView({ path }: { path: string }) {
     if (made) setSelected(new Set([newName]));
   };
 
-  const terminal = (dir: string, mode: "here" | "admin") => api.openTerminal(dir, mode).catch((e) => showToast(String(e)));
+  // Inside an archive the terminal needs the contents unpacked first.
+  const terminal = (dir: string, mode: "here" | "admin") => (isArchiveLoc(dir) ? extractAndOpenTerminal(dir, mode) : api.openTerminal(dir, mode).catch((e) => showToast(String(e))));
+  const inArchiveHere = isArchiveLoc(path);
+  const terminalLabel = (admin: boolean) => (inArchiveHere ? (admin ? "Unpack, then open terminal as administrator" : "Unpack, then open terminal here") : admin ? "Open terminal as administrator" : "Open terminal here");
 
   const refresh = () => useStore.getState().bumpDirs([path]);
 
@@ -473,8 +477,9 @@ export function FileView({ path }: { path: string }) {
           { id: "delete", label: "Delete", shortcut: "Del", icon: "trash", run: () => void deletePaths(paths) },
           { id: "deletePermanent", label: "Delete permanently", shortcut: "Shift+Del", danger: true, run: () => void deletePaths(paths, true) },
           paths.length > 0 && { id: "rename", label: paths.length > 1 ? `Rename ${paths.length} items…` : "Rename", shortcut: "F2", icon: "rename", run: startRename },
-          single?.isDir && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirForTerminal, "here") },
-          single?.isDir && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirForTerminal, "admin") },
+          single?.isDir && !isRemote(dirForTerminal) && { id: "terminal", label: terminalLabel(false), icon: "terminal", separatorBefore: true, run: () => void terminal(dirForTerminal, "here") },
+          single?.isDir && !isRemote(dirForTerminal) && { id: "terminalAdmin", label: terminalLabel(true), run: () => void terminal(dirForTerminal, "admin") },
+          single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-terminal", label: "Unpack, then open terminal in it", icon: "terminal", run: () => void extractAndOpenTerminal(archiveUrl(fullPath(single.name)), "here") },
           single?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(fullPath(single.name))) },
           paths.length > 0 && { id: "automate", label: "Automate with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection(paths, path)) },
           { id: "properties", label: "Properties", icon: "info", separatorBefore: !(paths.length > 0), run: () => void showProperties(paths) },
@@ -515,8 +520,8 @@ export function FileView({ path }: { path: string }) {
           { id: "refresh", label: "Refresh", shortcut: "F5", icon: "refresh", separatorBefore: true, run: refresh },
           { id: "copyPath", label: "Copy folder path", icon: "copy", run: () => void navigator.clipboard.writeText(path) },
           { id: "pin", label: pinned ? "Unpin this folder" : "Pin this folder", icon: "pin", run: () => togglePin(path) },
-          { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(path, "here") },
-          { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(path, "admin") },
+          !isRemote(path) && { id: "terminal", label: terminalLabel(false), icon: "terminal", separatorBefore: true, run: () => void terminal(path, "here") },
+          !isRemote(path) && { id: "terminalAdmin", label: terminalLabel(true), run: () => void terminal(path, "admin") },
           { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(path)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           !isRemote(path) && { id: "automate", label: "Automate this folder with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection([path], path)) },

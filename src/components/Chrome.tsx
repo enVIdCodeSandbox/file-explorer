@@ -10,6 +10,7 @@ import {
   VIEW_LEVELS,
   createPath,
   deletePaths,
+  extractAndOpenTerminal,
   openFile,
   promptText,
   showProperties,
@@ -36,6 +37,7 @@ import {
   crumbs,
   isAppLocation,
   isArchiveFile,
+  isArchiveLoc,
   isRemote,
   maskAddresses,
   parentPath,
@@ -518,7 +520,11 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
     return () => window.removeEventListener("keydown", onKey);
   }, [up, back, forward, navigate, parts.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const terminalDir = folder ?? info?.home ?? "/";
+  // A folder inside an archive or on a server is not a folder a terminal can open in.
+  const inArchive = !!folder && isArchiveLoc(folder);
+  const onServer = !!folder && isRemote(folder);
+  const realFolder = folder && !inArchive && !onServer ? folder : null;
+  const terminalDir = realFolder ?? info?.home ?? "/";
   const openTerminal = async (mode: TerminalMode, plain = false) => {
     try {
       const { terminal } = useStore.getState().settings!;
@@ -532,7 +538,8 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
           if (r?.isDir) dir = r.path;
         }
       }
-      await api.openTerminal(dir, mode);
+      if (inArchive && folder && (mode === "here" || mode === "admin")) await extractAndOpenTerminal(folder, mode);
+      else await api.openTerminal(dir, mode);
     } catch (e) {
       showToast(String(e));
     }
@@ -543,13 +550,21 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
     setMenu({
       x: r.left,
       y: r.bottom + 4,
-      items: [
-        { id: "plain", label: "Open terminal", run: () => void openTerminal("here", true) },
-        { id: "here", label: "Open in this folder", disabled: !folder, run: () => void openTerminal("here") },
-        { id: "home", label: "Open in home folder", run: () => void openTerminal("home") },
-        { id: "drive", label: "Open at drive root", disabled: !folder, run: () => void openTerminal("driveRoot") },
-        { id: "admin", label: `Open here ${admin}`, separatorBefore: true, run: () => void openTerminal("admin") },
-      ],
+      items: inArchive
+        ? [
+            // Looking inside an archive: it is unpacked first, then the terminal opens in the unpacked folder.
+            { id: "extract", label: "Unpack next to the archive, then open terminal", run: () => void extractAndOpenTerminal(folder!, "here") },
+            { id: "extractHere", label: "Unpack into this folder, then open terminal", run: () => void extractAndOpenTerminal(folder!, "here", true) },
+            { id: "home", label: "Open in home folder", run: () => void openTerminal("home") },
+            { id: "extractAdmin", label: `Unpack, then open ${admin}`, separatorBefore: true, run: () => void extractAndOpenTerminal(folder!, "admin") },
+          ]
+        : [
+            { id: "plain", label: "Open terminal", run: () => void openTerminal("here", true) },
+            { id: "here", label: "Open in this folder", disabled: !realFolder, run: () => void openTerminal("here") },
+            { id: "home", label: "Open in home folder", run: () => void openTerminal("home") },
+            { id: "drive", label: "Open at drive root", disabled: !realFolder, run: () => void openTerminal("driveRoot") },
+            { id: "admin", label: `Open here ${admin}`, separatorBefore: true, disabled: onServer, run: () => void openTerminal("admin") },
+          ],
     });
   };
 
