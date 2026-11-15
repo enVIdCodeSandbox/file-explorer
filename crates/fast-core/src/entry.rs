@@ -199,6 +199,8 @@ mod streaming_tests {
             fs::write(d.path().join(format!("f{i:03}.txt")), b"x").unwrap();
         }
         fs::write(d.path().join(".hidden"), b"x").unwrap();
+        // A leading dot hides a file everywhere except Windows, which hides by file attribute.
+        let shown = if cfg!(windows) { 501 } else { 500 };
         let cancel = AtomicBool::new(false);
         let (mut batches, mut names) = (Vec::new(), Vec::new());
         let whole = list_dir_streaming(d.path(), false, &cancel, &mut |b, p| {
@@ -207,8 +209,8 @@ mod streaming_tests {
             assert_eq!(p.total, 501);
         })
         .unwrap();
-        assert_eq!(whole.len(), 500);
-        assert_eq!(names.len(), 500);
+        assert_eq!(whole.len(), shown);
+        assert_eq!(names.len(), shown);
         assert!(batches.len() > 1 && batches[0] <= 64, "{batches:?}");
         let mut plain: Vec<String> = list_dir(d.path(), false).unwrap().into_iter().map(|e| e.name).collect();
         names.sort();
