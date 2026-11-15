@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { adv } from "../settings/advanced";
 import { useStore, VIEW_LEVELS, type SortKey } from "../store";
 import { usePhoneChrome, type PhoneChrome } from "../util/chrome";
@@ -464,6 +465,17 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
     navigate(searchLocation(q, scope));
   };
 
+  /** Choose files on the phone (the system's file chooser) and send them to a server folder. */
+  const uploadHere = async (dest: string) => {
+    try {
+      const picked = await openDialog({ multiple: true, directory: false, title: "Choose files to upload" });
+      const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
+      if (list.length) void useStore.getState().startTransfer(list, dest, "copy");
+    } catch (e) {
+      useStore.getState().showToast(String(e));
+    }
+  };
+
   const openMenu = (ev: React.MouseEvent) => {
     const r = ev.currentTarget.getBoundingClientRect();
     const common: MenuItem[] = [
@@ -479,6 +491,15 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
             { id: "m-new-folder", label: "New folder", icon: "folderOpen", run: () => runCommand("newFolder") },
             { id: "m-new-file", label: "New file", icon: "newItem", run: () => runCommand("newFile") },
             { id: "m-paste", label: "Paste", icon: "paste", disabled: !clipboard, run: () => runCommand("paste") },
+            // Send files from this phone straight to the server folder being viewed.
+            ...(isRemote(loc.path) && !loc.path.toLowerCase().startsWith("mtp://")
+              ? [{
+                  id: "m-upload",
+                  label: "Upload from this phone…",
+                  icon: "forward",
+                  run: () => void uploadHere(loc.path),
+                } as MenuItem]
+              : []),
             { id: "m-view-list", label: "List", icon: "list", checked: asList, separatorBefore: true, run: () => setViewLevel(0) },
             { id: "m-view-grid", label: chrome === "apple" ? "Icons" : "Grid", icon: "grid", checked: !asList, run: () => setViewLevel(3) },
             {

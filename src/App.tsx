@@ -28,6 +28,7 @@ import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 import { MobileApp } from "./components/Mobile";
+import { TasksView } from "./components/Tasks";
 import { useMobile } from "./util/device";
 
 export default function App() {
@@ -36,8 +37,17 @@ export default function App() {
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
   const activeTab = useStore((s) => s.activeTab);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const tasksOpen = useStore((s) => s.tasksOpen);
   const settings = useStore((s) => s.settings);
   const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
+  // "Start with the computer" is an operating-system setting: keep it in step with the choice made in Settings.
+  const startWithComputer = useStore((s) => (s.unsaved ? null : s.settings?.advanced["tasks.startWithComputer"] === true));
+  useEffect(() => {
+    if (startWithComputer === null || !useStore.getState().ready) return;
+    void api.autostartGet().then((now) => (now === startWithComputer ? undefined : api.autostartSet(startWithComputer))).catch((e) => {
+      if (startWithComputer) useStore.getState().showToast(String(e));
+    });
+  }, [startWithComputer]);
   const os = useStore((s) => s.info?.os);
   const [fatal, setFatal] = useState<string | null>(null);
   const [filterAnchor, setFilterAnchor] = useState<DOMRect | null>(null);
@@ -83,6 +93,7 @@ export default function App() {
         if (!s.isSecondary) rememberDetached({ ...s.detached, [kind]: open });
       }),
       // Another app (or a second start of this one) asked for a folder.
+      on("task-notice", (m) => useStore.getState().showToast(m)),
       on("launch", () => void api.takeLaunch().then((l) => useStore.getState().showLaunches(l)).catch(() => {})),
       on("reattach", ({ kind }) => {
         if (kind === "settings") useStore.setState({ settingsOpen: true });
@@ -183,6 +194,7 @@ export default function App() {
         case "prevTab": s.activate(s.tabs[(i + n - 1) % n].id); break;
         case "toggleSidebar": s.updateSettings((x) => void (x.appearance.sidebarCollapsed = !x.appearance.sidebarCollapsed)); break;
         case "toggleDetails": s.updateSettings((x) => void (x.appearance.showDetailsPane = !x.appearance.showDetailsPane)); break;
+        case "toggleTypeFind": s.updateSettings((x) => void (x.advanced["files.typeFind"] = !adv<boolean>(x, "files.typeFind"))); s.showToast(adv<boolean>(useStore.getState().settings, "files.typeFind") ? "Type to find is on." : "Type to find is off."); break;
         case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
         case "thisPc": s.navigate(THIS_PC); break;
         case "home": s.navigate(HOME); break;
@@ -275,7 +287,7 @@ export default function App() {
           <div className="content-inner" key={activeTab}>
             {loc.kind === "home" && <HomeView />}
             {loc.kind === "thispc" && <DrivesView />}
-            {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} />}
+            {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
             {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}
             {loc.kind === "folder" && <FileView path={loc.path} />}
@@ -289,6 +301,7 @@ export default function App() {
       {settings && !settings.setupDone && <Setup />}
       {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
       {settingsOpen && <SettingsView />}
+      {tasksOpen && <TasksView />}
       <PropertiesDialog />
       <OpenWithDialog />
       <LockDialog />

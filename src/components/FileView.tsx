@@ -25,6 +25,8 @@ import { useSelectionBand } from "./useSelectionBand";
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
 import { formatDate, formatSize, kindOf, typeLabel } from "../util/format";
 import { adv } from "../settings/advanced";
+import { closestIndex, nextText } from "../util/typeFind";
+import { taskFromSelection } from "./Tasks";
 import { LockedCard } from "./Locks";
 import { commandFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
@@ -106,6 +108,10 @@ export function FileView({ path }: { path: string }) {
   const cursor = useRef(0);
   const scroller = useRef<HTMLDivElement>(null);
   const typeahead = useRef({ text: "", at: 0 });
+  // Type to find (off unless switched on): the typed text, shown in a small label while it lasts.
+  const typeFind = adv<boolean>(settings, "files.typeFind");
+  const [findText, setFindText] = useState("");
+  const findTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const menuTicket = useRef(0);
   const { fetchFor } = useShellItems();
 
@@ -470,7 +476,8 @@ export function FileView({ path }: { path: string }) {
           single?.isDir && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirForTerminal, "here") },
           single?.isDir && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirForTerminal, "admin") },
           single?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(fullPath(single.name))) },
-          { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => void showProperties(paths) },
+          paths.length > 0 && { id: "automate", label: "Automate with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection(paths, path)) },
+          { id: "properties", label: "Properties", icon: "info", separatorBefore: !(paths.length > 0), run: () => void showProperties(paths) },
           // Last, and apart from everything people use all the time.
           single?.isDir && !isRemote(fullPath(single.name)) && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(fullPath(single.name)) },
         ]
@@ -512,7 +519,8 @@ export function FileView({ path }: { path: string }) {
           { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(path, "admin") },
           { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(path)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
-          { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => void showProperties([path]) },
+          !isRemote(path) && { id: "automate", label: "Automate this folder with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection([path], path)) },
+          { id: "properties", label: "Properties", icon: "info", separatorBefore: isRemote(path), run: () => void showProperties([path]) },
           { id: "lock", label: "Lock this folder with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(path) },
         ];
     const hidden = new Set(settings.contextMenu.hidden);
@@ -621,6 +629,7 @@ export function FileView({ path }: { path: string }) {
     else if (e.key === "PageDown") moveCursor(columnsPerRow * 15, e.shiftKey);
     else if (e.key === "PageUp") moveCursor(-columnsPerRow * 15, e.shiftKey);
     else if (e.key === "Enter" && first) open(first);
+    else if (e.key === "Backspace" && typeFind && findText) typeInto(e.key);
     else if (e.key === "Backspace") {
       const up = parentPath(path);
       if (up) navigate(up);
@@ -633,7 +642,10 @@ export function FileView({ path }: { path: string }) {
     else if (mod && e.key.toLowerCase() === "v") paste();
     else if (mod && e.shiftKey && e.key.toLowerCase() === "n") void create(true);
     else if (e.altKey && e.key === "Enter" && paths.length) void showProperties(paths);
-    else if (e.key === "Escape") setSelected(new Set());
+    else if (e.key === "Escape") {
+      setSelected(new Set());
+      setFindText("");
+    } else if (typeFind && e.key.length === 1 && !mod && !e.altKey) typeInto(e.key);
     else if (e.key.length === 1 && !mod && !e.altKey) {
       // Type-ahead: jump to the first name starting with what was typed.
       const now = Date.now();
@@ -648,6 +660,21 @@ export function FileView({ path }: { path: string }) {
     } else handled = false;
     if (handled) e.preventDefault();
   };
+
+  const typeInto = (key: string) => {
+    const text = nextText(findText, key);
+    if (text === null) return;
+    setFindText(text);
+    clearTimeout(findTimer.current);
+    findTimer.current = setTimeout(() => setFindText(""), adv<number>(settings, "files.typeFindResetSec") * 1000);
+    const i = closestIndex(entries.map((x) => x.name), text);
+    if (i >= 0) {
+      selectIndex(i, { ctrlKey: false, metaKey: false, shiftKey: false });
+      virtualizer.scrollToIndex(Math.floor(i / columnsPerRow));
+    }
+  };
+  useEffect(() => () => clearTimeout(findTimer.current), []);
+  useEffect(() => setFindText(""), [path]);
 
   // ---- Hover prefetch: load a folder's listing before it is clicked ---------
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -888,6 +915,8 @@ export function FileView({ path }: { path: string }) {
         data-drop-path={path}
         tabIndex={0}
         onKeyDown={onKeyDown}
+        // Typing goes to the folder only while it has the focus, so a click on it must give it.
+        onMouseDownCapture={() => !mobile && scroller.current?.focus({ preventScroll: true })}
         onMouseDown={mobile ? undefined : startBand}
         onContextMenu={(ev) => {
           ev.preventDefault();
@@ -1025,6 +1054,11 @@ export function FileView({ path }: { path: string }) {
             ))}
           </div>
         </>
+      )}
+      {typeFind && findText && (
+        <div className="type-find" role="status">
+          Find: <strong>{findText}</strong>
+        </div>
       )}
       <div className="status-bar">
         <span>

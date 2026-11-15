@@ -436,6 +436,29 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
         .await?;
         return Ok(tauri::ipc::Response::new(bytes));
     }
+    // A file on a server: fetch it (within a size limit) and make the thumbnail from the copy.
+    if fast_core::remote::is_remote(&path) {
+        let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
+        let bytes = blocking(move || {
+            let kind = thumbs::kind_of(Path::new(&path)).ok_or("no thumbnail for this kind of file")?;
+            let (cap, key) = if kind == thumbs::Kind::Image { (advanced_u64(&st, "thumbs.maxImageMb", 64).min(25), "images") } else { (advanced_u64(&st, "thumbs.networkCopyMb", 200), "videos") };
+            let allowed = match kind {
+                thumbs::Kind::Image => advanced_bool(&st, "thumbs.images", true),
+                thumbs::Kind::Document => advanced_bool(&st, "thumbs.documents", true),
+                thumbs::Kind::Video => advanced_bool(&st, "thumbs.videos", true),
+            };
+            if !allowed {
+                return Err(format!("thumbnails for {key} are switched off"));
+            }
+            let opts = thumbs::Options { max_image_bytes: cap * 1024 * 1024, video_percent: advanced_u64(&st, "thumbs.videoPercent", 10).min(95) as u8 };
+            let copy = crate::remote::fetch_for_thumbnail(&st, &path, cap * 1024 * 1024)?;
+            let made = thumbs::thumbnail_with(&copy, size, None, &opts).map_err(err);
+            let _ = std::fs::remove_file(&copy);
+            made
+        })
+        .await?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
     // Bounded concurrency: decoding is CPU-heavy and must not starve listing.
     let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
     let bytes = blocking(move || {
@@ -454,7 +477,15 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
             max_image_bytes: advanced_u64(&st, "thumbs.maxImageMb", 64) * 1024 * 1024,
             video_percent: advanced_u64(&st, "thumbs.videoPercent", 10).min(95) as u8,
         };
-        thumbs::thumbnail_with(Path::new(&path), size, keep.then_some(st.paths.thumbs.as_path()), &opts).map_err(err)
+        let direct = thumbs::thumbnail_with(Path::new(&path), size, keep.then_some(st.paths.thumbs.as_path()), &opts);
+        match direct {
+            // A video or document on a network drive that the system will not preview in place: try a local copy.
+            Err(first) if thumbs::kind_of(Path::new(&path)) != Some(thumbs::Kind::Image) && on_network(&st, Path::new(&path)) => {
+                let max = advanced_u64(&st, "thumbs.networkCopyMb", 200) * 1024 * 1024;
+                thumbs::via_local_copy(Path::new(&path), size, &opts, 24 * 1024 * 1024, max).map_err(|_| err(first))
+            }
+            other => other.map_err(err),
+        }
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))
@@ -1999,6 +2030,67 @@ pub async fn disk_smart_admin(state: State<'_, Shared>, device: String) -> CmdRe
         }
         let at = save_hardware(&st, &system);
         Ok(FullReport { app: app_details(&st), system, cached_at: Some(at) })
+    })
+    .await
+}
+
+/// Whether the drive-health tool (smartctl) is installed.
+#[tauri::command]
+pub async fn smartctl_installed() -> bool {
+    which_program("smartctl").is_some()
+}
+
+/// Install smartmontools with what the system has (winget, Homebrew or the distribution's
+/// package manager). The system asks for permission itself where it must.
+#[tauri::command]
+pub async fn install_smartmontools() -> CmdResult<()> {
+    blocking(|| {
+        if which_program("smartctl").is_some() {
+            return Ok(());
+        }
+        let manual = "Install smartmontools from https://www.smartmontools.org/wiki/Download and try again.";
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("winget");
+            cmd.args(["install", "--id", "smartmontools.smartmontools", "-e", "--silent", "--accept-package-agreements", "--accept-source-agreements"]);
+            fast_core::proc::quiet(&mut cmd);
+            let out = cmd.output().map_err(|_| format!("Windows' package installer (winget) is not available here. {manual}"))?;
+            if !out.status.success() {
+                let said = String::from_utf8_lossy(&out.stdout);
+                let said = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("it did not finish").trim().to_string();
+                return Err(format!("The installer stopped: {said}. {manual}"));
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].iter().map(Path::new).find(|p| p.is_file()).ok_or(format!("Homebrew is not installed. {manual}"))?;
+            let out = std::process::Command::new(brew).args(["install", "smartmontools"]).output().map_err(err)?;
+            if !out.status.success() {
+                return Err(format!("Homebrew could not install it. {manual}"));
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+        {
+            let plan: Option<(&str, Vec<&str>)> = [
+                ("/usr/bin/apt-get", vec!["install", "-y", "smartmontools"]),
+                ("/usr/bin/dnf", vec!["install", "-y", "smartmontools"]),
+                ("/usr/bin/pacman", vec!["-S", "--noconfirm", "smartmontools"]),
+                ("/usr/bin/zypper", vec!["--non-interactive", "install", "smartmontools"]),
+            ]
+            .into_iter()
+            .find(|(p, _)| Path::new(p).is_file());
+            let (program, args) = plan.ok_or(format!("No supported package manager was found. {manual}"))?;
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            match platform::run_elevated(Path::new(program), &args).map_err(err)? {
+                platform::Elevation::Declined => return Err("Administrator permission was not given.".to_string()),
+                platform::Elevation::Completed(0) => {}
+                platform::Elevation::Completed(_) => return Err(format!("The package manager could not install it. {manual}")),
+            }
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        return Err("Drive health is not available on phones.".to_string());
+        // Windows puts the tool where this app's own PATH may not yet include it; which_program looks there too.
+        which_program("smartctl").map(|_| ()).ok_or_else(|| format!("It installed, but the app cannot find it yet. Restart the app and try again. {manual}"))
     })
     .await
 }

@@ -47,6 +47,10 @@ pub struct Paths {
     pub servers: PathBuf,
     /// Files fetched from a server to open them.
     pub remote_tmp: PathBuf,
+    /// Automated tasks, what they have done, and where the scheduler had got to.
+    pub tasks: PathBuf,
+    pub task_history: PathBuf,
+    pub task_state: PathBuf,
 }
 
 impl Paths {
@@ -66,6 +70,9 @@ impl Paths {
             known_hosts: config.join("known_hosts"),
             servers: config.join("servers.json"),
             remote_tmp: cache.join("remote"),
+            tasks: config.join("tasks.json"),
+            task_history: config.join("task-history.jsonl"),
+            task_state: config.join("task-state.json"),
         }
     }
 }

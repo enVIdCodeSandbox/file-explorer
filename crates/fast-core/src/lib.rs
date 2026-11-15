@@ -5,6 +5,8 @@
 //! exposes these functions as commands. See `docs/ARCHITECTURE.md`.
 
 pub mod archive;
+pub mod proc;
+pub mod tasks;
 pub mod cachepolicy;
 pub mod browse;
 pub mod edit;

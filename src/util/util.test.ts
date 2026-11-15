@@ -69,7 +69,9 @@ describe("path", () => {
 
   it("round-trips app locations", () => {
     const loc = searchLocation("a b&c", "C:\\x y");
-    expect(parseLocation(loc)).toEqual({ kind: "search", query: "a b&c", scope: "C:\\x y" });
+    expect(parseLocation(loc)).toEqual({ kind: "search", query: "a b&c", scope: "C:\\x y", mode: "tree" });
+    expect(parseLocation(searchLocation("q", "/tmp", "level"))).toEqual({ kind: "search", query: "q", scope: "/tmp", mode: "level" });
+    expect(parseLocation(searchLocation("q", null))).toEqual({ kind: "search", query: "q", scope: null, mode: "global" });
     expect(parseLocation("/tmp")).toEqual({ kind: "folder", path: "/tmp" });
   });
 });

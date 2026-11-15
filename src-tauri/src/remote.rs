@@ -182,6 +182,32 @@ pub fn list_streaming(
     Ok(Listing { path: loc.url(), parent: loc.parent().map(|p| p.url()), entries: Arc::new(entries), cached: false })
 }
 
+/// Copy a file from a server into a scratch file, for making a thumbnail. Stops (and removes
+/// the partial copy) once more than `max_bytes` have arrived.
+pub fn fetch_for_thumbnail(st: &Shared, url: &str, max_bytes: u64) -> CmdResult<PathBuf> {
+    let loc = Location::parse(url).map_err(err)?;
+    std::fs::create_dir_all(&st.paths.scratch).map_err(err)?;
+    let ext = Path::new(&loc.path).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let local = st.paths.scratch.join(format!("thumb-{}.{ext}", st.next_id.fetch_add(1, Ordering::Relaxed)));
+    let result = with_session(st, &loc.key(), |s| {
+        let cancel = AtomicBool::new(false);
+        let got = AtomicU64::new(0);
+        let on_bytes = |n: u64| {
+            if got.fetch_add(n, Ordering::Relaxed) + n > max_bytes {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        };
+        s.download(&loc.path, &local, &Control { cancel: &cancel, on_bytes: &on_bytes }).map(|_| ())
+    });
+    match result {
+        Ok(()) => Ok(local),
+        Err(e) => {
+            let _ = std::fs::remove_file(&local);
+            Err(if e.contains("ancel") { "too big for a thumbnail".to_string() } else { e })
+        }
+    }
+}
+
 /// A device's own preview picture for a file, if it keeps one.
 pub fn device_thumbnail(st: &Shared, url: &str) -> CmdResult<Option<Vec<u8>>> {
     let loc = Location::parse(url).map_err(err)?;

@@ -4,8 +4,10 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useSelectionBand } from "./useSelectionBand";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mergeHits } from "../util/searchHits";
+import { levelHits } from "../util/levelSearch";
 import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
-import { ask, deletePaths, openFile, thisPcLabel, useStore } from "../store";
+import { ask, compressPaths, deletePaths, extractArchive, isArchiveName, openFile, promptText, renamePath, thisPcLabel, useStore } from "../store";
+import { useShellItems } from "./shellMenu";
 import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
 import { KIND_LABEL, deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { applyFilter, isFiltering } from "../util/filter";
@@ -16,7 +18,7 @@ import { extensionOf, typeLabel } from "../util/format";
 import { rankHits } from "../util/searchHits";
 import type { SortKey } from "../store";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
-import { baseName, maskAddresses, parentPath } from "../util/path";
+import { analyzeLocation, baseName, isRemote, maskAddresses, parentPath } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
@@ -368,7 +370,7 @@ function sortHits(list: Hit[], key: HitSortKey, asc: boolean, foldersFirst: bool
   });
 }
 
-export function SearchView({ query, scope }: { query: string; scope: string | null }) {
+export function SearchView({ query, scope, mode = "tree" }: { query: string; scope: string | null; mode?: "level" | "tree" | "global" }) {
   const settings = useStore((s) => s.settings)!;
   const indexStatus = useStore((s) => s.indexStatus);
   const clipboard = useStore((s) => s.clipboard);
@@ -403,6 +405,23 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
       setScanned(b.scanned);
       if (b.done) setBusy(false);
     });
+    // One level only: the folder's own listing, matched by name. Instant, and nothing deeper is read.
+    if (mode === "level" && scope) {
+      void api
+        .listDir(scope)
+        .then((l) => {
+          if (!alive) return;
+          const t0 = performance.now();
+          const hits = levelHits(scope, l.entries, query);
+          setResult({ hits, source: "live", complete: true, elapsedMs: performance.now() - t0, searchedEntries: l.entries.length, searching: false });
+          setBusy(false);
+        })
+        .catch((e) => alive && (setError(String(e)), setBusy(false)));
+      return () => {
+        alive = false;
+        void sub.then((off) => off());
+      };
+    }
     // Subscribe before asking, so no early batch can be missed.
     void sub
       .then(() => api.search(query, scope, id))
@@ -421,7 +440,7 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
       void sub.then((off) => off());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, scope]);
+  }, [query, scope, mode]);
 
   // Filter with the same panel as a folder (Filter in the command bar) or the
   // strip below, then sort. Entries are matched back to hits by identity, so two
@@ -554,28 +573,98 @@ export function SearchView({ query, scope }: { query: string; scope: string | nu
   };
 
   // ---- Right-click ----------------------------------------------------------
+  // The same entries as the menu in a folder (pin, share, send to, compress, rename, terminal,
+  // custom actions, the system's own entries...), plus the ones that only make sense here.
+  const menuTicket = useRef(0);
+  const { fetchFor } = useShellItems();
+  const buildMenu = (picked: Hit[], shell: MenuItem[] = []): MenuItem[] => {
+    const paths = picked.map((p) => p.path);
+    const one = picked.length === 1 ? picked[0] : null;
+    const dest = one?.isDir ? one.path : scope;
+    const { pins, places, drives, settings: cfg } = useStore.getState();
+    const pinned = one ? pins.some((x) => x.path === one.path) : false;
+    const startTransfer = useStore.getState().startTransfer;
+    const here = new Set(paths.map((x) => parentPath(x)));
+    const sendTo: MenuItem[] = [
+      ...places.filter((x) => ["Desktop", "Documents", "Downloads"].includes(x.label)).map((x) => ({ label: x.label, path: x.path, icon: "folderOpen" })),
+      ...drives.filter((d) => d.online && !d.readOnly && d.mount !== "/").map((d) => ({ label: d.name, path: d.mount, icon: d.media === "network" ? "network" : "drive" })),
+    ]
+      .filter((d) => !here.has(d.path))
+      .map((d) => ({ id: `sendto-${d.path}`, label: d.label, icon: d.icon, run: () => void startTransfer(paths, d.path, "copy") }));
+    const custom: MenuItem[] = (cfg?.customActions ?? [])
+      .filter((a) => {
+        if (!picked.length) return false;
+        if (a.appliesTo === "file" && picked.some((e) => e.isDir)) return false;
+        if (a.appliesTo === "folder" && picked.some((e) => !e.isDir)) return false;
+        const exts = a.extensions.split(",").map((x) => x.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
+        return !exts.length || picked.every((e) => !e.isDir && exts.includes(e.name.split(".").pop()?.toLowerCase() ?? ""));
+      })
+      .map((a) => ({ id: `custom-${a.id}`, label: a.label, icon: "newItem", run: () => void api.runCustomAction(a.id, paths).catch((err) => showToast(String(err))) }));
+    const dirOf = (h: Hit) => (h.isDir ? h.path : (parentPath(h.path) ?? h.path));
+    const terminal = (dir: string, mode: "here" | "admin") => api.openTerminal(dir, mode).catch((e) => showToast(String(e)));
+    const rename = async (h: Hit) => {
+      const name = await promptText("Rename", h.name);
+      if (!name || name === h.name) return;
+      const made = await renamePath(h.path, name);
+      if (!made) return;
+      setResult((cur) => (cur ? { ...cur, hits: cur.hits.map((x) => (x.path === h.path ? { ...x, path: made, name } : x)) } : cur));
+      setSelected(new Set([made]));
+    };
+    const items: (MenuItem | false | null | undefined)[] = [
+      one && { id: "open", label: "Open", shortcut: "Enter", run: () => open(one) },
+      one?.isDir && { id: "openNewTab", label: "Open in new tab", run: () => newTab(one.path, { background: true }) },
+      one && !one.isDir && { id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(one.path) },
+      one && { id: "reveal", label: "Open containing folder", icon: "folderOpen", run: () => reveal(one) },
+      one && { id: "revealNewTab", label: "Open containing folder in new tab", run: () => { const d = parentPath(one.path); if (d) newTab(d, { background: true }); } },
+      ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+      ...custom.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+      one && { id: "pin", label: pinned ? "Unpin from sidebar" : "Pin to sidebar", icon: "pin", separatorBefore: shell.length === 0 && custom.length === 0, run: () => useStore.getState().togglePin(one.path, !one.isDir) },
+      { id: "copyPath", label: "Copy as path", icon: "copy", run: () => void navigator.clipboard.writeText(paths.join("\n")) },
+      {
+        id: "share",
+        label: "Share",
+        icon: "share",
+        children: [
+          { id: "share-link", label: "Temporary download link…", icon: "share", run: () => useStore.setState({ shareFor: paths }) },
+          { id: "share-path", separatorBefore: true, label: "Copy as path", run: () => void navigator.clipboard.writeText(paths.join("\n")) },
+          { id: "share-name", label: "Copy name", run: () => void navigator.clipboard.writeText(picked.map((x) => x.name).join("\n")) },
+        ],
+      },
+      sendTo.length > 0 && { id: "sendTo", label: "Send to", icon: "forward", children: sendTo },
+      { id: "archive-zip", label: "Compress to ZIP", icon: "archive", run: () => void compressPaths(paths) },
+      one && !one.isDir && isArchiveName(one.name) && { id: "archive-here", label: "Extract here", icon: "archive", run: () => void extractArchive(one.path, true) },
+      one && !one.isDir && isArchiveName(one.name) && { id: "archive-to", label: `Extract to "${one.name.replace(/(\.tar)?\.[^.]+$/i, "")}"`, icon: "archive", run: () => void extractArchive(one.path, false) },
+      { id: "cut", label: "Cut", icon: "cut", shortcut: "Ctrl+X", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
+      { id: "copy", label: "Copy", icon: "copy", shortcut: "Ctrl+C", run: () => setClipboard({ paths, op: "copy" }) },
+      { id: "paste", label: one?.isDir ? "Paste into this folder" : "Paste", icon: "paste", shortcut: "Ctrl+V", disabled: !dest, run: () => dest && void pasteInto(dest) },
+      one && { id: "createShortcut", label: "Create shortcut", separatorBefore: true, run: () => void api.createShortcut(one.path).then(() => showToast("Shortcut created.")).catch((e) => showToast(String(e))) },
+      { id: "delete", label: "Delete", icon: "trash", shortcut: "Del", run: () => void deletePaths(paths) },
+      { id: "deletePermanent", label: "Delete permanently", shortcut: "Shift+Del", danger: true, run: () => void deletePaths(paths, true) },
+      one && { id: "rename", label: "Rename", shortcut: "F2", icon: "rename", run: () => void rename(one) },
+      one && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirOf(one), "here") },
+      one && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirOf(one), "admin") },
+      one?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(one.path)) },
+      { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => useStore.setState({ properties: paths }) },
+      one?.isDir && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(one.path) },
+    ];
+    const hidden = new Set(cfg?.contextMenu.hidden ?? []);
+    return items.filter((i): i is MenuItem => !!i && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")));
+  };
+
   const showMenu = (x: number, y: number, h: Hit) => {
     let picked = chosen();
     if (!selected.has(h.path)) {
       picked = [h];
       setSelected(new Set([h.path]));
     }
-    const paths = picked.map((p) => p.path);
-    const one = picked.length === 1 ? picked[0] : null;
-    const dest = one?.isDir ? one.path : scope;
-    const items: MenuItem[] = [
-      ...(one ? [{ id: "open", label: "Open", shortcut: "Enter", run: () => open(one) } as MenuItem] : []),
-      ...(one?.isDir ? [{ id: "openNewTab", label: "Open in new tab", run: () => newTab(one.path, { background: true }) } as MenuItem] : []),
-      ...(one && !one.isDir ? [{ id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(one.path) } as MenuItem] : []),
-      ...(one ? [{ id: "reveal", label: "Open containing folder", run: () => reveal(one) } as MenuItem] : []),
-      { id: "cut", label: "Cut", icon: "cut", shortcut: "Ctrl+X", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
-      { id: "copy", label: "Copy", icon: "copy", shortcut: "Ctrl+C", run: () => setClipboard({ paths, op: "copy" }) },
-      { id: "paste", label: one?.isDir ? "Paste into this folder" : "Paste", icon: "paste", shortcut: "Ctrl+V", disabled: !dest, run: () => dest && void pasteInto(dest) },
-      { id: "copyPath", label: "Copy as path", icon: "copy", separatorBefore: true, run: () => void navigator.clipboard.writeText(paths.join("\n")) },
-      { id: "delete", label: "Delete", icon: "trash", shortcut: "Del", separatorBefore: true, run: () => void deletePaths(paths) },
-      { id: "properties", label: "Properties", separatorBefore: true, run: () => useStore.setState({ properties: paths }) },
-    ];
-    setMenu({ x, y, items });
+    const ticket = ++menuTicket.current;
+    setMenu({ x, y, items: buildMenu(picked) });
+    // The system's own entries arrive a moment later; the menu never waits for them.
+    if (!settings.general.shellExtras || picked.some((p) => isRemote(p.path))) return;
+    void fetchFor(picked.map((p) => p.path), false).then((shell) => {
+      if (ticket !== menuTicket.current || shell.length === 0) return;
+      setMenu({ x, y, items: buildMenu(picked, shell) });
+    });
   };
 
   // ---- Dragging: the whole selection travels, like in a folder -----------------

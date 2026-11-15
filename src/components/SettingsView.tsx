@@ -10,6 +10,7 @@ import { api } from "../api";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SECTIONS, SETTINGS, getSetting, setSetting, type SettingDef } from "../settings/schema";
 import { useStore } from "../store";
+import { adv } from "../settings/advanced";
 import { MENU_CATALOG } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
@@ -153,10 +154,32 @@ function clampOffset(x: number, y: number, w: number, h: number) {
   return { x: Math.max(-maxX, Math.min(maxX, x)), y: Math.max(-(vh / 2 - h / 2), Math.min(maxY, y)) };
 }
 
+/** Always at the bottom of Settings: save, discard, and whether changes save by themselves. */
+function SaveBar() {
+  const unsaved = useStore((s) => s.unsaved);
+  const auto = useStore((s) => adv<boolean>(s.settings, "ui.autoSave"));
+  const { saveSettings, discardSettings, updateSettings } = useStore.getState();
+  return (
+    <div className="save-bar" data-unsaved={unsaved || undefined}>
+      <label className="save-auto">
+        <input type="checkbox" checked={auto} onChange={(e) => updateSettings((s) => void (s.advanced["ui.autoSave"] = e.target.checked))} /> Save changes automatically
+      </label>
+      <span className="muted grow">{unsaved ? "You have changes that are applied but not saved." : auto ? "Every change is saved as you make it." : "Everything is saved."}</span>
+      <button className="secondary" disabled={!unsaved} onClick={discardSettings}>Discard</button>
+      <button className="primary" onClick={saveSettings}>Save</button>
+    </div>
+  );
+}
+
 export function SettingsView({ detached = false }: { detached?: boolean }) {
   const t = useT();
   const os = useStore((s) => s.info?.os);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => {
+    // Opened from somewhere that knows what to look for (the Tasks window's Settings button).
+    const q = useStore.getState().settingsQuery;
+    if (q) useStore.setState({ settingsQuery: "" });
+    return q;
+  });
   const [section, setSection] = useState<string>(SECTIONS[0]);
   const pos = useStore((s) => s.settingsPos);
   const panel = useRef<HTMLDivElement>(null);
@@ -292,6 +315,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             </>
           )}
           {!q && section === "Documentation" && <Docs />}
+          <SaveBar />
           {!q && section === "About" && (
             <section>
               <h3>About</h3>

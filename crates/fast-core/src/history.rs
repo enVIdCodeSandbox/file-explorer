@@ -273,6 +273,39 @@ impl History {
         true
     }
 
+    /// Add a run that did not come from the transfer engine (an automated task that copied or
+    /// moved files) so that the time estimates for ordinary transfers learn from it too.
+    pub fn record_external(&mut self, route: &Route, files: u64, bytes: u64, secs: f64, errors: u64, now: i64, limit: usize) -> bool {
+        if limit == 0 || files == 0 || bytes == 0 || secs < 0.2 {
+            return false;
+        }
+        let src = self.name_id(&route.src);
+        let dst = self.name_id(&route.dst);
+        self.records.push_back(Record {
+            at: now,
+            src,
+            dst,
+            src_media: media_code(route.src_media),
+            dst_media: media_code(route.dst_media),
+            strategy: strategy_code(Strategy::Mixed),
+            is_move: false,
+            files: files.min(u32::MAX as u64) as u32,
+            bytes,
+            secs: secs as f32,
+            avg_bytes_per_sec: (bytes as f64 / secs) as f32,
+            avg_files_per_sec: (files as f64 / secs) as f32,
+            peak_bytes_per_sec: (bytes as f64 / secs) as f32,
+            per_file_secs: 0.0,
+            per_mb_secs: 0.0,
+            overhead_share: 0.0,
+            workers: 1,
+            errors: errors.min(u16::MAX as u64) as u16,
+            method: 0,
+        });
+        self.trim(limit);
+        true
+    }
+
     /// How alike a past record and a new job are. 0 is identical; each unit is
     /// roughly "a factor of e" in file size or count, or a route mismatch.
     fn distance(&self, r: &Record, q: &Query) -> f64 {
@@ -635,5 +668,19 @@ mod tests {
         // A different route says nothing about this one.
         let other = Query { route: route("C:\\", "E:\\", Media::Ssd, Media::Hdd), ..q };
         assert_eq!(h.choose_method(&other, &both, true, NOW), Method::Native);
+    }
+
+    #[test]
+    fn runs_of_automated_tasks_teach_the_estimates() {
+        let mut h = History::default();
+        let r = route("C:\\", "D:\\", Media::Ssd, Media::Hdd);
+        assert!(!h.record_external(&r, 0, 100, 5.0, 0, 1, 10), "nothing moved, nothing learned");
+        assert!(!h.record_external(&r, 5, 100, 0.05, 0, 1, 10), "too quick to time");
+        assert!(h.record_external(&r, 50, 500_000_000, 10.0, 0, 1_000, 10));
+        assert!(h.record_external(&r, 50, 500_000_000, 10.0, 0, 2_000, 10));
+        let q = Query { route: r, files: 50, bytes: 500_000_000, is_move: false };
+        let p = h.predict(&q, 3_000).expect("a prediction from task runs");
+        assert!(p.same_route && p.samples >= 2);
+        assert!((p.typical_secs - 10.0).abs() < 2.0, "{}", p.typical_secs);
     }
 }

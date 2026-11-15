@@ -103,6 +103,26 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `compact_memory` | `compactMemory` | — | `(u64, u64)` | Drop cached listings and return free memory to the system. Returns memory before and after. |
 | `disk_smart_admin` | `diskSmartAdmin` | `device: String` | `FullReport` | Read one drive's SMART data with administrator rights (through the OS prompt) and update the saved hardware report. |
 
+## Tasks
+
+Automated tasks (`src-tauri/src/tasks.rs`; the engine is `crates/fast-core/src/tasks.rs`).
+
+| Command | `api` | Notes |
+|---|---|---|
+| `tasks_list` | `tasksList` | Tasks, the ones running with progress, the next clock run of each and the latest record of each. |
+| `tasks_save(task)` | `tasksSave` | Adds (empty id) or changes a task; returns it. |
+| `tasks_delete(id)` | `tasksDelete` | Stops the task if running and removes it. |
+| `tasks_run(id, admin)` | `tasksRun` | Runs now; `admin` asks the OS to approve an administrator run. |
+| `tasks_cancel(id)` | `tasksCancel` | Stops a running task. |
+| `tasks_preview(task)` | `tasksPreview` | What the task would do now; works on an unsaved task and changes nothing. |
+| `tasks_history(id?, limit?)` | `tasksHistory` | Newest first. |
+| `tasks_stats(id?)` | `tasksStats` | Statistics and the time estimate for the next run. |
+| `tasks_clear_history(id?)` | `tasksClearHistory` | |
+| `tasks_export(path)`, `tasks_import(path)` | `tasksExport`, `tasksImport` | Task list files; imported tasks are turned off. |
+| `autostart_get`, `autostart_set(on)` | `autostartGet`, `autostartSet` | Start with the computer (`--minimized`): registry Run key, XDG autostart or a LaunchAgent. |
+
+An administrator run starts the app itself with `--run-task <task.json> --result <file> --cancel <file>` through the OS prompt; progress goes to `<result>.progress`. Settings keys are `tasks.*` (Advanced, group Tasks). Events: `tasks-changed`, `task-started`, `task-progress`, `task-finished` (a run record) and `task-notice` (text to show).
+
 ## Events
 
 Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).

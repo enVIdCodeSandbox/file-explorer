@@ -202,9 +202,13 @@ export function crumbs(path: string): Crumb[] {
   return out;
 }
 
-export function searchLocation(query: string, scope: string | null): string {
+/** How far a search reaches: this folder only, this folder and everything under it, or everywhere. */
+export type SearchMode = "level" | "tree" | "global";
+
+export function searchLocation(query: string, scope: string | null, mode?: SearchMode): string {
   const params = new URLSearchParams({ q: query });
   if (scope) params.set("scope", scope);
+  if (mode && scope && mode !== "tree") params.set("mode", mode);
   return `fast://search?${params}`;
 }
 
@@ -220,7 +224,7 @@ export function clearLocation(drive: string | null): string {
 export type Location =
   | { kind: "home" }
   | { kind: "thispc" }
-  | { kind: "search"; query: string; scope: string | null }
+  | { kind: "search"; query: string; scope: string | null; mode: SearchMode }
   | { kind: "analyze"; path: string }
   | { kind: "clear"; drive: string | null }
   | { kind: "folder"; path: string };
@@ -230,7 +234,8 @@ export function parseLocation(loc: string): Location {
   if (loc === THIS_PC) return { kind: "thispc" };
   if (loc.startsWith("fast://search?")) {
     const p = new URLSearchParams(loc.slice("fast://search?".length));
-    return { kind: "search", query: p.get("q") ?? "", scope: p.get("scope") };
+    const scope = p.get("scope");
+    return { kind: "search", query: p.get("q") ?? "", scope, mode: !scope ? "global" : p.get("mode") === "level" ? "level" : "tree" };
   }
   if (loc.startsWith("fast://analyze?")) {
     const p = new URLSearchParams(loc.slice("fast://analyze?".length));

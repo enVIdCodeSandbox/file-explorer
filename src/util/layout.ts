@@ -104,6 +104,24 @@ export const PRESETS: Preset[] = [
 ];
 
 /** Merge a saved layout with the defaults, dropping anything invalid. */
+/**
+ * The details pane has a dock in the layout and an on/off setting (the Details button). Keep
+ * them from disagreeing: docking it somewhere in the layout turns it on, hiding it turns it
+ * off, and turning it on again brings it back from "hidden". `before` and `after` are the
+ * settings around one change; the result is `after` with the two made to agree.
+ */
+export function syncDetailsPane<T extends { appearance: { layout?: unknown; showDetailsPane: boolean } }>(before: T, after: T): T {
+  const was = resolveLayout(before.appearance.layout as Parameters<typeof resolveLayout>[0]).details.dock;
+  const layout = resolveLayout(after.appearance.layout as Parameters<typeof resolveLayout>[0]);
+  const now = layout.details.dock;
+  if (now !== was) {
+    after.appearance.showDetailsPane = now !== "hidden";
+  } else if (after.appearance.showDetailsPane && !before.appearance.showDetailsPane && now === "hidden") {
+    after.appearance.layout = { ...layout, details: { ...layout.details, dock: "right" } };
+  }
+  return after;
+}
+
 export function resolveLayout(saved: unknown): Layout {
   const out = structuredClone(DEFAULT_LAYOUT);
   if (!saved || typeof saved !== "object") return out;

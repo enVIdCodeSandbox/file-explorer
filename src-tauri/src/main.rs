@@ -7,7 +7,7 @@ fn main() {
     // operation needs more rights than the person has, so the app itself never
     // has to run elevated. The job arrives on the command line.
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--job-b64" || a == "--job-file" || a == "--restore-file-manager") {
+    if args.iter().any(|a| a == "--job-b64" || a == "--job-file" || a == "--run-task" || a == "--restore-file-manager") {
         std::process::exit(fast_explorer_lib::run_helper(&args));
     }
     fast_explorer_lib::run();

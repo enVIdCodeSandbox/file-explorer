@@ -41,12 +41,14 @@ import {
   parentPath,
   parseLocation,
   searchLocation,
+  type SearchMode,
 } from "../util/path";
 import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { FileIcon, Icon } from "./Icons";
+import { useTasksRunning } from "./Tasks";
 
 // ---------------------------------------------------------------------------
 // Tabs
@@ -440,11 +442,23 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
   useEffect(() => setQuery(loc.kind === "search" ? loc.query : ""), [location]); // eslint-disable-line
 
   // Scope for a new search: the folder being viewed, unless the user prefers everything.
+  // How far it reaches: the person's choice (shortcut or the box's own menu), else the setting.
+  const chosenMode = useStore((s) => s.searchMode);
+  const base = folder ?? (loc.kind === "search" ? loc.scope : null);
+  const wanted: SearchMode = chosenMode ?? (loc.kind === "search" ? loc.mode : settings.search.scopeToCurrentFolder ? adv<SearchMode>(settings, "search.defaultMode") : "global");
+  const mode: SearchMode = base ? wanted : "global";
   const scopeRef = useRef<string | null>(null);
-  if (folder) scopeRef.current = settings.search.scopeToCurrentFolder ? folder : null;
-  else if (loc.kind === "search") scopeRef.current = loc.scope;
-  else scopeRef.current = null;
+  scopeRef.current = mode === "global" ? null : base;
+  const modeRef = useRef<SearchMode>("tree");
+  modeRef.current = mode;
+  /** Change how far searching reaches, and redo a search already typed. */
+  const applyMode = (m: SearchMode) => {
+    useStore.getState().setSearchMode(m);
+    const scope = m === "global" ? null : base;
+    if (query.trim()) navigate(searchLocation(query, scope, m), { replace: loc.kind === "search" });
+  };
 
+  const chord = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const onSearch = (text: string) => {
     setQuery(text);
@@ -452,7 +466,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
     if (!text.trim()) return;
     // Search as you type; the same tab is reused so history stays clean.
     timer.current = setTimeout(() => {
-      navigate(searchLocation(text, scopeRef.current), { replace: loc.kind === "search" });
+      navigate(searchLocation(text, scopeRef.current, modeRef.current), { replace: loc.kind === "search" });
     }, adv<number>(settings, "search.debounceMs"));
   };
 
@@ -464,11 +478,29 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
       if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
         if (!has("address")) return;
       } else if (!has("nav") && !has("search")) return;
-      if (cmd === "focusSearch" || e.key === "F3") {
+      const chordOn = adv<boolean>(useStore.getState().settings, "search.chord");
+      const focusBox = (m: SearchMode | null) => {
         e.preventDefault();
+        if (m) applyMode(m);
         searchRef.current?.focus();
         searchRef.current?.select();
-      } else if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
+      };
+      // Ctrl+R, then F: this folder and everything under it.
+      if (chordOn && chord.current && Date.now() - chord.current < 1500 && e.key.toLowerCase() === "f" && !e.altKey && !e.shiftKey) {
+        chord.current = 0;
+        focusBox("tree");
+        return;
+      }
+      chord.current = 0;
+      if (chordOn && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        chord.current = Date.now();
+        return;
+      }
+      if (cmd === "focusSearch") focusBox("level");
+      else if (cmd === "searchGlobal") focusBox("global");
+      else if (e.key === "F3") focusBox(null);
+      else if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
         e.preventDefault();
         setEditing(true);
       } else if (cmd === "back" && !(typing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
@@ -664,11 +696,18 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
               clearTimeout(timer.current);
               useStore.getState().addSearch(query);
               setBoxFocused(false);
-              navigate(searchLocation(query, scopeRef.current), { replace: loc.kind === "search" });
+              navigate(searchLocation(query, scopeRef.current, modeRef.current), { replace: loc.kind === "search" });
             }
             e.stopPropagation();
           }}
         />
+        {base && (
+          <select className="search-mode" aria-label="How far to search" title="How far searching reaches" value={mode} onChange={(e) => applyMode(e.target.value as SearchMode)}>
+            <option value="level">This folder</option>
+            <option value="tree">+ subfolders</option>
+            <option value="global">Everywhere</option>
+          </select>
+        )}
         {boxFocused && historyLimit > 0 && searches.length > 0 && (
           <div className="search-history" role="listbox" aria-label="Previous searches">
             <div className="search-history-head">
@@ -681,7 +720,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
               .map((t) => (
                 <div key={t} className="search-history-row" role="option" aria-selected={false}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { setQuery(t); setBoxFocused(false); useStore.getState().addSearch(t); navigate(searchLocation(t, scopeRef.current), { replace: loc.kind === "search" }); }}>
+                  onClick={() => { setQuery(t); setBoxFocused(false); useStore.getState().addSearch(t); navigate(searchLocation(t, scopeRef.current, modeRef.current), { replace: loc.kind === "search" }); }}>
                   <Icon name="clock" size={13} />
                   <span className="search-history-text">{t}</span>
                   <button className="search-history-x" aria-label={`Forget ${t}`} onClick={(e) => { e.stopPropagation(); useStore.getState().removeSearch(t); }}>
@@ -738,6 +777,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
   const settings = useStore((s) => s.settings)!;
   const { setClipboard, setSort, updateSettings, setViewLevel, showToast } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const tasksShown = adv(settings, "tasks.showButton") === true && os !== "android" && os !== "ios";
+  const tasksBusy = useTasksRunning();
 
   const loc = parseLocation(location);
   const folder = loc.kind === "folder" ? loc.path : null;
@@ -857,6 +898,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: "Paste (Ctrl+V)" })}
       {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, title: selection.length > 1 ? "Rename the selected items (F2)" : "Rename (F2)" })}
       {button("share", "Share", "share", share, { disabled: !hasSel, caret: true })}
+      {tasksShown && button("tasks", tasksBusy > 0 ? `Tasks (${tasksBusy})` : "Tasks", "clock", () => useStore.getState().openTasks(), { title: tasksBusy > 0 ? `Tasks: ${tasksBusy} running` : "Tasks: automatic copying, moving, cleaning and backups", on: tasksBusy > 0 })}
       {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: "Delete (Del) — Shift+click deletes permanently" })}
       {!only && <span className="cmd-sep" />}
       {button("sort", "Sort", "sort", sortMenu, { disabled: !inFolder, caret: true })}

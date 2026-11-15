@@ -30,6 +30,8 @@ export interface DirChunk {
   restart: boolean;
 }
 
+import type { Preview, RunRecord, StatsReply, Task, TasksListing, Progress as TaskProgress } from "./tasks/model";
+
 export type Media = "ssd" | "hdd" | "network" | "removable" | "unknown";
 
 export interface DriveName {
@@ -767,6 +769,21 @@ export const api = {
   importSettings: (json: string) => invoke<Settings>("import_settings", { json }),
   resolvePath: (input: string) => invoke<{ path: string; isDir: boolean }>("resolve_path", { input }),
   systemReport: (refresh = false) => invoke<FullReport>("system_report", { refresh }),
+  smartctlInstalled: () => invoke<boolean>("smartctl_installed"),
+  installSmartmontools: () => invoke<void>("install_smartmontools"),
+  tasksList: () => invoke<TasksListing>("tasks_list"),
+  tasksSave: (task: Task) => invoke<Task>("tasks_save", { task }),
+  tasksDelete: (id: string) => invoke<void>("tasks_delete", { id }),
+  tasksRun: (id: string, admin = false) => invoke<void>("tasks_run", { id, admin }),
+  tasksCancel: (id: string) => invoke<boolean>("tasks_cancel", { id }),
+  tasksPreview: (task: Task) => invoke<Preview>("tasks_preview", { task }),
+  tasksHistory: (id: string | null, limit = 200) => invoke<RunRecord[]>("tasks_history", { id, limit }),
+  tasksStats: (id: string | null) => invoke<StatsReply>("tasks_stats", { id }),
+  tasksClearHistory: (id: string | null) => invoke<void>("tasks_clear_history", { id }),
+  tasksExport: (path: string) => invoke<number>("tasks_export", { path }),
+  tasksImport: (path: string) => invoke<number>("tasks_import", { path }),
+  autostartGet: () => invoke<boolean>("autostart_get"),
+  autostartSet: (on: boolean) => invoke<void>("autostart_set", { on }),
   diskSmartAdmin: (device: string) => invoke<FullReport>("disk_smart_admin", { device }),
   resourceUsage: () => invoke<ResourceUsage>("resource_usage"),
   compactMemory: () => invoke<[number, number]>("compact_memory"),
@@ -837,6 +854,11 @@ export interface BackendEvents {
   "smart-clear-progress": ClearProgress;
   /** Another app asked for a folder; collect it with `takeLaunch`. */
   launch: null;
+  "tasks-changed": null;
+  "task-started": { id: string; reason: string };
+  "task-progress": { id: string; progress: TaskProgress };
+  "task-finished": RunRecord;
+  "task-notice": string;
 }
 
 export function on<K extends keyof BackendEvents>(

@@ -144,6 +144,18 @@ export function ConnectServer() {
         }}
       >
         <h3>Connect to server</h3>
+        <label className="batch-field">
+          <span>Address (paste a whole address to fill in the rest)</span>
+          <input
+            className="text-input"
+            placeholder="sftp://me@files.example.com/photos"
+            spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+            inputMode="url"
+            onChange={(e) => /^(s?ftp|davs?):\/\//i.test(e.target.value.trim()) && setF((x) => ({ ...x, ...fieldsFromUrl(e.target.value.trim()) }))}
+          />
+        </label>
         {error && <p className="connect-error" role="alert">{error}</p>}
 
         <div className="batch-row">
@@ -155,9 +167,9 @@ export function ConnectServer() {
           </label>
           <label className="batch-field">
             <span>Server</span>
-            <input ref={hostRef} className="text-input" value={f.host} placeholder="files.example.com" spellCheck={false} onChange={(e) => set("host", e.target.value)} />
+            <input ref={hostRef} className="text-input" value={f.host} placeholder="files.example.com" spellCheck={false} autoCapitalize="none" autoCorrect="off" inputMode="url" onChange={(e) => set("host", e.target.value)} />
           </label>
-          <label className="batch-field narrow">
+          <label className="batch-field narrow port">
             <span>Port</span>
             <input className="text-input" value={f.port} placeholder={String(DEFAULT_PORT(f.protocol, f.tls))} inputMode="numeric" onChange={(e) => set("port", e.target.value.replace(/\D/g, ""))} />
           </label>
@@ -166,7 +178,7 @@ export function ConnectServer() {
         <div className="batch-row">
           <label className="batch-field">
             <span>User name</span>
-            <input className="text-input" value={f.user} placeholder={f.protocol === "ftp" ? "leave empty to log in anonymously" : ""} spellCheck={false} autoComplete="off" onChange={(e) => set("user", e.target.value)} />
+            <input className="text-input" value={f.user} placeholder={f.protocol === "ftp" ? "leave empty to log in anonymously" : ""} spellCheck={false} autoCapitalize="none" autoCorrect="off" autoComplete="off" onChange={(e) => set("user", e.target.value)} />
           </label>
           <label className="batch-field">
             <span>{f.protocol === "sftp" && f.keyFile ? "Key passphrase" : "Password"}</span>

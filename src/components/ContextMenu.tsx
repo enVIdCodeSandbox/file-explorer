@@ -192,6 +192,7 @@ export const MENU_CATALOG: { id: string; label: string }[] = [
   { id: "createShortcut", label: "Create shortcut" },
   { id: "archive", label: "Compress and Extract" },
   { id: "shellExtras", label: "Entries from other programs" },
+  { id: "automate", label: "Automate with a task" },
   { id: "properties", label: "Properties" },
   { id: "lock", label: "Lock with passcode" },
 ];

@@ -500,7 +500,7 @@ mod platform {
     use std::process::Command;
 
     fn reg(args: &[&str]) -> Option<String> {
-        let out = Command::new("reg").args(args).output().ok()?;
+        let out = crate::proc::quiet(Command::new("reg").args(args)).output().ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     }
 

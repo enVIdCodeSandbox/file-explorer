@@ -57,16 +57,35 @@ function Disk({ d, onReport }: { d: PhysicalDisk; onReport: (r: FullReport) => v
   const [open, setOpen] = useState(false);
   const [asking, setAsking] = useState(false);
   const { showToast } = useStore.getState();
-  const runAsAdmin = () => {
-    setAsking(true);
+  // The drive-health tool (smartmontools) is not installed: offer to install it.
+  const [missingTool, setMissingTool] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const read = () =>
     api
       .diskSmartAdmin(d.device)
       .then((r) => {
         onReport(r);
         showToast("Read the drive's health with administrator rights.");
       })
-      .catch((e) => showToast(String(e)))
-      .finally(() => setAsking(false));
+      .catch((e) => (String(e).includes("smartmontools") ? setMissingTool(true) : showToast(String(e))));
+  const runAsAdmin = () => {
+    setAsking(true);
+    void read().finally(() => setAsking(false));
+  };
+  const installAndRead = async () => {
+    setInstalling(true);
+    try {
+      await api.installSmartmontools();
+      setMissingTool(false);
+      showToast("Installed smartmontools. Asking permission to read the drive…");
+      setAsking(true);
+      await read();
+    } catch (e) {
+      showToast(String(e));
+    } finally {
+      setInstalling(false);
+      setAsking(false);
+    }
   };
   return (
     <div className="disk-card">
@@ -102,6 +121,14 @@ function Disk({ d, onReport }: { d: PhysicalDisk; onReport: (r: FullReport) => v
             <Icon name="shield" size={13} /> {asking ? "Waiting for permission…" : "Run as administrator to read this drive"}
           </button>
           <span className="muted">Health data for this drive needs administrator rights.</span>
+        </div>
+      )}
+      {d.needsAdmin && missingTool && (
+        <div className="notice-row" role="alert">
+          <span>Reading drive health needs smartmontools (smartctl), which is not installed.</span>
+          <button className="primary" disabled={installing || asking} onClick={() => void installAndRead()}>
+            {installing ? "Installing…" : "Install it and read this drive"}
+          </button>
         </div>
       )}
       {(d.facts.length > 0 || d.attributes.length > 0) && (

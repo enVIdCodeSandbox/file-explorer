@@ -55,6 +55,27 @@ export function setThumbParallelism(n: number) {
   limit = Math.max(1, Math.min(8, n));
 }
 
+/** Thumbnail priority 1-5 (Settings > Thumbnails): how soon work starts, and how long it leaves gaps. */
+let gapMs = 16;
+let settleScale = 1;
+const PRIORITY = {
+  1: { gap: 120, settle: 2.5, extra: -99 },
+  2: { gap: 50, settle: 1.5, extra: -1 },
+  3: { gap: 16, settle: 1, extra: 1 },
+  4: { gap: 8, settle: 0.6, extra: 3 },
+  5: { gap: 0, settle: 0, extra: 8 },
+} as const;
+/** How many thumbnails to make at once for a priority, given the number of worker threads. */
+export function priorityParallelism(priority: number, threads: number): number {
+  const p = PRIORITY[Math.max(1, Math.min(5, Math.round(priority))) as 1 | 2 | 3 | 4 | 5];
+  return Math.max(1, Math.min(8, p.extra === -99 ? 1 : threads + p.extra));
+}
+export function setThumbPriority(priority: number) {
+  const p = PRIORITY[Math.max(1, Math.min(5, Math.round(priority))) as 1 | 2 | 3 | 4 | 5];
+  gapMs = p.gap;
+  settleScale = p.settle;
+}
+
 function pump() {
   if (pumping) return;
   pumping = true;
@@ -70,7 +91,7 @@ function pump() {
       if (waiting.length) pump();
     });
     // Leave the main thread a gap between starts.
-    setTimeout(step, 16);
+    setTimeout(step, gapMs);
   };
   step();
 }
@@ -120,7 +141,9 @@ export function Thumb({
   const types = useStore((s) => s.info?.thumbnailTypes);
   const threads = useStore((s) => s.budget?.thumbThreads ?? 1);
   const link = useStore((s) => s.link);
-  setThumbParallelism(adv<number>(settings, "thumbs.parallel") || threads + 1);
+  const priority = Number(adv<string>(settings, "thumbs.priority")) || 3;
+  setThumbPriority(priority);
+  setThumbParallelism(adv<number>(settings, "thumbs.parallel") || priorityParallelism(priority, threads));
   const ext = extensionOf(name);
   const kind = thumbKind(ext);
   const device = isDevicePath(path);
@@ -130,7 +153,9 @@ export function Thumb({
   // when its own switch is off or the computer is running low on battery.
   const thrifty = useThriftyBattery(device && adv<boolean>(settings, "thumbs.deviceSaveBattery"));
   const deviceOk = !device || (adv<boolean>(settings, "thumbs.onDevices") && !thrifty);
-  const supported = enabled && wanted && deviceOk && !isDir && (device || !isRemote(path)) && !isArchiveLoc(path) && !!types?.includes(ext);
+  // A file on an FTP/SFTP/WebDAV server is fetched to make its picture, so it follows the network-drive setting.
+  const serverOk = !isRemote(path) || device || networkThumbs(settings, link);
+  const supported = enabled && wanted && deviceOk && serverOk && !isDir && !isArchiveLoc(path) && !!types?.includes(ext);
   // Ask for more or fewer pixels than are shown, depending on the sharpness setting.
   const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));
   const key = `${path}|${modified}|${px}|${adv<number>(settings, "thumbs.videoPercent")}`;
@@ -164,7 +189,7 @@ export function Thumb({
           }
         },
       });
-    }, settle ?? SETTLE_MS);
+    }, Math.round((settle ?? SETTLE_MS) * settleScale));
     return () => {
       alive = false;
       clearTimeout(timer);

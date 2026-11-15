@@ -1620,9 +1620,11 @@ dependencies = [
 name = "fast-file-explorer"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clipboard-rs",
  "drag",
  "fast-core",
+ "getrandom 0.3.4",
  "libc",
  "parking_lot",
  "serde",

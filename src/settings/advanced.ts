@@ -33,9 +33,20 @@ const col = (def: string, key: string, group: string, label: string, description
   key, group, label, description, control: { type: "color" }, default: def,
 });
 
-export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails"] as const;
+export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks"] as const;
 
 export const ADVANCED: AdvDef[] = [
+  // ---- Tasks (the rest is in the Tasks window) ----
+  yn(true, "tasks.enabled", "Tasks", "Run automated tasks", "Turns every automated task on or off. The tasks keep their settings while this is off. Used by the Tasks window and its scheduler."),
+  yn(true, "tasks.showButton", "Tasks", "Show the Tasks button in the toolbar", "The button next to Share that opens the Tasks window. The window can also be opened from the right-click menu of a folder."),
+  yn(true, "tasks.trainEstimates", "Tasks", "Let tasks teach the time estimates", "Finished copy, move and sync tasks add what they measured (speed, time per file) to the history behind the time estimates of ordinary transfers."),
+  yn(true, "tasks.recordHistory", "Tasks", "Keep a record of every run", "What ran, when, how long it took, how much it moved, what failed, and runs that were cut short by a shutdown or sleep. The Tasks window's statistics and time estimates come from it."),
+  num(500, "tasks.historyPerTask", "Tasks", "Runs to remember per task", 10, 10000, undefined, "The oldest records of a task are dropped beyond this."),
+  num(365, "tasks.historyDays", "Tasks", "Forget runs older than", 0, 3650, "days", "0 keeps them until the limit above is reached."),
+  yn(true, "tasks.notify", "Tasks", "Show a message when a task finishes", "Each task decides which results to tell you about (failures by default). Turn this off to see none."),
+  yn(true, "tasks.confirmDelete", "Tasks", "Ask before saving a task that deletes for good", "Tasks that delete without using the trash can are easy to get wrong; this asks once when you save one."),
+  yn(false, "tasks.startWithComputer", "Tasks", "Start with the computer (minimized)", "Tasks only run while the app is running. This starts it, minimized, when you sign in to the computer."),
+
   // ---- Interface ----
   sel("auto", "ui.language", "Interface", "Language", [["auto", "Automatic (system language)"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["pt", "Português"], ["it", "Italiano"], ["ru", "Русский"], ["zh", "简体中文"], ["ja", "日本語"], ["ko", "한국어"]], "Used by the setup wizard and the labels that are translated so far; anything else stays in English."),
   sel("windows", "ui.chrome", "Interface", "Window arrangement", [["windows", "Windows (File Explorer)"], ["macos", "macOS (Finder)"], ["linux", "Linux (GNOME Files)"], ["google", "Phone: Google (Files by Google)"], ["samsung", "Phone: Samsung (My Files)"], ["apple", "Phone: Apple (Files)"]], "How the same parts are arranged. The interface style sets this for you. The three phone arrangements are used by the phone layout."),
@@ -66,6 +77,9 @@ export const ADVANCED: AdvDef[] = [
   // ---- Files and lists ----
   yn(true, "thumbs.onDevices", "Thumbnails", "Thumbnails for phones and cameras on a cable", "Uses the preview picture the device keeps for each photo and video, and follows the other thumbnail settings. Turn off to show plain icons."),
   yn(true, "thumbs.deviceSaveBattery", "Thumbnails", "Pause device thumbnails on low battery", "While this computer runs on battery below 20%, phones and cameras show icons instead of previews, so the cable is not asked for hundreds of pictures. Not every system reports its battery; where it does not, previews keep loading."),
+  yn(true, "ui.autoSave", "Interface", "Save changes automatically", "Changes to the layout, themes and other settings are applied and saved the moment you make them. Turn off to try changes first: they still show at once, but stay unsaved until you press Save at the bottom of Settings (or Discard to go back)."),
+  sel("tree", "search.defaultMode", "Search", "Typing in the search box searches", [["level", "Only the folder you are in"], ["tree", "The folder and everything under it"], ["global", "Everywhere"]], "Used when you click the search box and type. Ctrl+F always searches the folder's own level, Ctrl+Shift+F everywhere, and Ctrl+R then F the folder with all its subfolders. The shortcuts for the first two can be changed under Keyboard shortcuts."),
+  yn(true, "search.chord", "Search", "Ctrl+R, then F searches the folder and its subfolders", "Press Ctrl+R, then F within a second and a half. Turn off to leave Ctrl+R alone."),
   yn(true, "files.progressiveLoad", "Files and lists", "Show files as they load", "Items appear the moment they are read instead of after the whole folder is. The details pane says the folder is still loading, with a time estimate. Turn off to wait and show everything at once."),
   yn(true, "files.folderSizes", "Files and lists", "Show folder sizes", "Measured in the background from what is inside each folder, newest folder first, and kept for two minutes."),
   yn(true, "files.keepSelectionOnDrag", "Files and lists", "Keep several selected items selected while dragging", "Pressing on one of them no longer narrows the selection to that one until you let go without dragging. Cancelling a drag keeps the selection too."),
@@ -99,6 +113,8 @@ export const ADVANCED: AdvDef[] = [
   num(48, "band.scrollSpeed", "Files and lists", "Fastest selection-box scrolling", 4, 200, "px/frame", "How fast the list scrolls when the pointer is far outside it. It is slower closer to the edge."),
   yn(true, "files.naturalSort", "Files and lists", "Sort numbers naturally", "file2 comes before file10."),
   yn(false, "files.caseSensitive", "Files and lists", "Sort capital letters first"),
+  yn(false, "files.typeFind", "Files and lists", "Type to find", "With a folder focused, typing picks the closest name alphabetically (a name starting with what you typed, otherwise the next one after it). Backspace edits what you typed. The typed text is forgotten after the pause below, or press Escape. Off: typing only jumps to names that start with the letters, with a short pause. You can also turn it on and off with a shortcut (Settings > Advanced > Keyboard shortcuts)."),
+  num(10, "files.typeFindResetSec", "Files and lists", "Type to find forgets after", 1, 120, "sec", "Seconds without typing before the typed text starts over."),
   num(700, "files.typeAheadMs", "Files and lists", "Type-to-select pause", 200, 3000, "ms", "How long typing keeps extending what you typed."),
   yn(true, "files.wheelZoom", "Files and lists", "Ctrl + scroll changes the view"),
   num(3, "files.confirmDeleteOver", "Files and lists", "Always confirm deleting this many items or more", 0, 1000, "items", "Even when \"Ask before deleting\" is off. 0 never forces it."),
@@ -158,6 +174,8 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "thumbs.inPane", "Thumbnails", "Show in the details pane", "The preview at the top of the details pane for the selected file."),
   sel("normal", "thumbs.quality", "Thumbnails", "Sharpness", [["draft", "Draft (smaller, fastest)"], ["normal", "Normal"], ["sharp", "Sharp (twice the pixels, for high-resolution screens)"]], "Sharper thumbnails take longer to make and more space to keep."),
   num(0, "thumbs.parallel", "Thumbnails", "Made at the same time", 0, 8, undefined, "How many thumbnails are made at once. 0 lets the performance level decide."),
+  sel("3", "thumbs.priority", "Thumbnails", "Thumbnail priority", [["1", "1 - Lowest: the app stays quickest, thumbnails fill in slowly"], ["2", "2 - Low"], ["3", "3 - Balanced"], ["4", "4 - High"], ["5", "5 - Highest: thumbnails first, the app may feel busier"]], "How much effort goes into loading thumbnails compared with everything else. Lower waits longer before starting and makes fewer at once; higher starts at once and makes more at once. \"Made at the same time\" below, when set, still decides the number."),
+  num(200, "thumbs.networkCopyMb", "Thumbnails", "Largest network video to copy for a preview", 0, 4096, "MB", "Windows often will not preview a video straight from a network drive, and a server has no preview to ask for. The app then copies the start of the file (all of it, up to this size) to this computer to make the picture. 0 never copies."),
   sel("auto", "thumbs.networkDrives", "Thumbnails", "On network drives", [["auto", "Automatic (on when wired)"], ["on", "Always on"], ["off", "Always off"]], "Showing thumbnails of files on network shares means reading many files over the network. Automatic checks the connection: on a cable (Ethernet or fibre) thumbnails are always made, and on Wi-Fi or mobile data they are not."),
   num(64, "thumbs.maxImageMb", "Thumbnails", "Largest picture to preview", 0, 2048, "MB", "Bigger pictures keep their icon. 0 means no limit."),
   num(10, "thumbs.videoPercent", "Thumbnails", "Video frame to show", 0, 95, "%", "How far into the video the frame is taken. With ffmpeg alone (no ffmpegthumbnailer) the frame at two seconds is used."),

@@ -164,8 +164,27 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     throw new Error("no thumbnails in the preview");
   },
 };
+
+// Pretend automated tasks, so the Tasks window can be looked at.
+const hour = 3_600_000;
+const sampleTasks = [
+  { id: "t1", name: "Nightly document backup", notes: "Zips Documents to the NAS", enabled: true, triggers: [{ type: "daily", time: "02:30", days: [] }], actions: [{ type: "compress", from: ["C:\\Users\\me\\Documents"], to: "Z:\\Backups\\docs-{date}.zip", filter: { include: "", exclude: "*.tmp", olderThanDays: null, newerThanDays: null, minBytes: null, maxBytes: null, hidden: false, recursive: true } }], options: { onSleep: "resume", catchUp: true, retries: 2, retryDelaySecs: 5, timeoutMinutes: 0, stopOnError: true, onlyOnAc: false, runAsAdmin: false, notify: "failure", skipIfRunning: true, lowPriority: true }, created: now - 9 * day, updated: now - day, resumePending: false, needsAdmin: false },
+  { id: "t2", name: "Clear old downloads", notes: "", enabled: true, triggers: [{ type: "every", minutes: 1440, anchor: now - 3 * day }, { type: "startup" }], actions: [{ type: "delete", paths: ["C:\\Users\\me\\Downloads"], filter: { include: "", exclude: "", olderThanDays: 30, newerThanDays: null, minBytes: null, maxBytes: null, hidden: false, recursive: true }, permanent: false, removeEmptyFolders: true, removeFolder: false }], options: { onSleep: "cancel", catchUp: true, retries: 0, retryDelaySecs: 5, timeoutMinutes: 30, stopOnError: false, onlyOnAc: true, runAsAdmin: false, notify: "always", skipIfRunning: true, lowPriority: true }, created: now - 20 * day, updated: now - 2 * day, resumePending: false, needsAdmin: true },
+  { id: "t3", name: "Photos off the card", notes: "", enabled: false, triggers: [{ type: "driveConnected", name: "SD" }], actions: [{ type: "move", from: ["E:\\DCIM"], to: "C:\\Users\\me\\Pictures\\Import", filter: { include: "*.jpg; *.raw", exclude: "", olderThanDays: null, newerThanDays: null, minBytes: null, maxBytes: null, hidden: false, recursive: true }, conflict: "keepBoth", keepStructure: false }], options: { onSleep: "resume", catchUp: false, retries: 0, retryDelaySecs: 5, timeoutMinutes: 0, stopOnError: true, onlyOnAc: false, runAsAdmin: false, notify: "failure", skipIfRunning: true, lowPriority: true }, created: now - 40 * day, updated: now - 40 * day, resumePending: false, needsAdmin: false },
+];
+const sampleRuns = [0, 1, 2, 3, 4].map((i) => ({ taskId: "t1", started: now - (i + 1) * day, ended: now - (i + 1) * day + (95 + i * 9) * 1000, outcome: i === 3 ? "failed" : "success", reason: i === 0 ? "scheduled" : "catch-up (it was due while the computer was off or asleep)", items: 1, bytes: 1_450_000_000 - i * 40_000_000, errors: i === 3 ? ["Z:\\Backups\\docs-2026-11-11.zip: The network path was not found."] : [], attempts: 1, interruptedBy: null, elevated: false, name: "Nightly document backup" }));
 // Calls that return a list; everything else unknown answers null.
 const lists = /^(servers_list|get_devices|frequent_folders|record_visit|shell_menu|list_assets|share_list|cache_usage|clipboard_get_files)$/;
+
+Object.assign(answers, {
+  tasks_list: () => ({ tasks: sampleTasks, running: [], next: { t1: now + 5 * hour, t2: now + 20 * hour }, last: { t1: sampleRuns[0] }, enabled: true }),
+  tasks_history: () => sampleRuns,
+  tasks_stats: () => ({
+    stats: { runs: 5, successes: 4, partial: 0, failures: 1, cancelled: 0, interrupted: 0, skipped: 0, successRate: 0.8, avgSecs: 104, medianSecs: 104, p90Secs: 122, minSecs: 95, maxSecs: 122, avgItems: 1, avgBytes: 1_390_000_000, avgBytesPerSec: 13_400_000, totalItems: 5, totalBytes: 6_950_000_000, lastRun: now - day, lastSuccess: now - day, lastFailure: now - 4 * day, lastError: "Z:\\Backups\\docs-2026-11-11.zip: The network path was not found.", speedTrend: 1.2 },
+    estimate: { secs: 104, samples: 4, basis: "speed" },
+  }),
+  tasks_preview: () => ({ ops: [{ action: 0, kind: "zip", from: "412 files", to: "Z:\\Backups\\docs-2026-11-15.zip", bytes: 1_400_000_000 }], files: 1, bytes: 1_400_000_000, truncated: false, problems: [] }),
+});
 
 mockWindows("main");
 mockIPC(
@@ -180,3 +199,5 @@ mockIPC(
 );
 
 void import("../main");
+// Lets a test script open dialogs and screens without clicking through them.
+void import("../store").then((m) => ((window as unknown as { __store: unknown }).__store = m.useStore));

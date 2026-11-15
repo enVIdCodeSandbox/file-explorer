@@ -211,6 +211,40 @@ fn fit(png: &[u8], px: u32) -> Result<Vec<u8>> {
     encode(img.thumbnail(px, px))
 }
 
+/// Make a thumbnail from a copy of the file kept on this computer. Windows and some other
+/// systems refuse to preview videos and documents straight from a network location, but do
+/// it for a local file. Only the first `head_bytes` are copied at first (enough when the
+/// video's index is at the front); if that is not enough and the file is no bigger than
+/// `max_bytes`, the whole file is copied and tried again.
+pub fn via_local_copy(path: &Path, px: u32, opts: &Options, head_bytes: u64, max_bytes: u64) -> Result<Vec<u8>> {
+    use std::io::{Read, Write};
+    let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let size = fs::metadata(path).map_err(|e| CoreError::io(path, e))?.len();
+    let dir = std::env::temp_dir().join(format!("fast-netthumb-{}-{:x}", std::process::id(), size ^ (px as u64) << 40));
+    fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
+    let copy = dir.join(format!("t.{ext}"));
+    let result = (|| {
+        let copy_bytes = |limit: u64| -> Result<()> {
+            let mut src = fs::File::open(path).map_err(|e| CoreError::io(path, e))?.take(limit);
+            let mut dst = fs::File::create(&copy).map_err(|e| CoreError::io(&copy, e))?;
+            std::io::copy(&mut src, &mut dst).map_err(|e| CoreError::io(path, e))?;
+            dst.flush().map_err(|e| CoreError::io(&copy, e))
+        };
+        let first = head_bytes.min(max_bytes).max(1);
+        copy_bytes(first)?;
+        match thumbnail_with(&copy, px, None, opts) {
+            Ok(b) => Ok(b),
+            Err(e) if size > first && size <= max_bytes => {
+                copy_bytes(size)?;
+                thumbnail_with(&copy, px, None, opts).map_err(|_| e)
+            }
+            Err(e) => Err(e),
+        }
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
 /// A device's own preview picture (JPEG, usually), shrunk to `px` and made into a PNG.
 pub fn from_device(raw: &[u8], px: u32) -> Result<Vec<u8>> {
     let img = image::load_from_memory(raw).map_err(|e| CoreError::Invalid(format!("cannot read the device's preview: {e}")))?;
@@ -223,7 +257,6 @@ pub fn from_device(raw: &[u8], px: u32) -> Result<Vec<u8>> {
 
 /// Rendering documents and videos with what the system provides.
 mod render {
-    #[cfg(not(windows))]
     use super::RENDER_TIMEOUT;
     use super::{Kind, Options};
     use crate::{CoreError, Result};
@@ -236,8 +269,35 @@ mod render {
     }
 
     #[cfg(windows)]
-    fn platform(path: &Path, px: u32, _kind: Kind, _opts: &Options) -> Result<Vec<u8>> {
-        windows_shell(path, px)
+    fn platform(path: &Path, px: u32, kind: Kind, opts: &Options) -> Result<Vec<u8>> {
+        match windows_shell(path, px) {
+            // No handler for this video (codec pack missing, or the shell refuses the location): ffmpeg, if the person has it.
+            Err(shell_error) if kind == Kind::Video && super::have("ffmpeg") => ffmpeg_frame(path, px, opts).map_err(|_| shell_error),
+            other => other,
+        }
+    }
+
+    #[cfg(windows)]
+    fn ffmpeg_frame(path: &Path, px: u32, opts: &Options) -> Result<Vec<u8>> {
+        let out = scratch_dir()?;
+        let png = out.join("t.png");
+        let result = (|| {
+            let _ = opts;
+            for seek in ["2", "0"] {
+                let mut c = std::process::Command::new("ffmpeg");
+                c.args(["-v", "error", "-y", "-ss", seek, "-i"]).arg(path).args(["-frames:v", "1", "-vf"]).arg(format!("scale={px}:{px}:force_original_aspect_ratio=decrease")).arg(&png);
+                if run(c).is_ok() {
+                    if let Ok(b) = std::fs::read(&png) {
+                        if !b.is_empty() {
+                            return Ok(b);
+                        }
+                    }
+                }
+            }
+            Err(CoreError::Invalid("ffmpeg made no preview".into()))
+        })();
+        let _ = std::fs::remove_dir_all(&out);
+        result
     }
 
     #[cfg(target_os = "macos")]
@@ -297,7 +357,6 @@ mod render {
     }
 
     /// A fresh empty folder for one render's output.
-    #[cfg(not(windows))]
     fn scratch_dir() -> Result<std::path::PathBuf> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
@@ -307,9 +366,9 @@ mod render {
     }
 
     /// Run a program to the end, but not forever.
-    #[cfg(not(windows))]
     fn run(mut cmd: std::process::Command) -> Result<()> {
         use std::process::Stdio;
+        crate::proc::quiet(&mut cmd);
         let mut child = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -467,6 +526,23 @@ pub fn trim_cache(cache_dir: &Path, max_bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_local_copy_makes_the_same_thumbnail_and_cleans_up() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("pic.png");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(80, 60, image::Rgb([200, 30, 30]))).save(&file).unwrap();
+        let opts = Options { max_image_bytes: 0, video_percent: 10 };
+        // Whole file inside the first chunk.
+        let a = via_local_copy(&file, 32, &opts, 1 << 20, 1 << 20).unwrap();
+        assert_eq!(image::load_from_memory(&a).unwrap().width(), 32);
+        // Too little copied at first: the whole file is copied on the second try.
+        let b = via_local_copy(&file, 32, &opts, 40, 1 << 20).unwrap();
+        assert_eq!(image::load_from_memory(&b).unwrap().width(), 32);
+        // And with no room for the whole file, it fails rather than guessing.
+        assert!(via_local_copy(&file, 32, &opts, 40, 40).is_err());
+        assert!(!std::env::temp_dir().read_dir().unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(&format!("fast-netthumb-{}", std::process::id()))));
+    }
 
     #[test]
     fn kinds_are_told_apart() {

@@ -314,6 +314,7 @@ pub fn open_terminal(path: &Path, mode: TerminalMode, o: &TerminalOptions) -> Re
         let mut cmd = Command::new("powershell.exe");
         cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command"])
             .arg(format!("Start-Process {exe} -Verb RunAs -ArgumentList {args}"));
+        crate::proc::quiet(&mut cmd);
         return spawn(cmd, "an elevated terminal");
     }
     if !o.custom.trim().is_empty() {

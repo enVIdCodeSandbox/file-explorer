@@ -6,6 +6,7 @@ mod native_dnd;
 mod remote;
 mod smartclear;
 mod state;
+mod tasks;
 
 use fast_core::history::History;
 use fast_core::predict::Predictor;
@@ -96,6 +97,14 @@ pub fn run() {
             launch::start(app.handle());
             commands::start_indexing(app.handle().clone(), state.clone());
             commands::start_drive_watch(app.handle().clone(), state.clone());
+            tasks::start(app.handle(), state.clone());
+            // Started with the computer: stay out of the way until the person opens it.
+            #[cfg(desktop)]
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.minimize();
+                }
+            }
 
             // Re-evaluate the resource budget periodically: plugging in or
             // unplugging a laptop changes what background work is allowed.
@@ -140,6 +149,21 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            tasks::tasks_list,
+            tasks::tasks_save,
+            tasks::tasks_delete,
+            tasks::tasks_run,
+            tasks::tasks_cancel,
+            tasks::tasks_preview,
+            tasks::tasks_history,
+            tasks::tasks_stats,
+            tasks::tasks_clear_history,
+            tasks::tasks_export,
+            tasks::tasks_import,
+            tasks::autostart_get,
+            tasks::autostart_set,
+            commands::smartctl_installed,
+            commands::install_smartmontools,
             commands::list_dir,
             commands::list_dir_cancel,
             smartclear::smart_clear_scan,
@@ -261,7 +285,12 @@ pub fn run() {
         .expect("error while building FAST File Explorer")
         .run(|app, event| {
             // Links only work while the app runs: end them (and any tunnel process) on the way out.
+            // Stop what the tasks are doing (and note how far they got) before the app goes.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                tasks::shutdown(app);
+            }
             if let tauri::RunEvent::Exit = event {
+                tasks::shutdown(app);
                 use tauri::Manager;
                 if let Some(state) = app.try_state::<state::Shared>() {
                     state.shares.stop_all();
@@ -291,6 +320,10 @@ pub fn run_helper(args: &[String]) -> i32 {
             Ok(()) => 0,
             Err(_) => 1,
         };
+    }
+    // An automated task that needs administrator rights.
+    if args.iter().any(|a| a == "--run-task") {
+        return fast_core::tasks::helper_main(args);
     }
     fast_core::ops::helper_main(args)
 }

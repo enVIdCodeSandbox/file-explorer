@@ -18,6 +18,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "settings", label: "Open settings", default: "Ctrl+," },
   { id: "toggleSidebar", label: "Collapse or expand the navigation pane", default: "Ctrl+B" },
   { id: "toggleDetails", label: "Show or hide the details pane", default: "Alt+P" },
+  { id: "toggleTypeFind", label: "Turn type-to-find on or off (not set by default)", default: "" },
   { id: "editLayout", label: "Edit the window layout", default: "Ctrl+Alt+L" },
   { id: "thisPc", label: "Go to This PC", default: "Ctrl+Shift+C" },
   { id: "home", label: "Go to Home", default: "Alt+Home" },
@@ -31,7 +32,8 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { id: "back", label: "Back", default: "Alt+ArrowLeft" },
   { id: "forward", label: "Forward", default: "Alt+ArrowRight" },
   { id: "focusAddress", label: "Edit the address", default: "Ctrl+L" },
-  { id: "focusSearch", label: "Search", default: "Ctrl+F" },
+  { id: "focusSearch", label: "Search this folder (just its own level)", default: "Ctrl+F" },
+  { id: "searchGlobal", label: "Search everywhere", default: "Ctrl+Shift+F" },
   { id: "toggleHidden", label: "Show or hide hidden files", default: "Ctrl+H" },
 ];
 

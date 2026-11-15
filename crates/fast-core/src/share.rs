@@ -89,6 +89,7 @@ fn token() -> Result<String, String> {
 pub fn tunnel_program() -> Option<String> {
     let mut c = std::process::Command::new("cloudflared");
     c.arg("--version").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    crate::proc::quiet(&mut c);
     c.status().ok().filter(|s| s.success()).map(|_| "cloudflared".to_string())
 }
 
@@ -104,7 +105,9 @@ pub fn find_tunnel_url(line: &str) -> Option<String> {
 fn open_tunnel(program: &str, port: u16, wait: Duration) -> Result<(std::process::Child, String), String> {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    let mut tunnel = Command::new(program);
+    crate::proc::quiet(&mut tunnel);
+    let mut child = tunnel
         .args(["tunnel", "--no-autoupdate", "--url", &format!("http://127.0.0.1:{port}")])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

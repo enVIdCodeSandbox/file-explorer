@@ -28,6 +28,7 @@ import {
 } from "./api";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
+import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
 import { HOME, THIS_PC, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
@@ -221,6 +222,12 @@ interface State {
   /** Phone layout: the open folder is in "select" mode (ticks on every item, actions along the bottom). */
   selecting: boolean;
   settingsOpen: boolean;
+  /** The Tasks window (the button next to Share), and a task it should open already filled in. */
+  tasksOpen: boolean;
+  tasksPrefill: import("./tasks/model").Task | null;
+  /** Search text Settings should open with. */
+  settingsQuery: string;
+  openTasks: (prefill?: import("./tasks/model").Task | null) => void;
   dialog: DialogRequest | null;
   toast: string | null;
   notices: Notice[];
@@ -248,6 +255,14 @@ interface State {
   newGroupFromTab: (tabId: string) => void;
   updateGroup: (id: string, patch: Partial<TabGroup>) => void;
   updateSettings: (mutate: (s: Settings) => void) => void;
+  /** With "Save changes automatically" off: changes are applied here but not yet saved. */
+  /** How far the next search reaches, once the person chose (shortcut or the search box); null = the setting decides. */
+  searchMode: import("./util/path").SearchMode | null;
+  setSearchMode: (m: import("./util/path").SearchMode | null) => void;
+  unsaved: boolean;
+  savedSettings: Settings | null;
+  saveSettings: () => void;
+  discardSettings: () => void;
   togglePin: (path: string, isFile?: boolean) => void;
   /** Pin at a position (moving it if already pinned). */
   pinAt: (path: string, index: number, isFile?: boolean) => void;
@@ -490,6 +505,10 @@ export const useStore = create<State>((set, get) => ({
   command: null,
   runCommand: (name) => set({ command: { name, tick: (get().command?.tick ?? 0) + 1 } }),
   settingsOpen: false,
+  tasksOpen: false,
+  tasksPrefill: null,
+  settingsQuery: "",
+  openTasks: (prefill) => set({ tasksOpen: true, tasksPrefill: prefill ?? null }),
   dialog: null,
   toast: null,
   notices: [],
@@ -512,7 +531,17 @@ export const useStore = create<State>((set, get) => ({
     // Started for particular folders without tabs to restore: show just those.
     if (!tabs.length) tabs = [makeTab(launches[0]?.folder ?? start)];
     const activeTab = tabs.some((t) => t.id === session.activeTab) ? session.activeTab! : tabs[0].id;
+    // The filter from last time, when filters are kept.
+    let savedFilter: FilterState | null = null;
+    try {
+      const raw = adv<boolean>(settings, "files.keepFilter") ? localStorage.getItem("fast.filter") : null;
+      const parsed = raw ? (JSON.parse(raw) as Partial<FilterState>) : null;
+      if (parsed && typeof parsed === "object") savedFilter = { ...NO_FILTER, ...parsed, subfolders: false };
+    } catch {
+      savedFilter = null;
+    }
     set({
+      ...(savedFilter ? { filter: savedFilter } : {}),
       ready: true,
       isSecondary: secondary,
       settings,
@@ -737,13 +766,42 @@ export const useStore = create<State>((set, get) => ({
     if (!current) return;
     const next: Settings = structuredClone(current);
     mutate(next);
+    syncDetailsPane(current, next);
     // While a profile of your own is active, what you change is saved into it.
     const active = next.profiles?.find((p) => p.id === next.activeProfile && !p.builtIn);
     if (active && JSON.stringify(current.profiles) === JSON.stringify(next.profiles) && current.activeProfile === next.activeProfile) {
       active.snapshot = snapshotOf(next);
     }
     set({ settings: next });
-    void api.setSettings(next).catch((e) => get().showToast(String(e)));
+    // Changes show at once either way. They are written to disk right away unless the person
+    // turned "Save changes automatically" off; the Save button then writes them.
+    const auto = adv<boolean>(next, "ui.autoSave");
+    if (auto || adv<boolean>(current, "ui.autoSave") !== auto) {
+      set({ unsaved: false, savedSettings: null });
+      void api.setSettings(next).catch((e) => get().showToast(String(e)));
+    } else {
+      set({ unsaved: true, savedSettings: get().savedSettings ?? current });
+    }
+  },
+  searchMode: null,
+  setSearchMode: (m) => set({ searchMode: m }),
+  unsaved: false,
+  savedSettings: null,
+  saveSettings: () => {
+    const cur = get().settings;
+    if (!cur) return;
+    void api
+      .setSettings(cur)
+      .then(() => {
+        set({ unsaved: false, savedSettings: null });
+        get().showToast("Settings saved.");
+      })
+      .catch((e) => get().showToast(String(e)));
+  },
+  discardSettings: () => {
+    const back = get().savedSettings;
+    if (back) set({ settings: back });
+    set({ unsaved: false, savedSettings: null });
   },
 
   togglePin: (path, isFile = false) => {
@@ -1025,7 +1083,17 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  setFilter: (patch) => set({ filter: patch ? { ...get().filter, ...patch } : NO_FILTER }),
+  setFilter: (patch) => {
+    const filter = patch ? { ...get().filter, ...patch } : NO_FILTER;
+    set({ filter });
+    // Kept for next time, unless "Use the same filter in every folder" is off.
+    try {
+      if (adv<boolean>(get().settings, "files.keepFilter")) localStorage.setItem("fast.filter", JSON.stringify({ ...filter, subfolders: false }));
+      else localStorage.removeItem("fast.filter");
+    } catch {
+      /* storage can be unavailable; the filter then lasts until the app closes */
+    }
+  },
 
   setViewLevel: (level) => {
     const next = Math.max(0, Math.min(VIEW_LEVELS.length - 1, level));

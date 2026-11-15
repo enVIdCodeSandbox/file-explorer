@@ -112,6 +112,24 @@ Right-click → Share:
 * **Outside your network:** choose "Anyone with the link (internet)". This needs the free `cloudflared` program (Cloudflare's quick tunnels: no account, nothing to change on your router, https). The file stays on your computer and is not uploaded, but the download passes through Cloudflare's network. Anyone who has the link can download until it expires, reaches its limit, or you stop it; it works only while this app is open, and it is closed when you quit. Prefer a short time and a limit of 1 download for anything private. If `cloudflared` is not installed the dialog says so.
 * Stop a link at any time from the share dialog.
 
+## Tasks (automatic jobs)
+
+**Tasks**, next to Share in the toolbar, opens a window where you set up jobs that run by themselves, like a cron job: back up a folder every night, clear downloads older than 30 days, move photos off a card when it is plugged in, mirror a folder to a NAS, run a script when something is dropped in a folder. Right-click a file or folder and choose **Automate with a task…** to start one already filled in.
+
+**When it runs.** A task can have several triggers: every day (or on chosen weekdays) at a time, every so many minutes, hours or days, once a month on a day (a short month uses its last day), once at a set time, when the app starts, when a folder changes (after it has been quiet for a few seconds), when a drive whose name contains some text is connected, or only when you press **Run now**.
+
+**What it does.** Steps run one after the other: copy, move, delete (to the trash, or for good), compress to ZIP (the name can use `{date}`, `{time}`, `{datetime}`, `{year}`, `{month}`, `{day}` and `{task}`), extract an archive, sync or mirror a folder, or run a program. Copy, move, delete, compress and sync can be limited by name patterns (`*.jpg; report*`), things to leave out, older or newer than some days, smallest and largest size, hidden files and subfolders. Copies are written to a temporary file and renamed when whole, and a file that is already there with the same size and date is skipped, so a task that was cut short simply carries on. If a file already exists you can replace it, replace it only if the new one is newer, leave it, or keep both. **Preview** lists exactly what a task would do without doing anything.
+
+**Options.** Per task: stop at the first failure or keep going; retry a failed file a number of times with a pause; stop after a time limit; run once when the computer is back if a run was missed while it was off or asleep; skip a run while the last is still going; only while plugged in; run quietly (low priority); always run as administrator; and whether to be told when it finishes (only on failure by default).
+
+**Administrator rights.** When a run is refused for lack of permission, the task shows **Run as administrator** and your system asks you to approve it (the Windows prompt, macOS password box or Linux password prompt). A task set to always run as administrator asks every time it runs; the app itself never runs elevated.
+
+**Sleep, shutdown and restarts.** Tasks run while the app is running. Turn on **Start with the computer** under Advanced > Tasks in Settings to have the app start, minimized, when you sign in. When the computer wakes from sleep during a run, the task either carries on (files that were not finished are done again) or cancels that run and waits for its next turn, as chosen per task. When the app is closed or the computer shuts down during a run, a task set to carry on is picked up again at the next start; one set to cancel waits for its next scheduled run. If the app was killed without warning (a power cut), the run is recorded as interrupted and handled the same way. A run missed while the computer was off is either done once at the next start or noted as missed, per task.
+
+**Statistics.** Every run is recorded: when, how long, how many items and how much data, the speed, how it ended, why it ran and what went wrong. Each task shows its runs, successes, failures and success rate, average, median, slowest-10% and fastest and slowest run time, average speed (and whether it is getting faster or slower), the average amount moved, totals, the last success and failure with its error, and how long the next run should take. That estimate follows recent runs more than old ones, and is based on speed and the amount of data the task would handle now. Finished copy, move and sync tasks also feed the history behind the time estimates for ordinary transfers, so both learn from each other. The history window lets you clear one task's records, and tasks can be exported to a file and imported again (imported tasks start turned off).
+
+**Advanced > Tasks (in Settings):** turn all tasks off, hide the toolbar button, let tasks teach the time estimates, keep a record of every run (this also holds the log of interrupted and missed runs), how many runs to keep per task and for how many days, messages when a task finishes, the confirmation for tasks that delete for good, and starting with the computer.
+
 ## Details pane (Alt+P)
 
 One item: type, size, size on disk, dates, permissions, SHA-256 and more. Several items: how many files and folders, total size, the largest file, where they are, the oldest and newest change, a breakdown by type, and a **Measure folders** button that adds up everything inside the selected folders.
@@ -119,6 +137,12 @@ One item: type, size, size on disk, dates, permissions, SHA-256 and more. Severa
 ## Searching
 
 Type in the search box. Results come from an index that is built in the background, so search is immediate. Filters: `ext:png`, `type:image`, `size:>10mb`, and wildcards like `report*.pdf`.
+
+**Where to look** is chosen by the shortcut as well as by the box next to the search field: **Ctrl+F** searches only the folder you are in (the items on that level, nothing deeper), **Ctrl+Shift+F** searches everywhere, and **Ctrl+R then F** searches the folder you are in and every folder inside it. Searching starts as you type, with no need to press Enter. The filters you set (type, date, size) are remembered when you leave or restart (Advanced > Files and lists > "Use the same filter in every folder", on by default). What the search box searches by default and whether Ctrl+R, F works are under Advanced > Search, and every shortcut can be changed under Advanced > Keyboard shortcuts. Right-clicking a search result gives the same menu as in a folder, including Pin to the navigation pane.
+
+## Type to find
+
+Off by default (Advanced > Files and lists > "Type to find", or give it a shortcut under Advanced > Keyboard shortcuts). With the file list focused, start typing and the selection jumps to the closest name alphabetically; after about 10 seconds without typing, the text resets (the time can be changed).
 
 ## Disk usage
 
@@ -243,7 +267,7 @@ Opening a file goes in this order: the app set for that kind of file, then whate
 
 ## Settings
 
-Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
+Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once, unless you turn that off (Advanced > Interface > "Save changes automatically"): then a **Save** bar appears at the bottom with Save and Discard, so a set of changes can be made and applied together. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
 
 * **Performance** controls how much of the computer the app may use. Automatic adapts to CPU, memory and battery.
 * **Right-click menu:** every entry can be hidden, and you can add your own commands under Advanced.
@@ -271,9 +295,21 @@ Settings (Ctrl+,) has a search box at the top. Each change applies and saves at 
 The selection box also works in search results. Under Settings > Files and lists you can turn it off, choose whether it follows the accent colour or use your own fill colour, fill strength, border colour, width (0 for none) and style, turn the automatic scrolling off, and set how close to the edge scrolling starts and how fast it goes.
 
 
+## No flashing console windows (Windows)
+
+Everything the app starts for itself (registry lookups, PowerShell, ffmpeg, winget, the sharing tunnel, administrator helpers) runs with its console window hidden, so no command prompt flashes while files and folders open.
+
 ## Files appear as they load
 
 Folders no longer make you wait for the last item. Each batch of files and folders is shown the moment it is read, and while the rest are still coming the details pane says **Still loading this folder**, how many items are in so far, and a time estimate for the rest. The status bar says the count is partial until it finishes. This is on for every folder (including phones, servers and drives); turn it off under Settings > Files and lists > "Show files as they load" to see everything at once instead.
+
+## Thumbnails: priority, servers and drives
+
+Advanced > Thumbnails has a **priority** from 1 (stay out of the way) to 5 (load them as fast as possible) that decides how many are made at once and how long the app waits between them. Videos on a network drive are previewed by making a local copy of the start of the file when the network is fast enough (the size limit is a setting); on FTP, SFTP and WebDAV servers the first part of the file is fetched and a frame taken from it. On Windows, a video that Explorer cannot preview falls back to ffmpeg when it is installed.
+
+## Drive health
+
+If the drive-health card cannot read a drive because smartmontools is missing, it says so and offers an **Install** button (winget on Windows, Homebrew on macOS, your package manager on Linux, each through the system's own prompt), then reads the drive.
 
 ## Thumbnails on phones and cameras
 
