@@ -246,12 +246,26 @@ jobs:
             TAG="v$VERSION"
             TARGET=(--target "$GITHUB_SHA")
           fi
+          # Only the installers themselves: the downloaded builds sit in folders named after
+          # their target, and a folder cannot be attached to a release.
+          mapfile -t FILES < <(find build-files -type f \( -iname '*.exe' -o -iname '*.msi' -o -iname '*.deb' -o -iname '*.rpm' -o -iname '*.AppImage' -o -iname '*.dmg' \) | sort)
+          echo "Attaching ${#FILES[@]} files:"; printf '  %s\n' "${FILES[@]}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "$TAG is already published (the version was not raised), so nothing new is posted."
-            exit 0
+            have="$(gh release view "$TAG" --json assets --jq '.assets | length')"
+            if [ "$have" -ge "${#FILES[@]}" ]; then
+              echo "$TAG is already published with its $have files (the version was not raised), so nothing new is posted."
+              exit 0
+            fi
+            # A release left half-finished by an earlier run that stopped while attaching files.
+            echo "$TAG exists with only $have of ${#FILES[@]} files: replacing it."
+            # (A tag that was pushed by hand stays; one the workflow made is made again below.)
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then gh release delete "$TAG" --yes; else gh release delete "$TAG" --yes --cleanup-tag; fi
           fi
-          # The description opens with the name and version; GitHub's own change list follows it.
-          gh release create "$TAG" build-files/* "${TARGET[@]}" \
+          # Built as a draft and published only once every file is attached, so a failure in
+          # the middle never leaves a half-empty release on the page. The description opens with
+          # the name and version; GitHub's own change list follows it.
+          gh release create "$TAG" "${FILES[@]}" "${TARGET[@]}" --draft \
             --title "FAST File Explorer $VERSION" \
             --notes "FAST File Explorer $VERSION" \
             --generate-notes
+          gh release edit "$TAG" --draft=false
