@@ -24,9 +24,12 @@ import {
 import { useSelectionBand } from "./useSelectionBand";
 import { applyFilter, facets as facetsOf, isFiltering, sortEntries } from "../util/filter";
 import { formatSize, kindOf } from "../util/format";
-import { cellValue } from "../util/cellValue";
+import { cellValue, rawValue } from "../util/cellValue";
 import { flipRange, toggled } from "../util/checkSelect";
-import { columnDef, hideColumn, showColumn, widthOf, type ColumnDef } from "../util/columns";
+import { columnDef, hideColumn, moveColumn, moveColumnTo, showColumn, widthOf, type ColumnDef } from "../util/columns";
+import { applyColumnFilters, columnFacets } from "../util/columnFilter";
+import { columnsPerFolder } from "../folderViews";
+import { ColumnFilter } from "./ColumnFilter";
 import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
 import { taskFromSelection } from "./Tasks";
@@ -90,9 +93,13 @@ export function FileView({ path }: { path: string }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [width, setWidth] = useState(800);
-  const perFolder = adv<boolean>(settings, "files.perFolderView");
-  // The columns this folder shows: its own choice, else the one for all folders.
-  const columnSet = useStore((s) => (perFolder ? s.folderViews[path]?.columns : undefined) ?? s.columnSet);
+  // The columns this folder shows: its own choice, else the one for all folders (always that one when "same columns in every folder" is on).
+  const ownColumns = columnsPerFolder(settings);
+  const columnSet = useStore((s) => (ownColumns ? s.folderViews[path]?.columns : undefined) ?? s.columnSet);
+  const [colFilterOpen, setColFilterOpen] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [dragCol, setDragCol] = useState<{ id: string; to: number } | null>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const justDragged = useRef(false);
   const [liveWidths, setLiveWidths] = useState<Record<string, number>>({});
   const checks = adv<boolean>(settings, "files.checkboxes") && !mobile;
   const singleOpen = (e: FileEntry) => adv<boolean>(settings, "files.singleClickOpen") || (adv<boolean>(settings, "files.singleClickFolders") && e.isDir);
@@ -205,13 +212,20 @@ export function FileView({ path }: { path: string }) {
   // Details read from the files themselves (date accessed, dimensions, artist…), for the columns shown.
   const noDiskDetails = isRemote(path) || isArchiveLoc(path);
   const shown = useMemo(() => columnSet.order.map((id) => columnDef(id)).filter((d): d is ColumnDef => !!d), [columnSet]);
+  // A column can sort by another's values (Length sorts by length in seconds).
   const sortDef = columnDef(sort.key);
-  const sortNeedsDisk = !noDiskDetails && sortDef?.source === "disk";
+  const sortSrc = (sortDef?.sortBy ? columnDef(sortDef.sortBy) : undefined) ?? sortDef;
+  const sortNeedsDisk = !noDiskDetails && sortSrc?.source === "disk";
+  // Columns being filtered by their values, and which of them are read from the files.
+  const colFilterIds = Object.entries(filter.cols ?? {}).filter(([, v]) => v.length > 0).map(([id]) => id);
+  const filterNeedsDisk = !noDiskDetails && colFilterIds.some((id) => columnDef(id)?.source === "disk");
   const wanted = useMemo(() => {
     const ids = noDiskDetails || !details ? [] : shown.filter((d) => d.source === "disk").map((d) => d.id);
-    if (sortNeedsDisk && !ids.includes(sort.key)) ids.push(sort.key);
+    if (sortNeedsDisk && sortSrc && !ids.includes(sortSrc.id)) ids.push(sortSrc.id);
+    for (const id of colFilterIds) if (columnDef(id)?.source === "disk" && !noDiskDetails && !ids.includes(id)) ids.push(id);
     return ids;
-  }, [shown, noDiskDetails, details, sortNeedsDisk, sort.key]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, noDiskDetails, details, sortNeedsDisk, sort.key, colFilterIds.join()]);
   const [extra, setExtra] = useState<Record<string, Record<string, string>>>({});
   const asked = useRef(new Set<string>());
   useEffect(() => {
@@ -239,13 +253,18 @@ export function FileView({ path }: { path: string }) {
   const sorted = useMemo(
     () =>
       current
-        ? sortEntries(sized, sort.key, sort.asc, settings.general.foldersFirst, sortDef && (sortDef.source === "disk" || sortDef.kind === "number") ? { kind: sortDef.kind, get: (name) => extra[name]?.[sort.key] } : undefined)
+        ? sortEntries(sized, sort.key, sort.asc, settings.general.foldersFirst, sortSrc && (sortSrc.source === "disk" || sortSrc.derive || sortSrc.kind === "number") ? { kind: sortSrc.kind, get: (e) => rawValue(sortSrc, e, extra[e.name]) } : undefined)
         : [],
     // The fetched values only matter for the order when the order is by one of them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [current, sized, sort, settings.general.foldersFirst, sortNeedsDisk ? extra : null],
   );
-  const entries = useMemo(() => applyFilter(sorted, filter), [sorted, filter]);
+  const entries = useMemo(
+    () => applyColumnFilters(applyFilter(sorted, filter), filter.cols, columnDef, extra),
+    // The fetched values only matter when a column is being filtered by them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sorted, filter, filterNeedsDisk ? extra : null],
+  );
 
   // The filter menu offers what is actually in this folder.
   useEffect(() => {
@@ -381,10 +400,12 @@ export function FileView({ path }: { path: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstRow, lastRow, wanted.join(), entries, path]);
   // Ordering by one of them needs it for every item, not just those on screen.
+  // Filtering by one needs it for every item too, and so does the list of values to choose from.
+  const openFilterDisk = !!colFilterOpen && columnDef(colFilterOpen.id)?.source === "disk";
   useEffect(() => {
-    if (sortNeedsDisk && current) fetchDetails(current.entries.map((e) => e.name));
+    if ((sortNeedsDisk || filterNeedsDisk || openFilterDisk) && current) fetchDetails(current.entries.map((e) => e.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortNeedsDisk, sort.key, current]);
+  }, [sortNeedsDisk, filterNeedsDisk, openFilterDisk, sort.key, colFilterIds.join(), colFilterOpen?.id, current]);
 
   // ---- Actions ------------------------------------------------------------
   const fullPath = useCallback((name: string) => joinPath(path, name), [path]);
@@ -985,43 +1006,190 @@ export function FileView({ path }: { path: string }) {
     target.addEventListener("pointerup", up);
   };
 
-  const header = (def: ColumnDef) => (
-    <div className="column-cell" key={def.id} style={{ width: colWidth(def.id) }}>
-      <button
-        className="column-header"
-        data-column={def.id}
-        data-sorted={sort.key === def.id ? (sort.asc ? "asc" : "desc") : undefined}
-        data-align={def.kind === "size" ? "end" : undefined}
-        onClick={() => setSort({ key: def.id, asc: sort.key === def.id ? !sort.asc : true })}
-      >
-        {def.label}
-      </button>
-      <div className="column-grip" role="separator" aria-label={`Resize ${def.label}`} onPointerDown={(e) => resize(def, e)} onDoubleClick={() => setWidths({ [def.id]: def.width })} />
-    </div>
-  );
+  /** The width a column needs to show everything in it (the longest value or the heading). */
+  const fitWidth = (def: ColumnDef): number => {
+    const ctx = document.createElement("canvas").getContext("2d");
+    const sample = scroller.current?.querySelector(".cell") ?? scroller.current?.querySelector(".column-header");
+    if (!ctx || !sample) return def.width;
+    ctx.font = getComputedStyle(sample).font || "13px sans-serif";
+    let widest = ctx.measureText(def.label).width + 30;
+    const list = sized.length > 3000 ? sized.slice(0, 3000) : sized;
+    for (const e of list) {
+      const text = def.id === "name" ? e.name : cellValue(def, e, extra[e.name]);
+      widest = Math.max(widest, ctx.measureText(text).width + (def.id === "name" ? 64 : 24));
+    }
+    return Math.max(def.min, Math.min(700, Math.ceil(widest)));
+  };
+  const sizeToFit = (def: ColumnDef) => setWidths({ [def.id]: fitWidth(def) });
 
-  // Right-click on the header: tick the columns to show, and "More…" for the whole list.
-  const headerMenu = (x: number, y: number) => {
+  const sortWords = (d: ColumnDef): [string, string] =>
+    d.kind === "date" ? ["Oldest first", "Newest first"] : d.kind === "size" || d.kind === "number" ? ["Smallest first", "Largest first"] : ["A to Z", "Z to A"];
+
+  const setColFilter = (id: string, values: string[]) => {
+    const cols = { ...(filter.cols ?? {}) };
+    if (values.length) cols[id] = values;
+    else delete cols[id];
+    useStore.getState().setFilter({ cols });
+  };
+
+  // Drag a heading to another place in the row; Name stays first.
+  const dragHeader = (def: ColumnDef, ev: React.PointerEvent) => {
+    if (def.id === "name" || ev.button !== 0) return;
+    const startX = ev.clientX;
+    let moving = false;
+    const dropIndex = (x: number) => {
+      const cells = [...(headerRef.current?.querySelectorAll<HTMLElement>(".column-cell") ?? [])];
+      let to = cells.length;
+      for (let i = 1; i < cells.length; i++) {
+        const r = cells[i].getBoundingClientRect();
+        if (x < r.left + r.width / 2) {
+          to = i;
+          break;
+        }
+      }
+      return to;
+    };
+    const move = (m: PointerEvent) => {
+      if (!moving && Math.abs(m.clientX - startX) < 6) return;
+      moving = true;
+      setDragCol({ id: def.id, to: dropIndex(m.clientX) });
+    };
+    const up = (m: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDragCol(null);
+      if (!moving) return;
+      // The click that follows a drag is not a request to sort.
+      justDragged.current = true;
+      setTimeout(() => (justDragged.current = false), 0);
+      const from = columnSet.order.indexOf(def.id);
+      let to = dropIndex(m.clientX);
+      if (to > from) to -= 1;
+      useStore.getState().setColumns(moveColumnTo(columnSet, def.id, to), "here");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const openColFilter = (def: ColumnDef, x: number, y: number) => setColFilterOpen({ id: def.id, x, y });
+
+  // The menu of one column: what to do with it, then the choice of columns.
+  const columnMenu = (def: ColumnDef | null, x: number, y: number, anchorEl?: HTMLElement) => {
     const common = ["modified", "type", "size", "created", "extension", "accessed", "dimensions", "length", "artist"];
     const here = (set: typeof columnSet) => useStore.getState().setColumns(set, "here");
+    const pos = def ? columnSet.order.indexOf(def.id) : -1;
+    const [asc, desc] = def ? sortWords(def) : ["", ""];
+    const active = def ? (filter.cols?.[def.id]?.length ?? 0) > 0 : false;
+    const own: MenuItem[] = def
+      ? [
+          { id: "col-sort-asc", label: `Sort: ${asc}`, checked: sort.key === def.id && sort.asc, run: () => setSort({ key: def.id, asc: true }) },
+          { id: "col-sort-desc", label: `Sort: ${desc}`, checked: sort.key === def.id && !sort.asc, run: () => setSort({ key: def.id, asc: false }) },
+          ...(def.id !== "name"
+            ? [
+                {
+                  id: "col-filter",
+                  label: active ? `Filter by ${def.label} (on)…` : `Filter by ${def.label}…`,
+                  separatorBefore: true,
+                  disabled: def.source === "disk" && noDiskDetails,
+                  run: () => {
+                    const r = anchorEl?.getBoundingClientRect();
+                    openColFilter(def, r ? r.left : x, r ? r.bottom : y);
+                  },
+                },
+              ]
+            : []),
+          ...(active ? [{ id: "col-filter-clear", label: `Clear ${def.label} filter`, run: () => setColFilter(def.id, []) }] : []),
+          { id: "col-fit", label: "Size to fit", separatorBefore: true, run: () => sizeToFit(def) },
+          { id: "col-reset", label: "Reset width", run: () => setWidths({ [def.id]: def.width }) },
+          ...(pos > 1 ? [{ id: "col-left", label: "Move left", run: () => here(moveColumn(columnSet, def.id, -1)) }] : []),
+          ...(pos >= 1 && pos < columnSet.order.length - 1 ? [{ id: "col-right", label: "Move right", run: () => here(moveColumn(columnSet, def.id, 1)) }] : []),
+          ...(def.id !== "name"
+            ? [
+                {
+                  id: "col-hide",
+                  label: `Hide ${def.label}`,
+                  run: () => {
+                    if (active) setColFilter(def.id, []);
+                    here(hideColumn(columnSet, def.id));
+                  },
+                },
+              ]
+            : []),
+        ]
+      : [];
     setMenu({
       x,
       y,
       items: [
-        ...common.map((id) => {
+        ...own,
+        ...common.map((id, i) => {
           const d = columnDef(id)!;
           const on = columnSet.order.includes(id);
           return {
             id: `col-${id}`,
             label: d.label,
             checked: on,
+            separatorBefore: i === 0 && own.length > 0,
             disabled: d.source === "disk" && noDiskDetails,
-            run: () => here(on ? hideColumn(columnSet, id) : showColumn(columnSet, id)),
+            run: () => {
+              if (on && (filter.cols?.[id]?.length ?? 0) > 0) setColFilter(id, []);
+              here(on ? hideColumn(columnSet, id) : showColumn(columnSet, id));
+            },
           };
         }),
         { id: "col-more", label: "More…", separatorBefore: true, run: () => useStore.setState({ chooseDetailsOpen: true }) },
       ],
     });
+  };
+  const headerMenu = (x: number, y: number) => columnMenu(null, x, y);
+
+  const header = (def: ColumnDef) => {
+    const filtered = (filter.cols?.[def.id]?.length ?? 0) > 0;
+    const index = columnSet.order.indexOf(def.id);
+    return (
+      <div
+        className="column-cell"
+        key={def.id}
+        style={{ width: colWidth(def.id) }}
+        data-dragging={dragCol?.id === def.id || undefined}
+        data-drop-before={(dragCol && dragCol.to === index && dragCol.id !== def.id && dragCol.to !== columnSet.order.indexOf(dragCol.id) + 1) || undefined}
+        data-drop-after={(dragCol && dragCol.to === columnSet.order.length && index === columnSet.order.length - 1 && dragCol.id !== def.id) || undefined}
+        onContextMenu={(ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          columnMenu(def, ev.clientX, ev.clientY, ev.currentTarget);
+        }}
+      >
+        <button
+          className="column-header"
+          data-column={def.id}
+          data-sorted={sort.key === def.id ? (sort.asc ? "asc" : "desc") : undefined}
+          data-align={def.kind === "size" ? "end" : undefined}
+          data-filtered={filtered || undefined}
+          title={def.description}
+          onPointerDown={(e) => dragHeader(def, e)}
+          onClick={() => !justDragged.current && setSort({ key: def.id, asc: sort.key === def.id ? !sort.asc : true })}
+        >
+          {def.label}
+        </button>
+        {(def.id !== "name" || filtered) && !(def.source === "disk" && noDiskDetails) && (
+          <button
+            className="column-funnel"
+            data-on={filtered || undefined}
+            aria-label={`Filter by ${def.label}`}
+            title={filtered ? `Filtered by ${def.label}` : `Filter by ${def.label}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              const r = e.currentTarget.parentElement!.getBoundingClientRect();
+              openColFilter(def, r.left, r.bottom);
+            }}
+          >
+            <Icon name="filter" size={11} />
+          </button>
+        )}
+        <div className="column-grip" role="separator" aria-label={`Resize ${def.label}`} onPointerDown={(e) => resize(def, e)} onDoubleClick={() => sizeToFit(def)} title="Drag to resize; double-click to fit" />
+      </div>
+    );
   };
 
   const totalSize = entries.reduce((s, e) => s + e.size, 0);
@@ -1050,6 +1218,7 @@ export function FileView({ path }: { path: string }) {
       >
         {details && !mobile && (
           <div
+            ref={headerRef}
             className="file-header"
             style={{ width: rowsWidth + 14 }}
             onMouseDown={(e) => e.stopPropagation()}
@@ -1231,6 +1400,18 @@ export function FileView({ path }: { path: string }) {
           </span>
         )}
       </div>
+      {colFilterOpen && columnDef(colFilterOpen.id) && (
+        <ColumnFilter
+          label={columnDef(colFilterOpen.id)!.label}
+          x={colFilterOpen.x}
+          y={colFilterOpen.y}
+          facets={columnFacets(columnDef(colFilterOpen.id)!, current?.entries ?? [], extra)}
+          selected={filter.cols?.[colFilterOpen.id] ?? []}
+          loading={openFilterDisk && (current?.entries ?? []).some((e) => extra[e.name] === undefined)}
+          onChange={(v) => setColFilter(colFilterOpen.id, v)}
+          onClose={() => setColFilterOpen(null)}
+        />
+      )}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

@@ -11,6 +11,7 @@
 // Nothing is read from or written to this computer: files, storage and settings are made up.
 
 import { emit } from "@tauri-apps/api/event";
+import { columnDef } from "../util/columns";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { AppInfo, Drive, FileEntry, Session, Settings } from "../api";
 import { applyPatch, perfPresetsFor, recommendMobilePerf, UI_PRESETS } from "../settings/presets";
@@ -161,7 +162,21 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   locks_list: () => ({ locks: [], hasMain: false, unlocked: [] }),
   history_info: () => ({ entries: 0, bytes: 0 }),
   transfer_methods: () => ({ installed: ["native", "robocopy", "smb", "rclone"], stats: [{ method: "native", uses: 14, avgBytesPerSec: 210e6 }, { method: "robocopy", uses: 6, avgBytesPerSec: 340e6 }], jobs: [{ kind: "delete", uses: 9, avgItemsPerSec: 4200 }, { kind: "trash", uses: 12, avgItemsPerSec: 6.5 }, { kind: "extract", uses: 2, avgItemsPerSec: 800 }], instantMoves: 31 }),
-  column_values: (a) => (a.names as string[]).map((n, i) => ({ name: n, values: Object.fromEntries((a.keys as string[]).map((k) => [k, k === "accessed" ? String(1.7e12 + i * 3.6e6) : k === "items" ? String(i * 3) : `${k} ${i}`])) })),
+  column_values: (a) =>
+    (a.names as string[]).map((n, i) => ({
+      name: n,
+      values: Object.fromEntries(
+        (a.keys as string[]).flatMap((k) => {
+          const d = columnDef(k);
+          if (!d || i % 7 === 6) return []; // every seventh item has nothing to say, as real files often do
+          if (d.kind === "date") return [[k, String(1.7e12 - i * 5e8)]];
+          if (d.kind === "size") return [[k, String(1000 * (i + 1) ** 3)]];
+          if (d.kind === "number") return [[k, String((i * 37) % 11 + 1)]];
+          const choices = ["Canon EOS R5", "Nikon Z6", "Sony A7", "-rw-r--r--", "-rwxr-xr-x"];
+          return [[k, k === "mime" ? ["image/jpeg", "text/plain"][i % 2] : k.startsWith("sha") || k === "md5" ? "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".slice(0, k === "md5" ? 32 : 40) : `${choices[i % choices.length]}`]];
+        }),
+      ),
+    })),
   get_details: (a) => {
     const path = String(a.path);
     const name = path.split(/[\\/]/).pop() ?? path;

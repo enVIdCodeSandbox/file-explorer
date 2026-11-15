@@ -2,6 +2,8 @@
 // Kept in the browser's storage, most recently used last, and trimmed to a limit so it cannot grow
 // without end. Pure functions, so they can be tested.
 
+import type { Settings } from "./api";
+import { adv } from "./settings/advanced";
 import type { FilterState, SortKey } from "./store";
 import type { ColumnSet } from "./util/columns";
 import { normalizeSet } from "./util/columns";
@@ -80,4 +82,9 @@ export function saveViews(views: FolderViews): void {
   } catch {
     /* storage can be unavailable; the views then last until the app closes */
   }
+}
+
+/** Does each folder have its own columns? Not when one set is used everywhere. */
+export function columnsPerFolder(settings: Settings | null | undefined): boolean {
+  return adv<boolean>(settings, "files.perFolderView") && !adv<boolean>(settings, "files.columnsEverywhere");
 }

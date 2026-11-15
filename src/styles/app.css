@@ -99,7 +99,7 @@ p { margin: 0 0 8px; }
 /* Sticky inside the scroller so it always has exactly the rows' width.
    Padding mirrors a row's margin + border so columns line up. */
 .file-header { position: sticky; top: 0; z-index: 2; height: 28px; display: grid; grid-template-columns: var(--columns); padding: 0 5px 0 9px; background: var(--surface); border-bottom: 1px solid var(--border); }
-.column-header { height: 27px; padding: 0 8px; text-align: left; color: var(--text-muted); font-size: var(--font-size-small); border-right: 1px solid var(--border); }
+.column-header { height: 27px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; color: var(--text-muted); font-size: var(--font-size-small); border-right: 1px solid var(--border); }
 .column-header:hover { background: var(--surface-hover); color: var(--text); }
 .column-header[data-sorted="asc"]::after { content: " ▲"; font-size: 8px; }
 .column-header[data-sorted="desc"]::after { content: " ▼"; font-size: 8px; }
@@ -401,7 +401,7 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 .choose-details { width: min(520px, calc(100vw - 40px)); display: flex; flex-direction: column; gap: 10px; }
 .choose-details h3, .choose-details p { margin: 0; }
 .choose-body { display: flex; gap: 12px; min-height: 0; }
-.choose-list { flex: 1; height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--bg); padding: 4px; }
+.choose-list { flex: 1; height: clamp(260px, 48vh, 520px); overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--bg); padding: 4px; }
 .choose-group { padding: 6px 6px 2px; color: var(--text-muted); font-size: var(--font-size-small); font-weight: 600; }
 .choose-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: var(--radius-small); cursor: default; }
 .choose-row:hover { background: var(--surface-hover); }
@@ -413,3 +413,25 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 .choose-width input { width: 80px; }
 .choose-all { display: flex; align-items: center; gap: 8px; }
 .choose-details .dialog-buttons { display: flex; gap: 8px; }
+
+/* ---- Column headings: menu button, filter, drag to reorder --------------- */
+.column-cell { position: relative; }
+.column-cell[data-dragging] { opacity: 0.5; }
+.column-cell[data-drop-before]::before, .column-cell[data-drop-after]::after { content: ""; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--accent); z-index: 3; }
+.column-cell[data-drop-before]::before { left: -1px; }
+.column-cell[data-drop-after]::after { right: -1px; }
+.column-header[data-filtered] { color: var(--accent); font-weight: 600; }
+.column-funnel { position: absolute; right: 8px; top: 3px; width: 20px; height: 20px; display: none; place-items: center; border-radius: 4px; color: var(--text-muted); background: var(--surface-hover); }
+.column-cell:hover .column-funnel, .column-funnel[data-on] { display: grid; }
+.column-funnel[data-on] { color: var(--accent); }
+.column-funnel:hover { color: var(--text); }
+
+.column-filter { position: fixed; z-index: 60; width: 260px; max-height: min(420px, 70vh); display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35); }
+.column-filter-title { font-weight: 600; font-size: var(--font-size-small); }
+.column-filter-list { overflow-y: auto; min-height: 40px; display: flex; flex-direction: column; }
+.column-filter-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: default; }
+.column-filter-row:hover { background: var(--surface-hover); }
+.column-filter-value { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.column-filter-count { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.column-filter-note { margin: 0; font-size: 11px; }
+.column-filter-buttons { display: flex; align-items: center; gap: 6px; }

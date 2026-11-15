@@ -38,7 +38,7 @@ describe("extra columns", () => {
 
   it("sorts by a value from the file, blanks last when ascending", () => {
     const values: Record<string, string> = { a: "10", b: "9", c: "100" };
-    const get = (n: string) => values[n];
+    const get = (x: FileEntry) => values[x.name];
     const asc = sortEntries([e("a"), e("b"), e("c"), e("d")], "iso", true, false, { kind: "number", get }).map((x) => x.name);
     expect(asc).toEqual(["b", "a", "c", "d"]);
     const desc = sortEntries([e("a"), e("b"), e("c"), e("d")], "iso", false, false, { kind: "number", get }).map((x) => x.name);
@@ -47,7 +47,7 @@ describe("extra columns", () => {
 
   it("sorts text values naturally", () => {
     const values: Record<string, string> = { a: "Track 10", b: "Track 2" };
-    const out = sortEntries([e("a"), e("b")], "title", true, false, { kind: "text", get: (n) => values[n] }).map((x) => x.name);
+    const out = sortEntries([e("a"), e("b")], "title", true, false, { kind: "text", get: (x) => values[x.name] }).map((x) => x.name);
     expect(out).toEqual(["b", "a"]);
   });
 

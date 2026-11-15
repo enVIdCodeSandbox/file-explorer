@@ -28,7 +28,7 @@ import {
 } from "./api";
 import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
 import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
-import { loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
+import { columnsPerFolder, loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
 import { syncDetailsPane } from "./util/layout";
@@ -92,11 +92,13 @@ export interface FilterState {
   notModified: string;
   /** Leave out files of this size class ("any" leaves out nothing). */
   notSize: string;
+  /** Keep only items whose value in a column is one of these (from the column's own filter). */
+  cols: Record<string, string[]>;
 }
 
 export const NO_FILTER: FilterState = {
   text: "", kinds: [], extensions: [], modified: "any", size: "any", subfolders: false,
-  notText: "", notKinds: [], notExtensions: [], notModified: "any", notSize: "any",
+  notText: "", notKinds: [], notExtensions: [], notModified: "any", notSize: "any", cols: {},
 };
 
 /** One speed sample for the transfer graphs. */
@@ -1150,7 +1152,7 @@ export const useStore = create<State>((set, get) => ({
   setColumns: (next, scope) => {
     const loc = activeLocation();
     const set_ = normalizeSet(next);
-    if (scope === "all" || !loc || isAppLocation(loc) || !adv<boolean>(get().settings, "files.perFolderView")) {
+    if (scope === "all" || !loc || isAppLocation(loc) || !columnsPerFolder(get().settings)) {
       const folderViews = scope === "all" ? withoutColumns(get().folderViews) : get().folderViews;
       set({ columnSet: set_, folderViews });
       saveColumnSet(set_);

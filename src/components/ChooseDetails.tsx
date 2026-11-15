@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { adv } from "../settings/advanced";
+import { columnsPerFolder } from "../folderViews";
 import { activeLocation, useStore } from "../store";
 import { COLUMNS, COLUMN_GROUPS, DEFAULT_SET, canFill, columnDef, hideColumn, moveColumn, normalizeSet, showColumn, widthOf, type ColumnSet } from "../util/columns";
 import { isArchiveLoc, isRemote } from "../util/path";
@@ -21,14 +22,15 @@ export function ChooseDetails() {
   useEffect(() => {
     if (!open) return;
     const s = useStore.getState();
-    const perFolder = adv<boolean>(s.settings, "files.perFolderView");
-    const here = loc ? (perFolder ? s.folderViews[loc]?.columns : undefined) ?? s.columnSet : s.columnSet;
+    const per = columnsPerFolder(s.settings);
+    const here = loc ? (per ? s.folderViews[loc]?.columns : undefined) ?? s.columnSet : s.columnSet;
     setDraft(here);
     setPicked("name");
     setQuery("");
-    setEverywhere(!perFolder);
+    setEverywhere(!per);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // With views kept per folder the box is offered; with them off, every folder shares one set already.
   const perFolder = useStore((s) => adv<boolean>(s.settings, "files.perFolderView"));
   const q = query.trim().toLowerCase();
   const groups = useMemo(
@@ -45,7 +47,12 @@ export function ChooseDetails() {
   const sel = columnDef(picked);
   const isShown = shown.includes(picked);
   const apply = () => {
-    useStore.getState().setColumns(normalizeSet(draft), everywhere || !perFolder ? "all" : "here");
+    const st = useStore.getState();
+    // The choice is kept: while it is on, every later change to the columns (here or from a heading) is for all folders.
+    if (perFolder && adv<boolean>(st.settings, "files.columnsEverywhere") !== everywhere) {
+      st.updateSettings((x) => void (x.advanced = { ...(x.advanced ?? {}), "files.columnsEverywhere": everywhere }));
+    }
+    st.setColumns(normalizeSet(draft), everywhere || !perFolder ? "all" : "here");
     close();
   };
   const toggle = (id: string) => {
@@ -113,7 +120,7 @@ export function ChooseDetails() {
         {perFolder && (
           <label className="choose-all">
             <input type="checkbox" checked={everywhere} onChange={(e) => setEverywhere(e.target.checked)} />
-            <span>Use these columns for all folders</span>
+            <span>Use these columns in every folder, and keep doing so</span>
           </label>
         )}
         <div className="dialog-buttons">

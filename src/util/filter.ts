@@ -19,7 +19,7 @@ export function configureSort(opts: { natural: boolean; caseSensitive: boolean }
 /** Where to read a column's value when it comes from the files themselves (see util/columns). */
 export interface ExtraValues {
   kind: "text" | "date" | "size" | "number";
-  get: (name: string) => string | undefined;
+  get: (e: FileEntry) => string | undefined;
 }
 
 export function sortEntries(entries: FileEntry[], key: SortKey, asc: boolean, foldersFirst: boolean, extra?: ExtraValues): FileEntry[] {
@@ -28,7 +28,7 @@ export function sortEntries(entries: FileEntry[], key: SortKey, asc: boolean, fo
     if (foldersFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     let r = 0;
     if (extra) {
-      const x = extra.get(a.name), y = extra.get(b.name);
+      const x = extra.get(a), y = extra.get(b);
       // Items with no value for it go last when ascending, first when descending (like blanks in Explorer).
       if ((x === undefined || x === "") !== (y === undefined || y === "")) return x === undefined || x === "" ? dir : -dir;
       if (x !== undefined && y !== undefined && x !== "" && y !== "") {
@@ -52,7 +52,8 @@ const DAY = 86_400_000;
 export function isFiltering(f: FilterState): boolean {
   return (
     !!f.text || f.kinds.length > 0 || f.extensions.length > 0 || f.modified !== "any" || f.size !== "any" ||
-    !!f.notText.trim() || f.notKinds.length > 0 || f.notExtensions.length > 0 || f.notModified !== "any" || f.notSize !== "any"
+    !!f.notText.trim() || f.notKinds.length > 0 || f.notExtensions.length > 0 || f.notModified !== "any" || f.notSize !== "any" ||
+    Object.values(f.cols ?? {}).some((v) => v.length > 0)
   );
 }
 

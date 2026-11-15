@@ -6,6 +6,11 @@ import type { FileEntry } from "../api";
 import type { ColumnDef } from "./columns";
 import { extensionOf, formatDate, formatSize, typeLabel } from "./format";
 
+/** The raw value of a column for an item: worked out from the listing, or what the backend read from the file. */
+export function rawValue(def: ColumnDef, e: FileEntry, extra: Record<string, string> | undefined): string | undefined {
+  return def.derive ? def.derive(e) : extra?.[def.id];
+}
+
 export function cellValue(def: ColumnDef, e: FileEntry, extra: Record<string, string> | undefined): string {
   switch (def.id) {
     case "modified":
@@ -19,8 +24,9 @@ export function cellValue(def: ColumnDef, e: FileEntry, extra: Record<string, st
     case "size":
       return e.isDir ? "" : formatSize(e.size);
   }
-  const raw = extra?.[def.id];
+  const raw = rawValue(def, e, extra);
   if (raw === undefined || raw === "") return "";
+  if (def.display) return def.display(raw);
   if (def.kind === "date" && /^\d+$/.test(raw)) return formatDate(Number(raw));
   if (def.kind === "size" && /^\d+$/.test(raw)) return formatSize(Number(raw));
   return raw;

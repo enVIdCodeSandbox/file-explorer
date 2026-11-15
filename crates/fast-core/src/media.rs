@@ -65,6 +65,7 @@ fn exif_facts(path: &Path) -> Vec<Option<Fact>> {
 
     vec![
         fact("Camera", camera),
+        fact("Camera maker", make.clone()),
         fact("Lens", ascii(Tag::LensModel).unwrap_or_default()),
         fact("Taken", taken.unwrap_or_default()),
         fact("Exposure", exposure.unwrap_or_default()),
@@ -75,6 +76,16 @@ fn exif_facts(path: &Path) -> Vec<Option<Fact>> {
         fact("Orientation", text(Tag::Orientation).filter(|o| !o.contains("row 0 at top")).unwrap_or_default()),
         fact("Software", ascii(Tag::Software).unwrap_or_default()),
         fact("Location", gps(&exif).unwrap_or_default()),
+        fact("Altitude", text(Tag::GPSAltitude).unwrap_or_default()),
+        fact("White balance", text(Tag::WhiteBalance).unwrap_or_default()),
+        fact("Metering", text(Tag::MeteringMode).unwrap_or_default()),
+        fact("Exposure program", text(Tag::ExposureProgram).unwrap_or_default()),
+        fact("Exposure bias", text(Tag::ExposureBiasValue).unwrap_or_default()),
+        fact("Color space", text(Tag::ColorSpace).unwrap_or_default()),
+        fact("Resolution", text(Tag::XResolution).unwrap_or_default()),
+        fact("Photographer", ascii(Tag::Artist).unwrap_or_default()),
+        fact("Copyright", ascii(Tag::Copyright).unwrap_or_default()),
+        fact("Description", ascii(Tag::ImageDescription).unwrap_or_default()),
     ]
 }
 
@@ -124,10 +135,25 @@ fn audio_facts(path: &Path) -> Vec<Option<Fact>> {
             },
         ));
         out.push(fact("Genre", tag.genre().map(|s| s.to_string()).unwrap_or_default()));
+        out.push(fact("Album artist", tag.get_string(ItemKey::AlbumArtist).unwrap_or_default()));
+        out.push(fact("Composer", tag.get_string(ItemKey::Composer).unwrap_or_default()));
+        out.push(fact(
+            "Disc",
+            match (tag.disk(), tag.disk_total()) {
+                (Some(n), Some(t)) => format!("{n} of {t}"),
+                (Some(n), None) => n.to_string(),
+                _ => String::new(),
+            },
+        ));
+        out.push(fact("BPM", tag.get_string(ItemKey::IntegerBpm).or_else(|| tag.get_string(ItemKey::Bpm)).unwrap_or_default()));
+        out.push(fact("Publisher", tag.get_string(ItemKey::Publisher).unwrap_or_default()));
+        out.push(fact("Copyright", tag.get_string(ItemKey::CopyrightMessage).unwrap_or_default()));
+        out.push(fact("Comment", tag.comment().map(|s| s.to_string()).unwrap_or_default()));
     }
     out.push(fact("Length", duration(props.duration().as_secs_f64())));
     out.push(fact("Bit rate", props.audio_bitrate().map(|b| format!("{b} kbps")).unwrap_or_default()));
     out.push(fact("Sample rate", props.sample_rate().map(|r| format!("{:.1} kHz", r as f64 / 1000.0)).unwrap_or_default()));
+    out.push(fact("Bit depth", props.bit_depth().map(|b| format!("{b}-bit")).unwrap_or_default()));
     out.push(fact(
         "Channels",
         match props.channels() {
