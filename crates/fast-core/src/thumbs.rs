@@ -92,7 +92,6 @@ const MAX_DECODE_BYTES: u64 = 384 * 1024 * 1024;
 /// Skip very large sources: decoding them costs more than the preview is worth.
 const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// How long an outside program may take to render one thumbnail.
-#[cfg(not(windows))]
 const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub fn is_supported(path: &Path) -> bool {
