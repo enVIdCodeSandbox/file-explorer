@@ -103,6 +103,11 @@ pub fn is_remote(s: &str) -> bool {
     ["ftp://", "sftp://", "dav://", "davs://", "mtp://"].iter().any(|p| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p))
 }
 
+/// Whether text is the address of something on a plugged-in device (a phone or camera).
+pub fn is_device(s: &str) -> bool {
+    s.len() >= 6 && s[..6].eq_ignore_ascii_case("mtp://")
+}
+
 impl Location {
     pub fn parse(s: &str) -> Result<Location> {
         let bad = || CoreError::Invalid(format!("\"{s}\" is not a server address (like sftp://user@host/folder)."));
@@ -211,6 +216,20 @@ pub trait Session: Send {
     /// The folder the server starts in.
     fn home(&mut self) -> Result<String>;
     fn list(&mut self, path: &str) -> Result<Vec<Entry>>;
+    /// As `list`, but a device that hands over its items one at a time (a phone) passes
+    /// each batch to `sink` as it arrives, with the count the device announced. The result
+    /// is the whole listing. The default does no batching.
+    fn list_streaming(&mut self, path: &str, cancel: &AtomicBool, sink: &mut dyn FnMut(&[Entry], crate::entry::ListProgress)) -> Result<Vec<Entry>> {
+        let _ = (cancel, sink);
+        self.list(path)
+    }
+    /// The small preview picture a device keeps for a file (JPEG or similar), when it has
+    /// one. `Ok(None)`: this kind of connection has none; an error: the device has none for
+    /// this file.
+    fn thumbnail(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+        let _ = path;
+        Ok(None)
+    }
     fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64>;
     fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64>;
     fn mkdir(&mut self, path: &str) -> Result<()>;

@@ -159,6 +159,35 @@ pub fn list(st: &Shared, url: &str) -> CmdResult<Listing> {
     Ok(Listing { path: loc.url(), parent: loc.parent().map(|p| p.url()), entries: Arc::new(entries), cached: false })
 }
 
+fn file_entry(e: remote::Entry) -> FileEntry {
+    FileEntry { is_hidden: e.name.starts_with('.'), name: e.name, is_dir: e.is_dir, is_symlink: false, size: e.size, modified: e.modified.map(|s| s * 1000), created: None }
+}
+
+/// As `list`, handing over batches while the device is still answering.
+pub fn list_streaming(
+    st: &Shared,
+    url: &str,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(Vec<FileEntry>, fast_core::entry::ListProgress),
+) -> CmdResult<Listing> {
+    let loc = Location::parse(url).map_err(err)?;
+    let show_hidden = st.settings.read().general.show_hidden;
+    let entries = with_session(st, &loc.key(), |s| {
+        s.list_streaming(&loc.path, cancel, &mut |batch, p| {
+            let shown: Vec<FileEntry> = batch.iter().cloned().map(file_entry).filter(|e| show_hidden || !e.is_hidden).collect();
+            sink(shown, p);
+        })
+    })?;
+    let entries: Vec<FileEntry> = entries.into_iter().map(file_entry).filter(|e| show_hidden || !e.is_hidden).collect();
+    Ok(Listing { path: loc.url(), parent: loc.parent().map(|p| p.url()), entries: Arc::new(entries), cached: false })
+}
+
+/// A device's own preview picture for a file, if it keeps one.
+pub fn device_thumbnail(st: &Shared, url: &str) -> CmdResult<Option<Vec<u8>>> {
+    let loc = Location::parse(url).map_err(err)?;
+    with_session(st, &loc.key(), |s| s.thumbnail(&loc.path))
+}
+
 /// What the server says about one item, for the details pane.
 pub fn details(st: &Shared, url: &str) -> CmdResult<fast_core::details::Details> {
     let loc = Location::parse(url).map_err(err)?;

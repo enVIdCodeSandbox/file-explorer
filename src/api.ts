@@ -21,6 +21,15 @@ export interface Listing {
   cached: boolean;
 }
 
+export interface DirChunk {
+  ticket: number;
+  path: string;
+  entries: FileEntry[];
+  done: number;
+  total: number;
+  restart: boolean;
+}
+
 export type Media = "ssd" | "hdd" | "network" | "removable" | "unknown";
 
 export interface DriveName {
@@ -653,7 +662,9 @@ export interface AppInfo {
 export type TerminalMode = "here" | "home" | "driveRoot" | "admin";
 
 export const api = {
-  listDir: (path: string) => invoke<Listing>("list_dir", { path }),
+  /** With a ticket, the folder's items also arrive as `dir-chunk` events while it is read. */
+  listDir: (path: string, ticket?: number) => invoke<Listing>("list_dir", { path, ticket }),
+  listDirCancel: (ticket: number) => invoke<void>("list_dir_cancel", { ticket }),
   remoteConnect: (server: Server, path?: string) => invoke<string>("remote_connect", { server, path: path ?? null }),
   remoteDisconnect: (location: string) => invoke<void>("remote_disconnect", { location }),
   remoteIsConnected: (location: string) => invoke<boolean>("remote_is_connected", { location }),
@@ -809,6 +820,7 @@ export interface BackendEvents {
   "analysis-partial": AnalysisResult;
   "analysis-failed": [string, string];
   "dir-updated": Listing;
+  "dir-chunk": DirChunk;
   "folder-size": FolderSize;
   "fs-changed": string[];
   "index-status": IndexStatus;

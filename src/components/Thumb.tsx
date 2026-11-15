@@ -12,6 +12,7 @@ import { adv } from "../settings/advanced";
 import { QUALITY, VIEW_SETTING, thumbKind, type ThumbView } from "../util/thumbKinds";
 import { extensionOf, kindOf } from "../util/format";
 import { isArchiveLoc, isRemote } from "../util/path";
+import { isDevicePath, useThriftyBattery } from "../util/battery";
 import { networkThumbs } from "../util/network";
 import { FileIcon } from "./Icons";
 
@@ -122,9 +123,14 @@ export function Thumb({
   setThumbParallelism(adv<number>(settings, "thumbs.parallel") || threads + 1);
   const ext = extensionOf(name);
   const kind = thumbKind(ext);
+  const device = isDevicePath(path);
   const wanted =
-    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (networkThumbs(settings, link) || !onNetwork(path, drives));
-  const supported = enabled && wanted && !isDir && !isRemote(path) && !isArchiveLoc(path) && !!types?.includes(ext);
+    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (device || networkThumbs(settings, link) || !onNetwork(path, drives));
+  // A phone or camera on a cable follows the same thumbnail settings as any folder, except
+  // when its own switch is off or the computer is running low on battery.
+  const thrifty = useThriftyBattery(device && adv<boolean>(settings, "thumbs.deviceSaveBattery"));
+  const deviceOk = !device || (adv<boolean>(settings, "thumbs.onDevices") && !thrifty);
+  const supported = enabled && wanted && deviceOk && !isDir && (device || !isRemote(path)) && !isArchiveLoc(path) && !!types?.includes(ext);
   // Ask for more or fewer pixels than are shown, depending on the sharpness setting.
   const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));
   const key = `${path}|${modified}|${px}|${adv<number>(settings, "thumbs.videoPercent")}`;

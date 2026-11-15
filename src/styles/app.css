@@ -281,3 +281,5 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 .search-history-x { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; opacity: 0; }
 .search-history-row:hover .search-history-x { opacity: 1; }
 .search-history-x:hover { background: var(--surface-active); }
+
+.loading-notice { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; margin-bottom: 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); font-size: 12px; }

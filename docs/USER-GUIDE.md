@@ -269,3 +269,12 @@ Settings (Ctrl+,) has a search box at the top. Each change applies and saves at 
 **Selection box.** Press and drag on empty space in a folder (beside the items in Details view, between the tiles in the icon views) to draw a box; everything it touches is selected, as in Windows Explorer. The list scrolls by itself when you hold the pointer near or past its top or bottom edge, and the box keeps growing. Ctrl toggles what the box touches, Shift adds to what was already selected, and Escape cancels.
 
 The selection box also works in search results. Under Settings > Files and lists you can turn it off, choose whether it follows the accent colour or use your own fill colour, fill strength, border colour, width (0 for none) and style, turn the automatic scrolling off, and set how close to the edge scrolling starts and how fast it goes.
+
+
+## Files appear as they load
+
+Folders no longer make you wait for the last item. Each batch of files and folders is shown the moment it is read, and while the rest are still coming the details pane says **Still loading this folder**, how many items are in so far, and a time estimate for the rest. The status bar says the count is partial until it finishes. This is on for every folder (including phones, servers and drives); turn it off under Settings > Files and lists > "Show files as they load" to see everything at once instead.
+
+## Thumbnails on phones and cameras
+
+Photos and videos on a phone or camera connected by cable show the preview picture the device keeps for them, and follow the same Thumbnails settings as any folder (per kind, per view, size, sharpness). Two things pause them: the switch "Thumbnails for phones and cameras on a cable" (Settings > Thumbnails) and, by default, low battery (computer on battery below 20%, switchable). Where the system does not report battery state, previews keep loading. Files for which the device has no preview keep their plain icon.

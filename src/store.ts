@@ -151,6 +151,8 @@ interface State {
   clipboard: Clipboard | null;
   /** Bumped per folder path whenever its contents change on disk. */
   dirVersion: Record<string, number>;
+  /** The folder being read right now, while some of its items are not in yet. */
+  loadingDir: import("./util/progressive").LoadProgress | null;
   /** Pastes waiting for a delete they would collide with. */
   queuedJobs: Record<number, { title: string; detail: string }>;
   unqueue: (id: number) => void;
@@ -414,6 +416,7 @@ export const useStore = create<State>((set, get) => ({
   cancelling: {},
   clipboard: null,
   dirVersion: {},
+  loadingDir: null,
   queuedJobs: {},
   unqueue: (id) => {
     const q = { ...get().queuedJobs };

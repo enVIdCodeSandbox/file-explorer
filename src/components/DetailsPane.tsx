@@ -4,7 +4,8 @@
 import { useEffect, useState } from "react";
 import { api, type Details, type FolderStats } from "../api";
 import { useStore } from "../store";
-import { formatCount, formatDate, formatSize, kindOf, typeLabel } from "../util/format";
+import { loadingNotice } from "../util/progressive";
+import { formatCount, formatDate, formatDuration, formatSize, kindOf, typeLabel } from "../util/format";
 import { baseName, isArchiveLoc, isRemote, maskAddresses, parentPath, parseLocation } from "../util/path";
 import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
@@ -135,6 +136,25 @@ function MultiSummary({ paths }: { paths: string[] }) {
   );
 }
 
+/** Says the folder is still being read, and when it should be done. */
+function LoadingNotice() {
+  const p = useStore((s) => s.loadingDir);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!p) return;
+    const t = setInterval(() => tick((n) => n + 1), 500);
+    return () => clearInterval(t);
+  }, [p]);
+  if (!p) return null;
+  const n = loadingNotice(p, Date.now(), formatDuration);
+  return (
+    <div className="loading-notice" role="status">
+      <strong>{n.title}</strong>
+      <span>{n.detail}</span>
+    </div>
+  );
+}
+
 export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: boolean } = {}) {
   const liveSelection = useStore((s) => s.selection);
   const selection = paths ?? liveSelection;
@@ -173,6 +193,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   if (selection.length > 1) {
     return (
       <aside className="details-pane" data-embedded={embedded || undefined}>
+        {!paths && <LoadingNotice />}
         <MultiSummary paths={selection} />
       </aside>
     );
@@ -180,6 +201,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   if (!target || !details || details.path !== target) {
     return (
       <aside className="details-pane" data-embedded={embedded || undefined}>
+        {!paths && <LoadingNotice />}
         <p className="muted">{target ? "" : "Select a file or folder to see its details."}</p>
       </aside>
     );
@@ -199,6 +221,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
 
   return (
     <aside className="details-pane" data-embedded={embedded || undefined}>
+      {!paths && <LoadingNotice />}
       <div className="details-preview">
         <Thumb path={d.path} name={d.name} isDir={isDir} modified={d.modified} size={160} iconSize={72} view="pane" />
       </div>

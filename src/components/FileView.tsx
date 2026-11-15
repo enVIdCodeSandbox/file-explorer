@@ -69,6 +69,8 @@ function rememberSize(m: FolderSize & { dir: string }) {
   if (sizesThisSession.size > SESSION_FOLDERS) sizesThisSession.delete(sizesThisSession.keys().next().value as string);
 }
 
+let listTickets = 0;
+
 export function FileView({ path }: { path: string }) {
   const settings = useStore((s) => s.settings)!;
   const version = useStore((s) => s.dirVersion[path] ?? 0);
@@ -108,17 +110,48 @@ export function FileView({ path }: { path: string }) {
   const { fetchFor } = useShellItems();
 
   // ---- Loading ------------------------------------------------------------
+  const progressive = adv<boolean>(settings, "files.progressiveLoad");
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
     let alive = true;
+    let off: (() => void) | undefined;
+    const ticket = progressive ? ++listTickets : undefined;
     setError(null);
-    api
-      .listDir(path)
-      .then((l) => alive && setListing(l))
-      .catch((e) => alive && setError(String(e)));
+    const startedAt = Date.now();
+    const finish = () => {
+      setLoading(false);
+      if (useStore.getState().loadingDir?.path === path) useStore.setState({ loadingDir: null });
+    };
+    void (async () => {
+      if (ticket !== undefined) {
+        // Listen before asking, so the first batch cannot be missed.
+        let seen: FileEntry[] = [];
+        const un = await on("dir-chunk", (c) => {
+          if (!alive || c.ticket !== ticket) return;
+          seen = c.restart ? [...c.entries] : seen.concat(c.entries);
+          setListing({ path, parent: parentPath(path), entries: seen, cached: false });
+          setLoading(true);
+          useStore.setState({ loadingDir: { path, done: c.done, total: c.total, startedAt } });
+        });
+        if (!alive) return un();
+        off = un;
+      }
+      try {
+        const l = await api.listDir(path, ticket);
+        if (alive) setListing(l);
+      } catch (e) {
+        if (alive) setError(String(e));
+      } finally {
+        if (alive) finish();
+      }
+    })();
     return () => {
       alive = false;
+      off?.();
+      if (ticket !== undefined) void api.listDirCancel(ticket).catch(() => {});
+      finish();
     };
-  }, [path, version, settings.general.showHidden]);
+  }, [path, version, settings.general.showHidden, progressive]);
 
   useEffect(() => {
     setSelected(new Set());
@@ -140,7 +173,7 @@ export function FileView({ path }: { path: string }) {
   // Sizes seen this session, so a folder revisited shows them before anything is asked.
   const remember = adv<boolean>(settings, "files.sizeCache");
   useEffect(() => {
-    if (!current || !wantSizes || isRemote(current.path) || isArchiveLoc(current.path)) return;
+    if (!current || loading || !wantSizes || isRemote(current.path) || isArchiveLoc(current.path)) return;
     const same = sizedPath.current === current.path;
     sizedPath.current = current.path;
     if (!same) setFolderSizes(remember ? { ...(sizesThisSession.get(current.path) ?? {}) } : {});
@@ -153,7 +186,7 @@ export function FileView({ path }: { path: string }) {
       };
       void api.folderSizesStart(current.path, names, same, policy).catch(() => {});
     }
-  }, [current, wantSizes]);
+  }, [current, wantSizes, loading]);
   useEffect(() => {
     if (!wantSizes) return;
     const off = on("folder-size", (m) => {
@@ -996,6 +1029,7 @@ export function FileView({ path }: { path: string }) {
       <div className="status-bar">
         <span>
           {entries.length.toLocaleString()} item{entries.length === 1 ? "" : "s"}
+          {loading ? " so far, still loading…" : ""}
           {filtered && current ? ` (filtered from ${current.entries.length.toLocaleString()})` : ""}
         </span>
         {selected.size > 0 && (

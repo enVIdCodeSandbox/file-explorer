@@ -124,3 +124,7 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 | `tab-drop` | A tab was dropped on this window's tab bar (carries the tab and the screen position) |
 | `tab-hover` | Another window is dragging a tab over this window's tab bar (the slot to outline), or has left it |
 | `reattach` | A detached window came back to the main window |
+
+| `list_dir(path, ticket?)` | With a ticket, items also arrive as `dir-chunk` events (`{ticket, path, entries, done, total, restart}`) while the folder is read; the result is still the whole listing. |
+| `list_dir_cancel(ticket)` | Stops a listing nobody waits for any more. |
+| `thumbnail(path, size)` | `mtp://` paths ask the device for its own preview (one request at a time). |

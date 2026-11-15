@@ -87,15 +87,55 @@ pub(crate) fn guard(st: &crate::state::AppState, path: &str) -> CmdResult<()> {
     }
 }
 
+/// A batch of a folder's items, sent while the folder is still being read.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DirChunk {
+    pub ticket: u64,
+    pub path: String,
+    pub entries: Vec<FileEntry>,
+    pub done: usize,
+    pub total: usize,
+    /// The device started the listing over: drop what came before.
+    pub restart: bool,
+}
+
+static LISTINGS: std::sync::LazyLock<parking_lot::Mutex<std::collections::HashMap<u64, Arc<std::sync::atomic::AtomicBool>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Stop a folder listing that is no longer wanted (the person went elsewhere).
 #[tauri::command]
-pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String) -> CmdResult<Listing> {
+pub fn list_dir_cancel(ticket: u64) {
+    if let Some(flag) = LISTINGS.lock().get(&ticket) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// With a `ticket`, the folder's items are also sent as `dir-chunk` events while it is read,
+/// so the interface can show them at once; the result is still the whole listing.
+#[tauri::command]
+pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String, ticket: Option<u64>) -> CmdResult<Listing> {
     let st = state.inner().clone();
-    blocking(move || {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(t) = ticket {
+        LISTINGS.lock().insert(t, cancel.clone());
+    }
+    let result = blocking(move || {
+        let emit_chunk = |at: &str, entries: Vec<FileEntry>, p: entry::ListProgress| {
+            if let Some(t) = ticket {
+                if !entries.is_empty() || p.restart {
+                    let _ = app.emit("dir-chunk", DirChunk { ticket: t, path: at.to_string(), entries, done: p.done, total: p.total, restart: p.restart });
+                }
+            }
+        };
         if fast_core::browse::is_loc(&path) {
             return crate::remote::archive_list(&st, &path);
         }
         guard(&st, &path)?;
         if fast_core::remote::is_remote(&path) {
+            if ticket.is_some() {
+                return crate::remote::list_streaming(&st, &path, &cancel, &mut |e, p| emit_chunk(&path, e, p));
+            }
             return crate::remote::list(&st, &path);
         }
         let p = PathBuf::from(&path);
@@ -118,13 +158,23 @@ pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String) ->
             });
             return Ok(listing(&p, entries, true));
         }
-        let entries = Arc::new(entry::list_dir(&p, show_hidden).map_err(err)?);
+        let entries = if ticket.is_some() {
+            let at = p.to_string_lossy().into_owned();
+            entry::list_dir_streaming(&p, show_hidden, &cancel, &mut |e, pr| emit_chunk(&at, e.to_vec(), pr)).map_err(err)?
+        } else {
+            entry::list_dir(&p, show_hidden).map_err(err)?
+        };
+        let entries = Arc::new(entries);
         if remember {
             st.listings.lock().put(p.clone(), entries.clone(), show_hidden);
         }
         Ok(listing(&p, entries, false))
     })
-    .await
+    .await;
+    if let Some(t) = ticket {
+        LISTINGS.lock().remove(&t);
+    }
+    result
 }
 
 /// Warm the listing cache for folders the user is likely to open next.
@@ -374,6 +424,18 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
         return Err("thumbnails are disabled".into());
     }
     guard(&st, &path)?;
+    // A phone or camera on a cable: ask the device for the preview picture it keeps.
+    if fast_core::remote::is_device(&path) {
+        // A phone answers one request at a time, so these go through one at a time.
+        static ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let _permit = ONE_AT_A_TIME.acquire().await.map_err(err)?;
+        let bytes = blocking(move || {
+            let raw = crate::remote::device_thumbnail(&st, &path)?.ok_or_else(|| "this device has no preview".to_string())?;
+            fast_core::thumbs::from_device(&raw, size).map_err(err)
+        })
+        .await?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
     // Bounded concurrency: decoding is CPU-heavy and must not starve listing.
     let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
     let bytes = blocking(move || {

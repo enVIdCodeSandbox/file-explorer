@@ -34,24 +34,25 @@ pub fn device_url(pnp_id: &str) -> String {
 pub fn unique_names(names: &mut [String]) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for n in names.iter_mut() {
-        if n.contains('/') {
-            *n = n.replace('/', "_");
-        }
-        if n.is_empty() {
-            *n = "_".into();
-        }
-        let mut candidate = n.clone();
-        let mut i = 2;
-        while !seen.insert(candidate.to_lowercase()) {
-            let (stem, ext) = match n.rfind('.') {
-                Some(d) if d > 0 => (&n[..d], &n[d..]),
-                _ => (n.as_str(), ""),
-            };
-            candidate = format!("{stem} ({i}){ext}");
-            i += 1;
-        }
-        *n = candidate;
+        *n = unique_name(&mut seen, std::mem::take(n));
     }
+}
+
+/// One name made unique among those already `seen`; the same rule as [`unique_names`], one at a time.
+pub fn unique_name(seen: &mut std::collections::HashSet<String>, name: String) -> String {
+    let n = if name.contains('/') { name.replace('/', "_") } else { name };
+    let n = if n.is_empty() { "_".to_string() } else { n };
+    let mut candidate = n.clone();
+    let mut i = 2;
+    while !seen.insert(candidate.to_lowercase()) {
+        let (stem, ext) = match n.rfind('.') {
+            Some(d) if d > 0 => (&n[..d], &n[d..]),
+            _ => (n.as_str(), ""),
+        };
+        candidate = format!("{stem} ({i}){ext}");
+        i += 1;
+    }
+    candidate
 }
 
 /// What to tell the person when a device lists no storage.
@@ -77,7 +78,10 @@ mod engine {
     use crate::remote::{fail, Control, Entry, Session};
     use crate::error::{CoreError, Result};
     use bytes::Bytes;
-    use mtp_rs::{ByteRange, Error as MtpError, MtpDevice, NewObjectInfo, ObjectHandle, ObjectInfo, Storage, UtcOffset};
+    use mtp_rs::{ByteRange, Error as MtpError, ListingItem, MtpDevice, NewObjectInfo, ObjectHandle, ObjectInfo, Storage, UtcOffset};
+    use crate::entry::ListProgress;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Instant;
     use std::collections::HashMap;
     use std::path::Path;
     use std::time::Duration;
@@ -369,6 +373,77 @@ mod engine {
             Ok(out)
         }
 
+        /// `list_once`, handing over batches as the device yields its items.
+        fn list_stream_once(&mut self, path: &str, cancel: &AtomicBool, restarted: bool, sink: &mut dyn FnMut(&[Entry], ListProgress)) -> Result<Vec<Entry>> {
+            let node = self.resolve(path)?;
+            let (storage, parent) = match node {
+                Node::Storage(i) => (i, None),
+                Node::Object { storage, handle, dir: true } => (storage, Some(handle)),
+                // The list of storages is short and already in hand.
+                _ => return self.list_once(path),
+            };
+            let base = path.trim_end_matches('/').to_string();
+            let started = self.rt.block_on(self.storages[storage].list_objects_stream(parent));
+            let mut listing = started.map_err(|e| self.listing_failed(e))?;
+            let total = listing.total();
+            let (mut seen, mut out, mut batch) = (std::collections::HashSet::new(), Vec::with_capacity(total), Vec::new());
+            let (mut done, mut skipped, mut flushed, mut first) = (0usize, 0usize, Instant::now(), true);
+            let mut last_error = None;
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(fail("Cancelled."));
+                }
+                let Some(item) = self.rt.block_on(listing.next()) else { break };
+                done += 1;
+                match item {
+                    Err(e) => return Err(self.listing_failed(e)),
+                    Ok(ListingItem::Skipped(s)) => {
+                        skipped += 1;
+                        last_error = Some(s.error);
+                    }
+                    Ok(ListingItem::Object(o)) => {
+                        let mut entry = self.entry_of(&o);
+                        entry.name = unique_name(&mut seen, entry.name);
+                        self.nodes.insert(format!("{base}/{}", entry.name), Node::Object { storage, handle: o.handle, dir: o.is_folder() });
+                        batch.push(entry.clone());
+                        out.push(entry);
+                    }
+                }
+                // The first items go out at once; after that, a batch every tenth of a second.
+                if first && !batch.is_empty() || flushed.elapsed() >= Duration::from_millis(100) && !batch.is_empty() {
+                    sink(&batch, ListProgress { done, total, restart: first && restarted });
+                    batch.clear();
+                    flushed = Instant::now();
+                    first = false;
+                }
+            }
+            // A device that gave handles and then refused every one of them has told us nothing.
+            if out.is_empty() && skipped > 0 {
+                if let Some(e) = last_error {
+                    return Err(explain_at("listing this folder", e));
+                }
+            }
+            sink(&batch, ListProgress { done, total, restart: first && restarted });
+            Ok(out)
+        }
+
+        /// Note what a failed listing says about the connection, and word it for the person.
+        fn listing_failed(&mut self, e: MtpError) -> CoreError {
+            if e.is_disconnected() || matches!(e, MtpError::DeviceReset) {
+                self.dead = true;
+            }
+            self.stale |= e.is_stale_handle();
+            explain_at("listing this folder", e)
+        }
+
+        fn thumbnail_once(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+            let Node::Object { storage, handle, dir: false } = self.resolve(path)? else {
+                return Err(fail("Only files have previews."));
+            };
+            let got = self.rt.block_on(self.storages[storage].thumbnail(handle));
+            self.note(got).map(Some)
+        }
+
         fn download_once(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
             let Node::Object { storage, handle, dir: false } = self.resolve(remote)? else {
                 return Err(fail("That is not a file."));
@@ -488,6 +563,18 @@ mod engine {
 
         fn list(&mut self, path: &str) -> Result<Vec<Entry>> {
             self.retrying(|s| s.list_once(path))
+        }
+
+        fn list_streaming(&mut self, path: &str, cancel: &AtomicBool, sink: &mut dyn FnMut(&[Entry], ListProgress)) -> Result<Vec<Entry>> {
+            let mut attempt = 0;
+            self.retrying(|s| {
+                attempt += 1;
+                s.list_stream_once(path, cancel, attempt > 1, &mut *sink)
+            })
+        }
+
+        fn thumbnail(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+            self.retrying(|s| s.thumbnail_once(path))
         }
 
         fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
@@ -625,6 +712,40 @@ mod engine {
             let left: Vec<String> = s.list("/SD card").unwrap().into_iter().map(|e| e.name).collect();
             assert_eq!(left, ["notes.txt"]);
             assert!(s.upload(&out.path().join("up.bin"), "/up.bin", &ctl).is_err(), "files go inside a storage");
+        }
+
+        #[test]
+        fn a_streamed_listing_hands_over_everything_once_and_matches_the_plain_one() {
+            let internal = tempfile::tempdir().unwrap();
+            let dir = internal.path().join("DCIM");
+            std::fs::create_dir_all(&dir).unwrap();
+            for i in 0..300 {
+                std::fs::write(dir.join(format!("IMG_{i:04}.jpg")), vec![1u8; i + 1]).unwrap();
+            }
+            let mut s = phone(&[internal.path()]);
+            let cancel = AtomicBool::new(false);
+            let mut got: Vec<String> = Vec::new();
+            let mut last = ListProgress::default();
+            let whole = s
+                .list_streaming("/Internal storage/DCIM", &cancel, &mut |batch, p| {
+                    got.extend(batch.iter().map(|e| e.name.clone()));
+                    last = p;
+                })
+                .unwrap();
+            assert_eq!(whole.len(), 300);
+            assert_eq!(got.len(), 300, "every item is handed over exactly once");
+            assert_eq!(last.done, 300);
+            let plain: Vec<String> = s.list("/Internal storage/DCIM").unwrap().into_iter().map(|e| e.name).collect();
+            let mut a = got.clone();
+            let mut b = plain;
+            a.sort();
+            b.sort();
+            assert_eq!(a, b);
+            // Items listed this way can be used straight away.
+            assert!(s.exists("/Internal storage/DCIM/IMG_0007.jpg").unwrap());
+            // A cancelled listing stops with an error.
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(s.list_streaming("/Internal storage/DCIM", &cancel, &mut |_, _| {}).is_err());
         }
 
         #[test]

@@ -64,6 +64,9 @@ export const ADVANCED: AdvDef[] = [
   yn(false, "perf.compactWhenIdle", "Speed and memory", "Give back memory when the window is in the background", "Drops cached folder listings and returns free memory to the system two minutes after you switch away."),
 
   // ---- Files and lists ----
+  yn(true, "thumbs.onDevices", "Thumbnails", "Thumbnails for phones and cameras on a cable", "Uses the preview picture the device keeps for each photo and video, and follows the other thumbnail settings. Turn off to show plain icons."),
+  yn(true, "thumbs.deviceSaveBattery", "Thumbnails", "Pause device thumbnails on low battery", "While this computer runs on battery below 20%, phones and cameras show icons instead of previews, so the cable is not asked for hundreds of pictures. Not every system reports its battery; where it does not, previews keep loading."),
+  yn(true, "files.progressiveLoad", "Files and lists", "Show files as they load", "Items appear the moment they are read instead of after the whole folder is. The details pane says the folder is still loading, with a time estimate. Turn off to wait and show everything at once."),
   yn(true, "files.folderSizes", "Files and lists", "Show folder sizes", "Measured in the background from what is inside each folder, newest folder first, and kept for two minutes."),
   yn(true, "files.keepSelectionOnDrag", "Files and lists", "Keep several selected items selected while dragging", "Pressing on one of them no longer narrows the selection to that one until you let go without dragging. Cancelling a drag keeps the selection too."),
   num(20, "search.historyLimit", "Search", "Previous searches to remember", 0, 200, undefined, "Shown under the search box, newest first. 0 turns the history off and forgets the list."),

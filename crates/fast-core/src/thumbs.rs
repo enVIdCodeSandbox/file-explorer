@@ -211,6 +211,16 @@ fn fit(png: &[u8], px: u32) -> Result<Vec<u8>> {
     encode(img.thumbnail(px, px))
 }
 
+/// A device's own preview picture (JPEG, usually), shrunk to `px` and made into a PNG.
+pub fn from_device(raw: &[u8], px: u32) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(raw).map_err(|e| CoreError::Invalid(format!("cannot read the device's preview: {e}")))?;
+    let px = px.clamp(16, 512);
+    if img.width().max(img.height()) <= px {
+        return encode(img);
+    }
+    encode(img.thumbnail(px, px))
+}
+
 /// Rendering documents and videos with what the system provides.
 mod render {
     #[cfg(not(windows))]

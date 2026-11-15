@@ -21,6 +21,17 @@ pub struct FileEntry {
     pub created: Option<i64>,
 }
 
+/// How far a folder listing has come.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ListProgress {
+    /// Items looked at so far, including ones left out (hidden files).
+    pub done: usize,
+    /// Items in the folder, as far as the system has said (0 when it has not).
+    pub total: usize,
+    /// The listing started over (a stale device handle): batches handed over before are void.
+    pub restart: bool,
+}
+
 /// Folders above this size have their metadata fetched in parallel.
 const PARALLEL_THRESHOLD: usize = 512;
 
@@ -60,6 +71,56 @@ pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<FileEntry>> {
         raw.iter().filter_map(convert).collect()
     };
     Ok(entries)
+}
+
+/// As [`list_dir`], but hands over what is ready as it goes: `sink` gets each batch of new
+/// entries and the progress so far. The first batch is small so something can be shown at
+/// once; later ones grow so a big folder is not slowed by the handing over. Stops with an
+/// error when `cancel` is set. The result is the whole listing, as `list_dir` gives it.
+pub fn list_dir_streaming(
+    path: &Path,
+    show_hidden: bool,
+    cancel: &std::sync::atomic::AtomicBool,
+    sink: &mut dyn FnMut(&[FileEntry], ListProgress),
+) -> Result<Vec<FileEntry>> {
+    use std::sync::atomic::Ordering;
+    let rd = fs::read_dir(path).map_err(|e| CoreError::io(path, e))?;
+    let raw: Vec<fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
+    let total = raw.len();
+    let mut all: Vec<FileEntry> = Vec::with_capacity(total);
+    let (mut done, mut chunk) = (0usize, 64usize);
+    while done < total {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CoreError::Invalid("Cancelled.".into()));
+        }
+        let part = &raw[done..(done + chunk).min(total)];
+        let converted: Vec<FileEntry> = if part.len() >= PARALLEL_THRESHOLD {
+            part.par_iter().filter_map(|e| convert_entry(e, show_hidden)).collect()
+        } else {
+            part.iter().filter_map(|e| convert_entry(e, show_hidden)).collect()
+        };
+        done += part.len();
+        sink(&converted, ListProgress { done, total, restart: false });
+        all.extend(converted);
+        chunk = (chunk * 2).min(2048);
+    }
+    Ok(all)
+}
+
+fn convert_entry(e: &fs::DirEntry, show_hidden: bool) -> Option<FileEntry> {
+    let name = e.file_name().to_string_lossy().into_owned();
+    let ft = e.file_type().ok()?;
+    let is_symlink = ft.is_symlink();
+    let meta = if is_symlink { fs::metadata(e.path()).or_else(|_| e.metadata()).ok() } else { e.metadata().ok() };
+    let is_hidden = is_hidden(&name, meta.as_ref());
+    if is_hidden && !show_hidden {
+        return None;
+    }
+    let (is_dir, size, modified, created) = match &meta {
+        Some(m) => (m.is_dir(), if m.is_dir() { 0 } else { m.len() }, to_millis(m.modified()), to_millis(m.created())),
+        None => (ft.is_dir(), 0, None, None),
+    };
+    Some(FileEntry { name, is_dir, is_symlink, is_hidden, size, modified, created })
 }
 
 #[cfg(windows)]
@@ -124,6 +185,38 @@ pub fn delete_permanently(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path).map_err(|e| CoreError::io(path, e))?;
     let r = if meta.is_dir() { fs::remove_dir_all(path) } else { fs::remove_file(path) };
     r.map_err(|e| CoreError::io(path, e))
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn streaming_hands_over_everything_in_growing_batches() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..500 {
+            fs::write(d.path().join(format!("f{i:03}.txt")), b"x").unwrap();
+        }
+        fs::write(d.path().join(".hidden"), b"x").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (mut batches, mut names) = (Vec::new(), Vec::new());
+        let whole = list_dir_streaming(d.path(), false, &cancel, &mut |b, p| {
+            batches.push(b.len());
+            names.extend(b.iter().map(|e| e.name.clone()));
+            assert_eq!(p.total, 501);
+        })
+        .unwrap();
+        assert_eq!(whole.len(), 500);
+        assert_eq!(names.len(), 500);
+        assert!(batches.len() > 1 && batches[0] <= 64, "{batches:?}");
+        let mut plain: Vec<String> = list_dir(d.path(), false).unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        plain.sort();
+        assert_eq!(names, plain);
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(list_dir_streaming(d.path(), false, &cancel, &mut |_, _| {}).is_err());
+    }
 }
 
 #[cfg(test)]
