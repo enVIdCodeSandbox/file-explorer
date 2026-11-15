@@ -66,7 +66,7 @@ export default function App() {
     return [...new Set(s.tabs.map((t) => t.location).filter((l) => !isAppLocation(l) && !isRemote(l) && !isArchiveLoc(l)))].sort().join("\n");
   });
   useEffect(() => {
-    const timer = window.setTimeout(() => void api.watchDirs(openFolders ? openFolders.split("\n") : []).catch(() => {}), 150);
+    const timer = window.setTimeout(() => void api.watchDirs(openFolders ? openFolders.split("\n") : []).catch(() => { }), 150);
     return () => window.clearTimeout(timer);
   }, [openFolders]);
 
@@ -94,7 +94,7 @@ export default function App() {
       }),
       // Another app (or a second start of this one) asked for a folder.
       on("task-notice", (m) => useStore.getState().showToast(m)),
-      on("launch", () => void api.takeLaunch().then((l) => useStore.getState().showLaunches(l)).catch(() => {})),
+      on("launch", () => void api.takeLaunch().then((l) => useStore.getState().showLaunches(l)).catch(() => { })),
       on("reattach", ({ kind }) => {
         if (kind === "settings") useStore.setState({ settingsOpen: true });
         else if (kind === "transfers") useStore.setState({ transfersOpen: true });
@@ -143,8 +143,8 @@ export default function App() {
     const s = useStore.getState();
     if (s.isSecondary || !adv<boolean>(s.settings, "windows.rememberDetached")) return;
     const was = recalledDetached();
-    if (was.settings) void api.openSettingsWindow().catch(() => {});
-    if (was.transfers) void api.openTransfersWindow().catch(() => {});
+    if (was.settings) void api.openSettingsWindow().catch(() => { });
+    if (was.transfers) void api.openTransfersWindow().catch(() => { });
   }, [ready]);
 
   // Give memory back a couple of minutes after the window goes to the background.
@@ -153,7 +153,7 @@ export default function App() {
     const away = () => {
       clearTimeout(timer);
       if (!adv<boolean>(useStore.getState().settings, "perf.compactWhenIdle")) return;
-      timer = setTimeout(() => void api.compactMemory().catch(() => {}), 120_000);
+      timer = setTimeout(() => void api.compactMemory().catch(() => { }), 120_000);
     };
     const back = () => clearTimeout(timer);
     window.addEventListener("blur", away);
