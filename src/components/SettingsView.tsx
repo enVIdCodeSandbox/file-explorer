@@ -192,7 +192,15 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
     if (q) useStore.setState({ settingsQuery: "" });
     return q;
   });
-  const [section, setSection] = useState<string>(SECTIONS[0]);
+  const [section, setSection] = useState<string>(() => {
+    // Opened from a notice that points at one section (a crash report points at Storage).
+    const want = useStore.getState().settingsSection;
+    return (SECTIONS as readonly string[]).includes(want) ? want : SECTIONS[0];
+  });
+  // (forgotten after mounting, not inside the initializer above, which React may run twice)
+  useEffect(() => {
+    if (useStore.getState().settingsSection) useStore.setState({ settingsSection: "" });
+  }, []);
   const pos = useStore((s) => s.settingsPos);
   const panel = useRef<HTMLDivElement>(null);
   const picking = useStore((s) => !detached && !!s.picker);

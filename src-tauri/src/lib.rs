@@ -354,6 +354,7 @@ pub fn run() {
             crash::crash_logs,
             crash::crash_log_read,
             crash::crash_send,
+            crash::crash_log_save,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FAST File Explorer")

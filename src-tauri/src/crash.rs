@@ -84,9 +84,24 @@ fn send(repo: &str, path: &std::path::Path) -> CmdResult<String> {
     let title = format!("Crash report: {kind} (v{version}, {os})");
     let Some(token) = TOKEN.filter(|t| !t.is_empty()) else {
         // No token in this build: let the person file it themselves, with as much as fits in a link.
-        let short: String = text.chars().take(5500).collect();
-        let body = format!("```\n{short}\n```\n\n(Shortened to fit a link. The full report is saved on the computer.)");
-        let url = format!("https://github.com/{repo}/issues/new?labels=crash&title={}&body={}", enc(&title), enc(&body));
+        // A link can only be about 8000 characters long once encoded: keep the start (problem, computer, state)
+        // and the end (the last events), which are the parts that matter.
+        let note = "\n\n(Shortened to fit a link. The full report was copied to the clipboard; paste it here if you can.)";
+        let (mut head, mut tail) = (2200usize, 1800usize);
+        let url = loop {
+            let chars: Vec<char> = text.chars().collect();
+            let body = if chars.len() <= head + tail {
+                format!("```\n{text}\n```")
+            } else {
+                format!("```\n{}\n[...]\n{}\n```{note}", chars[..head].iter().collect::<String>(), chars[chars.len() - tail..].iter().collect::<String>())
+            };
+            let url = format!("https://github.com/{repo}/issues/new?labels=crash&title={}&body={}", enc(&title), enc(&body));
+            if url.len() <= 7500 || head < 400 {
+                break url;
+            }
+            head = head * 3 / 4;
+            tail = tail * 3 / 4;
+        };
         open::that_detached(url).map_err(|e| e.to_string())?;
         return Ok("Opened a new issue in your browser. Press Submit there to send it.".into());
     };
@@ -111,6 +126,9 @@ fn send(repo: &str, path: &std::path::Path) -> CmdResult<String> {
     if code == 201 {
         crashlog::mark_sent(path);
         let url = resp.body_mut().read_to_string().ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v["html_url"].as_str().map(str::to_string)).unwrap_or_default();
+        if !url.is_empty() {
+            let _ = open::that_detached(&url);
+        }
         Ok(format!("Sent. {url}").trim().to_string())
     } else {
         Err(format!("GitHub answered {code}"))
@@ -186,4 +204,24 @@ pub fn crash_heartbeat(state: State<'_, Shared>, visible: bool) {
         (s.advanced.get("crash.closeWhenFrozen").and_then(|v| v.as_bool()).unwrap_or(true), s.advanced.get("crash.freezeSeconds").and_then(|v| v.as_u64()).unwrap_or(15))
     };
     crashlog::heartbeat(visible, close, secs);
+}
+
+/// Saves a copy of one report where the person chooses (a Save dialog). Returns where, or nothing if cancelled.
+#[tauri::command]
+pub async fn crash_log_save(app: tauri::AppHandle, state: State<'_, Shared>, name: String) -> CmdResult<Option<String>> {
+    if !safe_name(&name) {
+        return Err("Not a crash log".into());
+    }
+    let from = state.paths.crash.join(&name);
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(to) = app.dialog().file().set_file_name(&name).add_filter("Text file", &["txt"]).blocking_save_file() else {
+            return Ok(None);
+        };
+        let to = to.into_path().map_err(|e| e.to_string())?;
+        std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        Ok(Some(to.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

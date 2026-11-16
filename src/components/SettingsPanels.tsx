@@ -421,6 +421,12 @@ export function StoragePanel() {
   const [shown, setShown] = useState<Record<string, string>>({});
   useEffect(() => {
     void api.crashFolder().then(setCrashDir).catch(() => {});
+    // Opened from the crash notice: show that report right away.
+    const want = useStore.getState().crashView;
+    if (want) {
+      useStore.setState({ crashView: null });
+      void api.crashLogRead(want).then((text) => setShown((s) => ({ ...s, [want]: text }))).catch(() => {});
+    }
   }, []);
   const toggleLog = async (name: string) => {
     if (name in shown) return setShown(({ [name]: _gone, ...rest }) => rest);

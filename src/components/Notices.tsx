@@ -40,6 +40,15 @@ function NoticeRow({ n, popup }: { n: Notice; popup?: boolean }) {
           </button>
         )}
       </div>
+      {!!n.actions?.length && (
+        <div className="notice-actions">
+          {n.actions.map((a) => (
+            <button key={a.label} className="secondary" onClick={a.run}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
       {open && detailed && (
         <div className="transfer-detail notice-detail">
           <div className="percent">
@@ -83,7 +92,8 @@ export function Notices() {
   const enabled = adv<boolean>(settings, "notify.enabled");
   const position = adv<string>(settings, "notify.position");
   const bell = adv<string>(settings, "notify.mode") === "bell";
-  const popups = bell ? [] : notices.filter((n) => n.popup).slice(-4);
+  // In the bell mode ordinary notices are never pop-ups; an important one (a crash report) still is.
+  const popups = notices.filter((n) => n.popup).slice(-4);
 
   // Keep the transfer cards clear of notices sharing their corner.
   useEffect(() => {
@@ -98,7 +108,7 @@ export function Notices() {
     };
   }, [position, enabled, popups.length, open]);
 
-  if (!enabled) return null;
+  if (!enabled && !notices.length) return null;
   const showBell = bell || notices.length > 0;
 
   return (

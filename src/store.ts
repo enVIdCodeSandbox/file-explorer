@@ -351,7 +351,10 @@ interface State {
   pushUndo: (a: UndoAction) => void;
   startTransfer: (sources: string[], destDir: string, op: TransferOp) => Promise<void>;
   showToast: (message: string) => void;
-  notify: (kind: NoticeKind, title: string, detail?: string, more?: { facts?: [string, string][]; names?: string[] }) => void;
+  notify: (kind: NoticeKind, title: string, detail?: string, more?: { facts?: [string, string][]; names?: string[]; actions?: { label: string; run: () => void }[]; seconds?: number; important?: boolean }) => void;
+  /** Where Settings should open (a section name), and which crash log Storage should show, when opened from a notice. */
+  settingsSection: string;
+  crashView: string | null;
   dismissNotice: (id: number, forget?: boolean) => void;
   clearNotices: () => void;
 }
@@ -575,6 +578,8 @@ export const useStore = create<State>((set, get) => ({
   command: null,
   runCommand: (name) => set({ command: { name, tick: (get().command?.tick ?? 0) + 1 } }),
   settingsOpen: false,
+  settingsSection: "",
+  crashView: null,
   tasksOpen: false,
   tasksPrefill: null,
   settingsQuery: "",
@@ -1347,17 +1352,20 @@ export const useStore = create<State>((set, get) => ({
 
   notify: (kind, title, detail, more) => {
     const settings = get().settings;
-    if (!settings || !adv<boolean>(settings, "notify.enabled")) return;
+    // An important notice (a crash report) shows even when notices are off or kept in the bell.
+    const important = !!more?.important;
+    if (!settings || (!important && !adv<boolean>(settings, "notify.enabled"))) return;
     const id = nextNoticeId++;
-    const bell = adv<string>(settings, "notify.mode") === "bell";
+    const bell = adv<string>(settings, "notify.mode") === "bell" && !important;
     const keep = Math.max(5, adv<number>(settings, "notify.keep"));
-    const notice: Notice = { id, kind, title, detail, at: Date.now(), popup: !bell, ...more };
+    const { seconds, important: _i, ...rest } = more ?? {};
+    const notice: Notice = { id, kind, title, detail, at: Date.now(), popup: !bell, ...rest };
     set({
       notices: [...get().notices, notice].slice(-keep),
       unreadNotices: get().noticesOpen ? 0 : get().unreadNotices + 1,
     });
     if (adv<boolean>(settings, "notify.sound")) beep();
-    if (!bell) setTimeout(() => get().dismissNotice(id), adv<number>(settings, "notify.seconds") * 1000);
+    if (!bell) setTimeout(() => get().dismissNotice(id), (more?.seconds ?? adv<number>(settings, "notify.seconds")) * 1000);
   },
 
   /** Hide a pop-up; with `forget` also remove it from the list. */

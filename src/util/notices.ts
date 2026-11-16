@@ -14,6 +14,8 @@ export interface Notice {
   facts?: [string, string][];
   /** Names of the items concerned, shown in the expanded view (the first few). */
   names?: string[];
+  /** Buttons under the text (for a notice the person may want to act on). */
+  actions?: { label: string; run: () => void }[];
   /** Still showing as a pop-up. */
   popup: boolean;
 }

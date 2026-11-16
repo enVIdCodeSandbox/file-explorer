@@ -31,6 +31,7 @@ struct State {
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 /// The computer's description, worked out once in the background (asking the system for it can be slow).
 static INFO: OnceLock<String> = OnceLock::new();
+static DIR: OnceLock<PathBuf> = OnceLock::new();
 
 fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
@@ -60,6 +61,7 @@ fn file_stamp(secs: u64) -> String {
 /// Starts the crash log in `dir`. Returns the report written for an unclean last exit, if any.
 pub fn init(dir: &Path, version: &str, webview: &str) -> Option<PathBuf> {
     let _ = std::fs::create_dir_all(dir);
+    let _ = DIR.set(dir.to_path_buf());
     let marker = dir.join("running.marker");
     let events = dir.join("last-events.log");
     let mut found = None;
@@ -85,7 +87,17 @@ pub fn init(dir: &Path, version: &str, webview: &str) -> Option<PathBuf> {
     let started = now_ms() as u64 / 1000;
     {
         let (v, w) = (version.to_string(), webview.to_string());
-        std::thread::Builder::new().name("crashlog-info".into()).spawn(move || drop(INFO.set(computer_info(&v, &w)))).ok();
+        let d = dir.to_path_buf();
+        // Worked out once per run and kept in a file, so the report about a crash can say what computer it was
+        // without asking the system again.
+        std::thread::Builder::new()
+            .name("crashlog-info".into())
+            .spawn(move || {
+                let text = computer_info(&v, &w);
+                let _ = std::fs::write(d.join("computer.txt"), &text);
+                let _ = INFO.set(text);
+            })
+            .ok();
     }
     let _ = std::fs::write(&marker, started.to_string());
     let _ = std::fs::remove_file(&events);
@@ -342,7 +354,8 @@ fn build(kind: &str, message: &str, location: Option<&str>, started: u64, versio
     s.push_str("\n--- Problem ---\n");
     s.push_str(&redact(message));
     s.push_str("\n\n--- Computer ---\n");
-    s.push_str(&INFO.get().cloned().unwrap_or_else(|| quick_info(version, webview)));
+    let saved = || DIR.get().and_then(|d| std::fs::read_to_string(d.join("computer.txt")).ok());
+    s.push_str(&INFO.get().cloned().or_else(saved).unwrap_or_else(|| quick_info(version, webview)));
     if !ctx.trim().is_empty() {
         s.push_str("\n--- Window state (last known) ---\n");
         s.push_str(ctx.trim());
@@ -446,54 +459,116 @@ pub fn start_watchdog() {
         .ok();
 }
 
-/// Windows: a crash inside the system (access violation and the like) skips the panic hook. This writes
-/// the report and ends the process at once, which also skips the system's slow "program has stopped" dialog.
+#[cfg(windows)]
+mod win {
+    #[repr(C)]
+    pub struct Record {
+        pub code: u32,
+        pub flags: u32,
+        pub chained: *mut Record,
+        pub address: *mut core::ffi::c_void,
+        pub count: u32,
+        pub info: [usize; 15],
+    }
+    #[repr(C)]
+    pub struct Pointers {
+        pub record: *const Record,
+        pub context: *mut core::ffi::c_void,
+    }
+    type Handler = Option<unsafe extern "system" fn(*const Pointers) -> i32>;
+    extern "system" {
+        pub fn SetUnhandledExceptionFilter(f: Handler) -> *mut core::ffi::c_void;
+        pub fn AddVectoredExceptionHandler(first: u32, f: Handler) -> *mut core::ffi::c_void;
+        pub fn GetCurrentProcess() -> isize;
+        pub fn TerminateProcess(process: isize, code: u32) -> i32;
+        pub fn GetModuleHandleExW(flags: u32, addr: *const core::ffi::c_void, out: *mut isize) -> i32;
+        pub fn GetModuleFileNameW(module: isize, buf: *mut u16, n: u32) -> u32;
+        pub fn GetCurrentThreadId() -> u32;
+    }
+
+    /// `name.dll+0x1234` for the code at `addr`: which library the failure was in.
+    pub unsafe fn where_is(addr: *const core::ffi::c_void) -> String {
+        let mut h: isize = 0;
+        // FROM_ADDRESS | UNCHANGED_REFCOUNT
+        if GetModuleHandleExW(0x4 | 0x2, addr, &mut h) == 0 || h == 0 {
+            return format!("0x{:X} (no module)", addr as usize);
+        }
+        let mut buf = [0u16; 260];
+        let n = GetModuleFileNameW(h, buf.as_mut_ptr(), 260) as usize;
+        let path = String::from_utf16_lossy(&buf[..n.min(260)]);
+        let name = path.rsplit('\\').next().unwrap_or("?");
+        format!("{name}+0x{:X}", addr as usize - h as usize)
+    }
+
+    pub unsafe fn describe(p: *const Pointers) -> (u32, String) {
+        if p.is_null() || (*p).record.is_null() {
+            return (0xC000_0409, "unknown exception".into());
+        }
+        let r = &*(*p).record;
+        let mut what = format!("exception 0x{:08X} in {} (thread {})", r.code, where_is(r.address), GetCurrentThreadId());
+        if r.code == 0xC000_0005 && r.count >= 2 {
+            let op = match r.info[0] {
+                0 => "reading",
+                1 => "writing",
+                _ => "running code at",
+            };
+            what.push_str(&format!(", access violation {op} 0x{:X}", r.info[1]));
+        }
+        (r.code, what)
+    }
+}
+
+/// Windows: writes down failures that would otherwise leave nothing behind. A vectored handler sees an
+/// exception before anything can swallow it, so even a crash that skips the final handler (or a replaced one)
+/// leaves a line in the trail naming the library and offset. Only fatal-looking kinds are written, a few times at most.
 #[cfg(windows)]
 pub fn install_native_handler() {
-    #[repr(C)]
-    struct Record {
-        code: u32,
-        flags: u32,
-        chained: *mut Record,
-        address: *mut core::ffi::c_void,
-        count: u32,
-        info: [usize; 15],
-    }
-    #[repr(C)]
-    struct Pointers {
-        record: *const Record,
-        context: *mut core::ffi::c_void,
-    }
-    extern "system" {
-        fn SetUnhandledExceptionFilter(f: Option<unsafe extern "system" fn(*const Pointers) -> i32>) -> *mut core::ffi::c_void;
-        fn GetCurrentProcess() -> isize;
-        fn TerminateProcess(process: isize, code: u32) -> i32;
-    }
-    unsafe extern "system" fn handler(p: *const Pointers) -> i32 {
-        let mut what = String::from("unknown exception");
-        let mut code = 0xC000_0409u32;
-        if !p.is_null() && !(*p).record.is_null() {
-            let r = &*(*p).record;
-            code = r.code;
-            what = format!("exception 0x{:08X} at address 0x{:X}", r.code, r.address as usize);
-            if r.code == 0xC000_0005 && r.count >= 2 {
-                let op = match r.info[0] {
-                    0 => "reading",
-                    1 => "writing",
-                    _ => "running code at",
-                };
-                what.push_str(&format!(" (access violation {op} 0x{:X})", r.info[1]));
-            }
+    use win::*;
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+    unsafe extern "system" fn vectored(p: *const Pointers) -> i32 {
+        if p.is_null() || (*p).record.is_null() {
+            return 0;
         }
-        note(&format!("NATIVE CRASH: {what}"));
+        let code = (*p).record.read().code;
+        // access violation, stack overflow, heap corruption, illegal/privileged instruction, in-page error,
+        // stack buffer overrun (fast fail), array bounds
+        let fatal_looking = matches!(code, 0xC000_0005 | 0xC000_00FD | 0xC000_0374 | 0xC000_001D | 0xC000_0096 | 0xC000_0006 | 0xC000_0409 | 0xC000_008C);
+        if fatal_looking && SEEN.fetch_add(1, Ordering::Relaxed) < 12 {
+            let (_, what) = describe(p);
+            note_unlocked(&format!("EXCEPTION (may be handled): {what}"));
+        }
+        0
+    }
+    unsafe extern "system" fn last_chance(p: *const Pointers) -> i32 {
+        let (code, what) = describe(p);
+        note_unlocked(&format!("NATIVE CRASH: {what}"));
         report("Native crash", &format!("{what}\nThe program failed inside the system or a library (not in Rust code that can be caught). The last events below show what it was doing."), None);
-        let _ = std::fs::remove_file(STATE.get().map(|s| s.lock().dir.join("running.marker")).unwrap_or_default());
+        if let Some(d) = DIR.get() {
+            let _ = std::fs::remove_file(d.join("running.marker"));
+        }
         TerminateProcess(GetCurrentProcess(), code);
         1
     }
     unsafe {
-        SetUnhandledExceptionFilter(Some(handler));
+        AddVectoredExceptionHandler(1, Some(vectored));
+        SetUnhandledExceptionFilter(Some(last_chance));
     }
+}
+
+/// `note`, for a thread that may be crashing: never waits for the lock, and writes the trail to disk at once.
+#[allow(dead_code)]
+fn note_unlocked(event: &str) {
+    let Some(m) = STATE.get() else { return };
+    let Some(mut s) = m.try_lock() else { return };
+    let line = format!("{} {}", stamp_ms(now_ms()), redact(event.trim()));
+    if s.trail.len() >= TRAIL {
+        s.trail.pop_front();
+    }
+    s.trail.push_back(line);
+    let text = s.trail.iter().cloned().collect::<Vec<_>>().join("\n");
+    let dir = s.dir.clone();
+    drop(s);
+    let _ = std::fs::write(dir.join("last-events.log"), text);
 }
 
 #[cfg(not(windows))]

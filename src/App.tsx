@@ -107,7 +107,33 @@ function AppInner() {
     void api.crashPrevious().then((name) => {
       if (!name) return;
       crumb("startup: the previous run ended unexpectedly");
-      useStore.getState().notify("error", "The app closed unexpectedly last time", "A crash report was saved. Find it in Settings > Storage > Crash logs, where you can copy it.");
+      const { notify, showToast } = useStore.getState();
+      const copyAll = () => void api.crashLogRead(name).then((t) => navigator.clipboard.writeText(t)).catch(() => {});
+      notify("error", "The app closed unexpectedly last time", "A crash report was saved on this computer.", {
+        important: true,
+        seconds: 90,
+        actions: [
+          {
+            label: "Send to developer",
+            run: () => {
+              // The page opens in the browser with the report filled in; the full text is copied in case it had to be shortened.
+              copyAll();
+              void api.crashSend(name).then((m) => showToast(m)).catch((e) => showToast(String(e)));
+            },
+          },
+          {
+            label: "View crash log",
+            run: () => {
+              useStore.setState({ settingsSection: "Storage", crashView: name });
+              useStore.getState().openSettings();
+            },
+          },
+          {
+            label: "Save crash log",
+            run: () => void api.crashLogSave(name).then((to) => to && showToast(`Saved to ${to}`)).catch((e) => showToast(String(e))),
+          },
+        ],
+      });
     }).catch(() => {});
   }, [ready]);
 

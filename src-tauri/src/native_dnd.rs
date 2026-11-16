@@ -325,8 +325,102 @@ pub async fn clipboard_get_files() -> CmdResult<Vec<String>> {
 
 /// Start the operating system's drag with these files, for dropping into another program.
 #[tauri::command]
-pub async fn drag_out(window: tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
+pub async fn drag_out(window: tauri::WebviewWindow, state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<()> {
+    // Files on a network location can be handled three ways (Settings > Advanced > Files and lists).
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let paths = {
+        let (mode, mb) = {
+            let s = state.settings.read();
+            (
+                s.advanced.get("drag.network").and_then(|v| v.as_str()).unwrap_or("direct").to_string(),
+                s.advanced.get("drag.networkCopyMb").and_then(|v| v.as_u64()).unwrap_or(1024),
+            )
+        };
+        if mode != "direct" && paths.iter().any(|p| network::is_network(std::path::Path::new(p))) {
+            fast_core::crashlog::note(&format!("drag out: network item, mode {mode}"));
+            if mode == "refuse" {
+                return Err("Dragging files out of a network location is turned off (Settings > Advanced). Use Copy, then Paste in the other program.".into());
+            }
+            let root = state.paths.remote_tmp.clone();
+            tauri::async_runtime::spawn_blocking(move || network::stage(paths, &root, mb)).await.map_err(|e| e.to_string())??
+        } else {
+            paths
+        }
+    };
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = &state;
     imp::drag_out(&window, paths)
+}
+
+/// Files on a network location, and copying them to this computer for a drag.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod network {
+    use super::CmdResult;
+    use std::path::Path;
+
+    pub fn is_network(p: &Path) -> bool {
+        let s = p.to_string_lossy();
+        if s.starts_with("\\\\") && !s.starts_with("\\\\?\\") {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            extern "system" {
+                fn GetDriveTypeW(root: *const u16) -> u32;
+            }
+            if let Some(d) = s.get(..2).filter(|d| d.ends_with(':')) {
+                let root: Vec<u16> = std::ffi::OsStr::new(&format!("{d}\\")).encode_wide().chain(Some(0)).collect();
+                // DRIVE_REMOTE
+                return unsafe { GetDriveTypeW(root.as_ptr()) } == 4;
+            }
+        }
+        false
+    }
+
+    fn copy_limited(from: &Path, to: &Path, total: &mut u64, entries: &mut usize, limit: u64) -> CmdResult<()> {
+        const TOO_BIG: &str = "Too large to copy for a drag (see Settings > Advanced > Files and lists). Use Copy, then Paste in the other program.";
+        *entries += 1;
+        if *entries > 5000 {
+            return Err(TOO_BIG.into());
+        }
+        let meta = std::fs::metadata(from).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
+        if meta.is_dir() {
+            std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+            for e in std::fs::read_dir(from).map_err(|e| format!("Could not read {}: {e}", from.display()))?.flatten() {
+                copy_limited(&e.path(), &to.join(e.file_name()), total, entries, limit)?;
+            }
+        } else {
+            *total += meta.len();
+            if *total > limit {
+                return Err(TOO_BIG.into());
+            }
+            std::fs::copy(from, to).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Local copies of the network items (others stay as they are), up to `mb` megabytes in all.
+    pub fn stage(paths: Vec<String>, root: &Path, mb: u64) -> CmdResult<Vec<String>> {
+        crate::remote::sweep_staging(root, "dragnet-", Some(std::time::Duration::from_secs(6 * 3600)));
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let dir = root.join(format!("dragnet-{stamp}"));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let (mut total, mut entries, limit) = (0u64, 0usize, mb.saturating_mul(1 << 20));
+        let mut out = Vec::new();
+        for p in paths {
+            let path = Path::new(&p);
+            if !is_network(path) {
+                out.push(p);
+                continue;
+            }
+            let name = path.file_name().ok_or("Bad file name")?;
+            let to = dir.join(name);
+            copy_limited(path, &to, &mut total, &mut entries, limit)?;
+            out.push(to.to_string_lossy().into_owned());
+        }
+        Ok(out)
+    }
 }
 
 /// Everything on the system clipboard that is about files.
