@@ -422,7 +422,6 @@ Photos and videos on a phone or camera connected by cable show the preview pictu
 - **Thumbnails in high performance.** With the resource budget on Full (or Manual), medium, large and extra-large views always show thumbnails, whatever the per-view switches say ("Always show thumbnails in high performance"). Tiles that are on screen are no longer dropped from memory, and a thumbnail that failed is retried after a short while.
 - **Video and document thumbnails** are made once at a few fixed sizes, saved in the thumbnail cache (needs "Keep thumbnails on disk"), and made in their own lane so they do not hold up pictures. "Prepare video and document thumbnails ahead" (Auto = on for Full/Manual, On, Off) makes the ones in the open folder in the background.
 - **Opening files** asks the registry directly for the program that opens them instead of starting helper programs, so it is immediate.
-- **Dragging out of a network share** hands the other program a local copy (files or folders, up to 1 GB and 5000 items); bigger ones tell you to copy first. Before any drag, Windows is asked whether it can describe the item; if it cannot (a share that is slow or gone) the drag is refused with a message. A failure to start the drag is now reported instead of closing the app.
 
 ## Crash logs (0.10.0)
 

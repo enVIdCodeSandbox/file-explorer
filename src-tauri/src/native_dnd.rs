@@ -178,127 +178,13 @@ mod imp {
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    fn is_network(p: &std::path::Path) -> bool {
-        let s = p.to_string_lossy();
-        if s.starts_with("\\\\") && !s.starts_with("\\\\?\\") {
-            return true;
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStrExt;
-            if let Some(d) = s.get(..2).filter(|d| d.ends_with(':')) {
-                let root: Vec<u16> = std::ffi::OsStr::new(&format!("{d}\\")).encode_wide().chain(Some(0)).collect();
-                // DRIVE_REMOTE = 4
-                return unsafe { windows_sys_drive_type(root.as_ptr()) } == 4;
-            }
-        }
-        false
-    }
-
-    #[cfg(windows)]
-    extern "system" {
-        #[link_name = "GetDriveTypeW"]
-        fn windows_sys_drive_type(root: *const u16) -> u32;
-    }
-
-    fn copy_limited(from: &std::path::Path, to: &std::path::Path, total: &mut u64, entries: &mut usize, limit: u64) -> CmdResult<()> {
-        const TOO_BIG: &str = "Too large to drag from a network share (over 1 GB or 5000 items). Copy it to this computer first, or use Copy and Paste.";
-        *entries += 1;
-        if *entries > 5000 {
-            return Err(TOO_BIG.into());
-        }
-        let meta = std::fs::metadata(from).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
-        if meta.is_dir() {
-            std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
-            for e in std::fs::read_dir(from).map_err(|e| format!("Could not read {}: {e}", from.display()))?.flatten() {
-                copy_limited(&e.path(), &to.join(e.file_name()), total, entries, limit)?;
-            }
-        } else {
-            *total += meta.len();
-            if *total > limit {
-                return Err(TOO_BIG.into());
-            }
-            std::fs::copy(from, to).map_err(|e| format!("Could not read {}: {e}", from.display()))?;
-        }
-        Ok(())
-    }
-
-    /// Windows builds the drag from `ILCreateFromPathW`, which answers null for a path the shell cannot
-    /// resolve right now (a share that is slow or gone). The drag library passes that null on and the
-    /// process dies in native code, where nothing can catch it. Ask first, and refuse such a path.
-    #[cfg(windows)]
-    fn shell_can_describe(p: &std::path::Path) -> bool {
-        use std::os::windows::ffi::OsStrExt;
-        #[link(name = "shell32")]
-        extern "system" {
-            fn ILCreateFromPathW(path: *const u16) -> *mut core::ffi::c_void;
-            fn ILFree(pidl: *mut core::ffi::c_void);
-        }
-        let wide: Vec<u16> = std::ffi::OsStr::new(&dunce_free(p)).encode_wide().chain(Some(0)).collect();
-        let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
-        if pidl.is_null() {
-            return false;
-        }
-        unsafe { ILFree(pidl) };
-        true
-    }
-
-    #[cfg(windows)]
-    fn dunce_free(p: &std::path::Path) -> String {
-        let s = p.to_string_lossy().into_owned();
-        s.strip_prefix("\\\\?\\").filter(|r| !r.starts_with("UNC\\")).map(str::to_string).unwrap_or(s)
-    }
-
-    fn stage_network(files: Vec<std::path::PathBuf>) -> CmdResult<Vec<std::path::PathBuf>> {
-        if !files.iter().any(|f| is_network(f)) {
-            return Ok(files);
-        }
-        const LIMIT: u64 = 1 << 30;
-        let root = std::env::temp_dir().join("fast-explorer-drag");
-        let _ = std::fs::create_dir_all(&root);
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten() {
-                let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map_or(false, |a| a > std::time::Duration::from_secs(86400));
-                if old {
-                    let _ = std::fs::remove_dir_all(e.path()).or_else(|_| std::fs::remove_file(e.path()));
-                }
-            }
-        }
-        let dir = root.join(format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis())));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let mut total = 0u64;
-        let mut out = Vec::new();
-        for f in files {
-            if !is_network(&f) {
-                out.push(f);
-                continue;
-            }
-            let name = f.file_name().ok_or("Bad file name")?;
-            let to = dir.join(name);
-            let mut entries = 0usize;
-            copy_limited(&f, &to, &mut total, &mut entries, LIMIT)?;
-            out.push(to);
-        }
-        Ok(out)
-    }
-
     pub fn drag_out(window: &tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
         use std::path::PathBuf;
         let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()).collect();
         if files.is_empty() {
             return Err("Nothing to drag".into());
         }
-        // The system's drag needs a local file it can describe to the other program at once. A file on a
-        // network share (\\server\share, or a mapped network drive) can stall or fail there, so hand over a
-        // local copy instead (small ones only; the copy is swept after a day).
         fast_core::crashlog::note(&format!("drag out: {} item(s), first {}", files.len(), files[0].display()));
-        let files = stage_network(files)?;
-        #[cfg(windows)]
-        if let Some(bad) = files.iter().find(|f| !shell_can_describe(f)) {
-            fast_core::crashlog::note(&format!("drag out refused: Windows cannot describe {}", bad.display()));
-            return Err(format!("Windows could not prepare {} for dragging. If it is on a network share, check the connection, or copy it to this computer first.", bad.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
-        }
-        fast_core::crashlog::note("drag out: handing over to the system");
         fast_core::crashlog::flush();
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         let win = window.clone();

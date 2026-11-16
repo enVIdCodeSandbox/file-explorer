@@ -75,6 +75,28 @@ export default function App() {
     );
     return stop;
   }, []);
+  // Selected text (Ctrl+A in the Details pane, say) goes away when you click anywhere that is not text you can select.
+  useEffect(() => {
+    const down = (e: PointerEvent) => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      const el = e.target instanceof Element ? e.target : null;
+      if (el && getComputedStyle(el).userSelect === "text") return;
+      sel.removeAllRanges();
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const a = document.activeElement;
+      if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+      window.getSelection()?.removeAllRanges();
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", esc);
+    };
+  }, []);
   // Tell the person when the last run stopped unexpectedly, and where the report is.
   useEffect(() => {
     if (!ready) return;
