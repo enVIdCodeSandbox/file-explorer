@@ -3,11 +3,35 @@
 import { useEffect, useRef, useState } from "react";
 import { useDragView } from "../dnd";
 import { api, type OpenApp, type OpenChoices } from "../api";
-import { useStore } from "../store";
+import { useStore, type DialogRequest } from "../store";
+import { formatDate, formatSize } from "../util/format";
+import { Thumb } from "./Thumb";
 import { baseName } from "../util/path";
 import { pickFile } from "../util/pickFile";
 import { DetailsPane } from "./DetailsPane";
 import { Icon } from "./Icons";
+
+/** Both versions of a file that exists on both sides: a picture (when there is one), size and date, and which is newer or bigger. */
+function ConflictPreview({ c }: { c: NonNullable<DialogRequest["compare"]> }) {
+  const side = (label: string, f: typeof c.here, other: typeof c.here) => {
+    const newer = f.modified != null && other.modified != null && f.modified !== other.modified ? (f.modified > other.modified ? "newer" : "older") : null;
+    const bigger = f.size !== other.size ? (f.size > other.size ? "larger" : "smaller") : null;
+    return (
+      <div className="conflict-side">
+        <strong>{label}</strong>
+        <div className="conflict-thumb"><Thumb path={f.path} name={c.name} isDir={false} modified={f.modified} size={160} iconSize={48} view="xl" /></div>
+        <span>{formatSize(f.size)}{bigger && <em className="conflict-tag" data-kind={bigger}> {bigger}</em>}</span>
+        <span className="muted">{f.modified ? formatDate(f.modified * 1000) : "unknown date"}{newer && <em className="conflict-tag" data-kind={newer}> {newer}</em>}</span>
+      </div>
+    );
+  };
+  return (
+    <div className="conflict-preview">
+      {side("Already here", c.here, c.incoming)}
+      {side("Coming in", c.incoming, c.here)}
+    </div>
+  );
+}
 
 export function Dialog() {
   const dialog = useStore((s) => s.dialog);
@@ -40,7 +64,9 @@ export function Dialog() {
         }}
       >
         <h3>{dialog.title}</h3>
-        {dialog.message && <p className="dialog-message">{dialog.message}</p>}
+        {dialog.compare && <ConflictPreview c={dialog.compare} />}
+        {dialog.message && !dialog.compare && <p className="dialog-message">{dialog.message}</p>}
+        {dialog.message && dialog.compare && <p className="dialog-message muted">{dialog.compare.here.path}</p>}
         {dialog.input != null && (
           <input ref={inputRef} className="text-input" value={input} autoFocus onChange={(e) => setInput(e.target.value)} />
         )}

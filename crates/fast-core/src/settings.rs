@@ -25,12 +25,34 @@ pub struct Settings {
     pub keys: std::collections::BTreeMap<String, String>,
     /// Programs the person added to the right-click menu.
     pub custom_actions: Vec<CustomAction>,
+    /// Commands the person defined for the button bar and the Commands menu (Total Commander style: the
+    /// parameters can hold %P, %N, %S… for the folder, the item under the cursor and the selection).
+    pub user_commands: Vec<UserCommand>,
     /// Saved sets of settings, switchable in one click.
     pub profiles: Vec<Profile>,
     /// The id of the profile in use, if any.
     pub active_profile: String,
     /// False until the person has been through the first-run setup.
     pub setup_done: bool,
+}
+
+/// A command for the button bar / Commands menu. The program is started directly, never through a shell.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UserCommand {
+    pub id: String,
+    pub label: String,
+    /// One or two characters (an emoji, a letter) drawn on the button.
+    pub icon: String,
+    pub program: String,
+    /// Parameters, with the placeholders described in the user guide.
+    pub params: String,
+    /// The folder to run in; empty = the folder being viewed. Placeholders work here too.
+    pub start_dir: String,
+    /// "program" (start it) or "terminal" (type program and parameters as one command line into a new terminal tab).
+    pub run_in: String,
+    pub on_button_bar: bool,
+    pub in_menu: bool,
 }
 
 /// A saved set of settings. `snapshot` is a Settings object without the

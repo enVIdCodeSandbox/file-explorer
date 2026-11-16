@@ -63,7 +63,10 @@ impl Lease {
         let from_pool = idle.is_some();
         let session = match idle {
             Some(s) => s,
-            None => remote::connect(&server, &st.paths.known_hosts).map_err(err)?,
+            None => {
+                apply_proxy(st);
+                remote::connect(&server, &st.paths.known_hosts).map_err(err)?
+            }
         };
         Ok(Lease { st: st.clone(), key: key.to_string(), session: Some(session), from_pool, broken: false })
     }
@@ -109,12 +112,22 @@ fn with_session<T>(st: &Shared, key: &str, mut f: impl FnMut(&mut dyn Session) -
 // Connecting and browsing
 // ---------------------------------------------------------------------------
 
+/// Use the proxy from the settings (Settings > Advanced > Transfers) for the connections made from now on.
+fn apply_proxy(st: &Shared) {
+    let url = st.settings.read().advanced.get("servers.proxy").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if let Err(e) = remote::proxy::set(&url) {
+        eprintln!("servers.proxy: {e}");
+        let _ = remote::proxy::set("");
+    }
+}
+
 /// Log in to a server. Returns the address of `path`, or of the server's
 /// starting folder when `path` is empty.
 #[tauri::command]
 pub async fn remote_connect(state: State<'_, Shared>, server: Server, path: Option<String>) -> CmdResult<String> {
     let st = state.inner().clone();
     blocking(move || {
+        apply_proxy(&st);
         let mut session = remote::connect(&server, &st.paths.known_hosts).map_err(err)?;
         let start = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => remote::normalize(p),

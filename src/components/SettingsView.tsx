@@ -16,7 +16,7 @@ import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
-import { CustomActionsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
+import { CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
   const t = useT();
@@ -320,6 +320,10 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
               <section>
                 <h3>Your own right-click actions</h3>
                 <CustomActionsPanel />
+              </section>
+              <section>
+                <h3>User commands (button bar and Commands menu)</h3>
+                <UserCommandsPanel />
               </section>
               <section>
                 <h3>Maintenance</h3>

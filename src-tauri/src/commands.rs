@@ -3176,6 +3176,24 @@ pub async fn run_custom_action(state: State<'_, Shared>, id: String, paths: Vec<
     .await
 }
 
+/// Start a program with the given arguments in a folder (a user command or the command line). Never through a shell.
+#[tauri::command]
+pub async fn run_program(program: String, args: Vec<String>, cwd: Option<String>) -> CmdResult<()> {
+    blocking(move || {
+        if program.trim().is_empty() {
+            return Err("There is no program to run.".into());
+        }
+        let mut cmd = std::process::Command::new(program.trim());
+        cmd.args(&args).stdin(std::process::Stdio::null());
+        if let Some(dir) = cwd.filter(|d| !d.is_empty() && Path::new(d).is_dir()) {
+            cmd.current_dir(dir);
+        }
+        cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+        Ok(())
+    })
+    .await
+}
+
 /// The folder that holds the app's settings, sessions and imported files.
 #[tauri::command]
 pub fn config_folder(state: State<'_, Shared>) -> Option<String> {

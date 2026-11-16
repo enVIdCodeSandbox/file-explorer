@@ -165,3 +165,10 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 | `list_dir(path, ticket?)` | With a ticket, items also arrive as `dir-chunk` events (`{ticket, path, entries, done, total, restart}`) while the folder is read; the result is still the whole listing. |
 | `list_dir_cancel(ticket)` | Stops a listing nobody waits for any more. |
 | `thumbnail(path, size)` | `mtp://` paths ask the device for its own preview (one request at a time). |
+| `tool_run(id, spec)` | Runs one file tool and returns its result; `spec.kind` is `split`, `join`, `encode`, `decode`, `compareFiles`, `compareDirs`, `duplicates`, `grep` or `convert`. Emits `tool-progress` (`{id, done, total, note}`) and, for `grep`, `tool-hits` (`{id, hits}`). Refuses server and archive paths. |
+| `tool_cancel(id)` | Stops a running tool (`tool_run` or `view_find`). |
+| `view_info(path)` | Name, size and date of a file for the viewer. |
+| `view_read(path, offset, len)` | Up to 4 MB of a file, base64. |
+| `view_find(id, path, needle, start, backward, ascii_ci)` | Offset of the next or previous match of the bytes in `needle`, or null. |
+| `preview_external(path, engine)` | Starts QuickLook, Seer or the system preview; false when it is not installed. |
+| `run_program(program, args, cwd)` | Starts a program directly (user commands). |

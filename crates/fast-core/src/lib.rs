@@ -11,6 +11,7 @@ pub mod update;
 pub mod cachepolicy;
 pub mod columns;
 pub mod columns_extra;
+pub mod filetools;
 pub mod browse;
 pub mod edit;
 pub mod details;

@@ -3,7 +3,7 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type HistoryInfo } from "../api";
+import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type UserCommand, type HistoryInfo } from "../api";
 import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
@@ -704,6 +704,57 @@ export function CustomActionsPanel() {
       <button className="secondary" onClick={() => updateSettings((s) => void (s.customActions = [...s.customActions, blankAction()]))}>
         Add an action
       </button>
+    </div>
+  );
+}
+
+const NO_COMMANDS: UserCommand[] = [];
+const blankCommand = (): UserCommand => ({ id: Math.random().toString(36).slice(2, 9), label: "New command", icon: "", program: "", params: "%N", startDir: "", runIn: "program", onButtonBar: true, inMenu: true });
+
+/** Commands for the button bar and the Commands menu, with Total Commander style placeholders. */
+export function UserCommandsPanel() {
+  const commands = useStore((s) => s.settings!.userCommands) ?? NO_COMMANDS;
+  const { updateSettings } = useStore.getState();
+  const change = (id: string, patch: Partial<UserCommand>) => updateSettings((s) => void (s.userCommands = (s.userCommands ?? []).map((a) => (a.id === id ? { ...a, ...patch } : a))));
+  const move = (i: number, by: number) =>
+    updateSettings((s) => {
+      const list = [...(s.userCommands ?? [])];
+      const j = i + by;
+      if (j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      s.userCommands = list;
+    });
+  return (
+    <div className="custom-actions">
+      <p className="muted">
+        Commands for the button bar above the file list and the Commands menu. In the program, parameters and start folder: <code>%P</code> the folder you are viewing (with a closing slash), <code>%p</code> without it, <code>%N</code> the item under the cursor, <code>%n</code> its name without extension, <code>%E</code> its extension, <code>%F</code> its full path, <code>%S</code> the names of the selected items, <code>%L</code> their full paths, <code>%D</code> the name of the folder, <code>%%</code> a percent sign. Names with spaces are quoted for you. Programs are started directly, never through a shell, unless you choose to run them in a terminal tab.
+      </p>
+      {commands.map((a, i) => (
+        <div key={a.id} className="action-card">
+          <div className="action-grid">
+            <label><span className="muted">Name</span><input className="text-input" value={a.label} onChange={(e) => change(a.id, { label: e.target.value })} /></label>
+            <label><span className="muted">Button symbol</span><input className="text-input" maxLength={2} value={a.icon} placeholder="a letter or emoji" onChange={(e) => change(a.id, { icon: e.target.value })} /></label>
+            <label><span className="muted">Program</span><input className="text-input" value={a.program} placeholder="code, notepad.exe, /usr/bin/vlc…" onChange={(e) => change(a.id, { program: e.target.value })} /></label>
+            <label><span className="muted">Parameters</span><input className="text-input" value={a.params} onChange={(e) => change(a.id, { params: e.target.value })} /></label>
+            <label><span className="muted">Start in</span><input className="text-input" value={a.startDir} placeholder="(the folder you are viewing)" onChange={(e) => change(a.id, { startDir: e.target.value })} /></label>
+            <label>
+              <span className="muted">Run</span>
+              <select value={a.runIn} onChange={(e) => change(a.id, { runIn: e.target.value as UserCommand["runIn"] })}>
+                <option value="program">Start the program</option>
+                <option value="terminal">In a new terminal tab (for console programs)</option>
+              </select>
+            </label>
+            <label className="inline-toggle"><input type="checkbox" checked={a.onButtonBar} onChange={(e) => change(a.id, { onButtonBar: e.target.checked })} /> On the button bar</label>
+            <label className="inline-toggle"><input type="checkbox" checked={a.inMenu} onChange={(e) => change(a.id, { inMenu: e.target.checked })} /> In the Commands menu</label>
+          </div>
+          <div className="action-buttons">
+            <button className="secondary" disabled={i === 0} onClick={() => move(i, -1)}>Move up</button>
+            <button className="secondary" disabled={i === commands.length - 1} onClick={() => move(i, 1)}>Move down</button>
+            <button className="secondary" onClick={() => updateSettings((s) => void (s.userCommands = (s.userCommands ?? []).filter((x) => x.id !== a.id)))}>Remove</button>
+          </div>
+        </div>
+      ))}
+      <button className="secondary" onClick={() => updateSettings((s) => void (s.userCommands = [...(s.userCommands ?? []), blankCommand()]))}>Add a command</button>
     </div>
   );
 }

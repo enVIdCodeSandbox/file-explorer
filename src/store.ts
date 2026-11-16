@@ -133,6 +133,8 @@ export interface DialogRequest {
   /** An extra drop-down under the text box. */
   select?: { label: string; options: { value: string; label: string }[] };
   buttons: { id: string; label: string; primary?: boolean; danger?: boolean }[];
+  /** Two files shown side by side with a picture of each (the "already exists" question). */
+  compare?: { name: string; here: { path: string; size: number; modified: number | null }; incoming: { path: string; size: number; modified: number | null } };
   resolve: (result: { button: string; input: string; selected: string } | null) => void;
 }
 
@@ -212,6 +214,13 @@ interface State {
   /** Sort order, filter and columns remembered for each folder. */
   folderViews: FolderViews;
   chooseDetailsOpen: boolean;
+  /** The file viewer (F3, or the space bar for a quick look), while it is open. */
+  viewer: { path: string; quick: boolean; siblings: string[]; serial: number } | null;
+  /** The file tools window (compare, duplicates, split…), while open. */
+  tools: { tab: import("./components/Tools").ToolTab; folder: string; paths: string[]; serial: number } | null;
+  /** The folder whose to-do list is open. */
+  todoFor: string | null;
+  openViewer: (path: string, opts?: { quick?: boolean; siblings?: string[] }) => void;
   /** A view picked for the open folder only (when views are not shared between folders). */
   folderView: number | null;
   /** Desktop, Documents, Downloads… for "Send to". */
@@ -518,6 +527,10 @@ export const useStore = create<State>((set, get) => ({
   columnSet: loadColumnSet(),
   folderViews: loadViews(),
   chooseDetailsOpen: false,
+  viewer: null,
+  todoFor: null,
+  tools: null,
+  openViewer: (path, opts = {}) => set({ viewer: { path, quick: !!opts.quick, siblings: opts.siblings ?? [path], serial: Date.now() } }),
   folderView: null,
   frequent: [],
   places: [],
@@ -1442,6 +1455,7 @@ async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
   const answer = await ask({
     title: `"${c.name}" already exists here`,
     message: `${line("Already here", c.dstSize, c.dstModified)}\n${line("Coming in", c.srcSize, c.srcModified)}${newer}\n\n${c.dst}`,
+    compare: { name: c.name, here: { path: c.dst, size: c.dstSize, modified: c.dstModified }, incoming: { path: c.src, size: c.srcSize, modified: c.srcModified } },
     buttons: [
       { id: "replace", label: "Replace", primary: true },
       { id: "replaceAll", label: "Replace all" },
@@ -1493,7 +1507,7 @@ export async function promptText(title: string, initial: string): Promise<string
 
 /** Folder views, from the most detail to the biggest icons. */
 /** Things the bars around the folder view ask it to do. The last six are used by the phone layout. */
-export type FolderCommand = "selectAll" | "selectNone" | "invert" | "rename" | "select" | "newFolder" | "newFile" | "paste" | "refresh" | "menu";
+export type FolderCommand = "selectAll" | "selectNone" | "invert" | "selectGroup" | "deselectGroup" | "restoreSelection" | "rename" | "select" | "newFolder" | "newFile" | "paste" | "refresh" | "menu";
 
 export const VIEW_LEVELS = ["details", "list", "small", "medium", "large", "xl"] as const;
 export type ViewLevel = (typeof VIEW_LEVELS)[number];

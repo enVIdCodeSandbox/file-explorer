@@ -556,6 +556,8 @@ export interface Settings {
   /** Shortcuts that differ from the defaults, by command id. */
   keys: Record<string, string>;
   customActions: CustomAction[];
+  /** Button bar / Commands menu entries (Total Commander style). */
+  userCommands: UserCommand[];
   /** Saved sets of settings (see settings/presets.ts). */
   profiles: Profile[];
   activeProfile: string;
@@ -570,6 +572,18 @@ export interface Profile {
   builtIn: boolean;
   /** A Settings object without the profile fields. */
   snapshot: Record<string, unknown>;
+}
+
+export interface UserCommand {
+  id: string;
+  label: string;
+  icon: string;
+  program: string;
+  params: string;
+  startDir: string;
+  runIn: "program" | "terminal";
+  onButtonBar: boolean;
+  inMenu: boolean;
 }
 
 export interface CustomAction {
@@ -801,6 +815,20 @@ export const api = {
   showProperties: (paths: string[]) => invoke<boolean>("show_properties", { paths }),
   historyInfo: () => invoke<HistoryInfo>("history_info"),
   transferMethods: () => invoke<MethodsReport>("transfer_methods"),
+  toolRun: (id: number, spec: ToolSpec) => invoke<unknown>("tool_run", { id, spec }),
+  toolCancel: (id: number) => invoke<void>("tool_cancel", { id }),
+  viewInfo: (path: string) => invoke<ViewInfo>("view_info", { path }),
+  /** A piece of a file (at most 4 MB). */
+  viewRead: async (path: string, offset: number, len: number): Promise<Uint8Array> => {
+    const b64 = await invoke<string>("view_read", { path, offset, len });
+    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  },
+  previewExternal: (path: string, engine: string) => invoke<boolean>("preview_external", { path, engine }),
+  viewFind: (id: number, path: string, needle: Uint8Array, start: number, backward: boolean, asciiCi: boolean) => {
+    let s = "";
+    for (let i = 0; i < needle.length; i++) s += String.fromCharCode(needle[i]);
+    return invoke<number | null>("view_find", { id, path, needle: btoa(s), start, backward, asciiCi });
+  },
   termInfo: () => invoke<TermInfo>("term_info"),
   termList: () => invoke<TermSession[]>("term_list"),
   termSpawn: (cwd: string, cols: number, rows: number, title: string | null, elevated: boolean) => invoke<string>("term_spawn", { cwd, cols, rows, title, elevated }),
@@ -842,6 +870,7 @@ export const api = {
   listAssets: (kind: AssetKind) => invoke<Asset[]>("list_assets", { kind }),
   readAsset: (kind: AssetKind, name: string) => invoke<ArrayBuffer>("read_asset", { kind, name }),
   deleteAsset: (kind: AssetKind, name: string) => invoke<void>("delete_asset", { kind, name }),
+  runProgram: (program: string, args: string[], cwd: string | null) => invoke<void>("run_program", { program, args, cwd }),
   runCustomAction: (id: string, paths: string[]) => invoke<void>("run_custom_action", { id, paths }),
   configFolder: () => invoke<string | null>("config_folder"),
   importSettings: (json: string) => invoke<Settings>("import_settings", { json }),
@@ -950,7 +979,37 @@ export interface TermInfo {
   defaultShell: string;
 }
 
+// ---- File tools (compare, duplicates, search in files, split…) and the viewer ------------------
+
+export interface DiffRow { kind: "same" | "changed" | "removed" | "added"; aNo: number | null; a: string; bNo: number | null; b: string }
+export type FileCompare =
+  | { result: "identical"; size: number }
+  | { result: "binary"; aSize: number; bSize: number; firstDiff: number | null }
+  | { result: "text"; rows: DiffRow[]; changed: number; added: number; removed: number; truncated: boolean };
+export interface DirSide { size: number; modified: number; isDir: boolean }
+export interface DirDiff { rel: string; status: "leftOnly" | "rightOnly" | "leftNewer" | "rightNewer" | "different" | "typeMismatch"; left: DirSide | null; right: DirSide | null }
+export interface DirCompare { entries: DirDiff[]; same: number; truncated: boolean }
+export interface DupGroup { size: number; files: { path: string; modified: number }[] }
+export interface GrepOpts { pattern: string; regex: boolean; caseSensitive: boolean; wholeWord: boolean; masks: string; includeArchives: boolean; includeHidden: boolean; includeBinary: boolean; maxFileSize: number; maxHits: number }
+export interface GrepHit { path: string; entry: string | null; line: number; text: string }
+export interface GrepSummary { files: number; hits: number; truncated: boolean }
+export interface ConvertOpts { format: string; quality: number; maxWidth?: number | null; maxHeight?: number | null; percent?: number | null; outDir?: string | null; suffix: string; overwrite: boolean }
+export interface ConvertResult { path: string; out: string | null; error: string | null }
+export type ToolSpec =
+  | { kind: "split"; src: string; destDir: string; partSize: number }
+  | { kind: "join"; first: string; destDir: string }
+  | { kind: "encode"; src: string; destDir: string; encoding: "uue" | "xxe" | "base64" }
+  | { kind: "decode"; src: string; destDir: string }
+  | { kind: "compareFiles"; a: string; b: string; opts: { ignoreWhitespace: boolean; ignoreCase: boolean } }
+  | { kind: "compareDirs"; left: string; right: string; opts: { recursive: boolean; byContent: boolean; includeHidden: boolean } }
+  | { kind: "duplicates"; roots: string[]; opts: { by: "content" | "nameSize" | "size"; minSize: number; includeHidden: boolean } }
+  | { kind: "grep"; roots: string[]; opts: GrepOpts }
+  | { kind: "convert"; paths: string[]; opts: ConvertOpts };
+export interface ViewInfo { name: string; size: number; modified: number | null }
+
 export interface BackendEvents {
+  "tool-progress": { id: number; done: number; total: number; note: string };
+  "tool-hits": { id: number; hits: GrepHit[] };
   "term-out": { sid: string; data: string };
   "term-exit": { sid: string; code: number | null };
   "term-sessions": null;

@@ -9,6 +9,7 @@ mod state;
 #[cfg(desktop)]
 mod terminal;
 mod tasks;
+mod tools;
 mod update;
 
 use fast_core::history::History;
@@ -161,6 +162,13 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            tools::tool_run,
+            tools::tool_cancel,
+            tools::view_info,
+            tools::view_read,
+            tools::view_find,
+            commands::run_program,
+            tools::preview_external,
             tasks::tasks_list,
             tasks::tasks_save,
             tasks::tasks_delete,

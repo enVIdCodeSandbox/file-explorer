@@ -50,6 +50,8 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { toggleTerminalPanel, useTerminal } from "../terminal/state";
+import { fileToolsItems } from "./Tools";
+import { openCount } from "./Todo";
 import { isMobileOs } from "../util/native";
 import { FileIcon, Icon } from "./Icons";
 import { useTasksRunning } from "./Tasks";
@@ -869,7 +871,9 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
         checked: VIEW_LEVELS[level] === name,
         run: () => setViewLevel(VIEW_LEVELS.indexOf(name)),
       })),
-      { id: "choose-details", label: "Choose details…", separatorBefore: true, run: () => useStore.setState({ chooseDetailsOpen: true }) },
+      { id: "dual-pane", label: "Second pane", checked: adv<boolean>(settings, "view.dualPane"), separatorBefore: true, run: () => updateSettings((s) => void (s.advanced["view.dualPane"] = !adv<boolean>(s, "view.dualPane"))) },
+      { id: "miller", label: "Miller columns", checked: adv<boolean>(settings, "view.miller"), run: () => updateSettings((s) => void (s.advanced["view.miller"] = !adv<boolean>(s, "view.miller"))) },
+      { id: "choose-details", label: "Choose details…", run: () => useStore.setState({ chooseDetailsOpen: true }) },
       {
         id: "details-pane",
         label: "Details pane",
@@ -910,6 +914,11 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       { id: "selectAll", label: "Select all", shortcut: "Ctrl+A", disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
       { id: "selectNone", label: "Select none", disabled: !inFolder, run: () => useStore.getState().runCommand("selectNone") },
       { id: "invert", label: "Invert selection", disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
+      { id: "selectGroup", label: "Select group…", shortcut: "Num +", disabled: !inFolder, run: () => useStore.getState().runCommand("selectGroup") },
+      { id: "deselectGroup", label: "Unselect group…", shortcut: "Num −", disabled: !inFolder, run: () => useStore.getState().runCommand("deselectGroup") },
+      { id: "restoreSelection", label: "Restore selection", shortcut: "Num /", disabled: !inFolder, run: () => useStore.getState().runCommand("restoreSelection") },
+      { id: "todo", label: openCount(folder ?? "") ? `To-do for this folder (${openCount(folder ?? "")})…` : "To-do for this folder…", separatorBefore: true, disabled: !inFolder || !folder, run: () => useStore.setState({ todoFor: folder }) },
+      { id: "fileTools", label: "File tools", disabled: !inFolder, children: fileToolsItems(selection) },
       { id: "properties", label: "Properties", icon: "info", separatorBefore: true, disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
       { id: "options", label: "Options", icon: "settings", run: () => useStore.getState().openSettings() },
     ]);

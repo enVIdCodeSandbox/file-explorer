@@ -10,6 +10,11 @@ import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
 import { ChooseDetails } from "./components/ChooseDetails";
+import { Viewer } from "./components/Viewer";
+import { Tools, openTools } from "./components/Tools";
+import { TodoDialog } from "./components/Todo";
+import { MillerColumns, SecondPane } from "./components/Panes";
+import { ButtonBar, CommandLine } from "./components/UserCommands";
 import { TerminalPanel } from "./components/Terminal";
 import { isMobileOs } from "./util/native";
 import { toggleTerminalPanel, useTerminal } from "./terminal/state";
@@ -213,6 +218,12 @@ export default function App() {
         case "toggleTypeFind": s.updateSettings((x) => void (x.advanced["files.typeFind"] = !adv<boolean>(x, "files.typeFind"))); s.showToast(adv<boolean>(useStore.getState().settings, "files.typeFind") ? "Type to find is on." : "Type to find is off."); break;
         case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
         case "toggleTerminal": toggleTerminalPanel(); break;
+        case "searchInFiles": openTools("grep"); break;
+        case "focusCommandLine": {
+          if (!adv<boolean>(s.settings!, "ui.commandLine")) s.updateSettings((x) => void (x.advanced["ui.commandLine"] = true));
+          setTimeout(() => document.querySelector<HTMLInputElement>(".command-line-input")?.focus(), 50);
+          break;
+        }
         case "thisPc": s.navigate(THIS_PC); break;
         case "home": s.navigate(HOME); break;
         case "toggleHidden": s.updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)); break;
@@ -256,6 +267,9 @@ export default function App() {
             <OpenWithDialog />
             <LockDialog />
             <ChooseDetails />
+            <Viewer />
+            <Tools />
+            <TodoDialog />
             <ShareDialog />
             <BatchRename />
             <ConnectServer />
@@ -310,7 +324,14 @@ export default function App() {
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
             {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}
-            {loc.kind === "folder" && <FileView path={loc.path} />}
+            {loc.kind === "folder" && <ButtonBar />}
+            {loc.kind === "folder" && (
+              <div className="pane-row">
+                {adv<boolean>(settings, "view.miller") ? <MillerColumns path={loc.path} /> : <FileView path={loc.path} />}
+                {adv<boolean>(settings, "view.dualPane") && !isRemote(loc.path) && !isArchiveLoc(loc.path) && <SecondPane leftFolder={loc.path} />}
+              </div>
+            )}
+            {loc.kind === "folder" && <CommandLine />}
             {/* Finder shows the path of the folder along the bottom, under the item count. */}
             {chrome === "macos" && loc.kind === "folder" && <Toolbar parts={["address"]} />}
           </div>
@@ -326,6 +347,9 @@ export default function App() {
       <OpenWithDialog />
       <LockDialog />
             <ChooseDetails />
+            <Viewer />
+            <Tools />
+            <TodoDialog />
       <ShareDialog />
       <BatchRename />
       <ConnectServer />

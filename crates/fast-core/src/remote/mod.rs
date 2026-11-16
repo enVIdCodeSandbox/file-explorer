@@ -11,6 +11,7 @@
 mod ftp;
 mod http;
 pub mod mtp;
+pub mod proxy;
 mod sftp;
 mod webdav;
 

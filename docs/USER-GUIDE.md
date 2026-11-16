@@ -318,6 +318,44 @@ The **Terminal** button on the left, under Servers, shows or hides a terminal in
 
 Settings > Terminal also has the shell to use (blank = your default), font size, scrollback, cursor and blinking.
 
+## File viewer (F3) and quick look (Space)
+
+**F3** opens the selected file in the viewer, **Space** opens a quick look at it (turn off "Select with checkboxes" if Space ticks items instead; both keys can be changed under Keyboard shortcuts). The viewer shows any size of file: only the part on screen is read. Modes: **Text** (T), **Hex** (H), **Binary** (B) and **Preview** (I) for pictures, audio, video, PDF and HTML pages. Choose the encoding (automatic, UTF-8, Windows ANSI, DOS/OEM, UTF-16, Cyrillic, Japanese, Chinese, Korean…), the bytes per row (the "line width" of hex and binary), the text size (+ and −) and whether lines wrap. **Ctrl+F** searches (F3 and Shift+F3 for next and previous, also in hex and binary), **Ctrl+G** goes to an offset. N and P (or the arrow keys in a quick look) go to the next and previous file of the folder. Files inside archives open too; files on servers must be downloaded first. In hex, click a byte to see its value.
+
+Settings > Advanced > Files and lists > "Quick look (space bar) uses" can hand the quick look to QuickLook or Seer (Windows) or the system preview (macOS Quick Look, GNOME Sushi). If the program you choose is not installed the built-in viewer opens. F3 always uses the built-in viewer.
+
+## Select group, restore selection
+
+On the number pad, **+** selects a group of items, **−** unselects a group, **\*** inverts the selection and **/** restores the selection you had before it was last cleared or replaced. The group dialog takes wildcards (`*.jpg; img_??.png | thumb*` where names after `|` are left out), or a regular expression, and can limit by size, date and text inside the files. The same entries are in the **…** menu.
+
+## Command line and your own commands
+
+Turn on **Show the command line under the file list** (Settings > Advanced > Interface), or press Ctrl+Shift+;. Type a command and press Enter: it is typed into a new tab of the built-in terminal, started in the folder you are viewing. **Ctrl+Enter** adds the name of the selected item to the line, **Ctrl+Shift+Enter** its full path; the up and down arrows recall earlier lines.
+
+Settings > Advanced > **User commands** defines commands for a button bar above the file list and a **Commands** menu. In the program, parameters and start folder you can use: `%P` the folder you are viewing (with a closing slash), `%p` without it, `%N` the item under the cursor, `%n` its name without extension, `%E` its extension, `%F` its full path, `%S` the names of the selected items, `%L` their full paths, `%D` the folder's name, `%%` a percent sign. Names with spaces are quoted for you. Programs are started directly, never through a shell; choose "In a new terminal tab" for console programs. (The older "Your own right-click actions" are unchanged.)
+
+## File tools
+
+The **…** menu and the right-click menu have a **File tools** entry (Alt+F7 opens the search):
+
+- **Compare files**: side-by-side lines with changes, additions and removals marked; options to ignore white space and case; binary files report the first byte that differs.
+- **Compare / synchronize folders**: lists what is only on one side, newer on one side or different (optionally by contents) and copies the ticked items left to right, right to left or both ways. Copying uses the normal transfers (conflicts and the queue work as usual).
+- **Duplicates**: by content (checked by size, then the first 64 KB, then a SHA-256 of the whole file), by name and size, or by size; tick all but the newest, oldest or first and delete the rest (the Recycle Bin settings apply).
+- **Split / combine**: parts named `name.001`, `name.002`… plus `name.crc`, which checks them when combining.
+- **Encode / decode**: UUE, XXE and MIME (base64). Decoding finds the encoded files inside mail text.
+- **Convert pictures**: JPEG, PNG, WebP, BMP, GIF; quality, scale by percent or fit to a size, name suffix, other folder. It never replaces the original.
+- **Search in files**: text or regular expression, file name masks, several places at once (`C:\ ; D:\`), and inside zip, docx, xlsx, pptx, odt, epub, jar and apk files. Double-click a match to open it.
+
+These work on files on this computer, not on servers.
+
+## Second pane, Miller columns, to-do lists
+
+In the View menu: **Second pane** shows another folder beside the file list (F5 copies and F6 moves the selection of the pane you are in to the other pane's folder, Tab switches panes, F3 views), and **Miller columns** shows one column per folder level with a preview of the selected file at the end (arrow keys move, Enter goes there). Both are off by default and the normal file list is unchanged. **To-do for this folder** in the **…** menu keeps a checklist and notes for a folder on this computer. The "already exists" question now shows both files with a picture, size and date and says which is newer or larger.
+
+## Servers through a proxy, and resuming FTP downloads
+
+Settings > Advanced > Transfers > "Connect to FTP and SFTP servers through a proxy" takes `socks5://host:1080`, `socks5://user:password@host:1080`, `socks4://host:1080` or `http://host:8080` (HTTP CONNECT). FTP sends the control and every data connection through it. An FTP download that is cut off by the connection leaves `name.<size>.fastpart` next to the target and the next download of the file continues from there; stopping a download yourself removes the part. FTPS and server-to-server (FXP) copies are not supported; copy through a folder on this computer.
+
 ## Terminal
 
 **Inside a zip or other archive** there is no folder a terminal could open in, so the terminal menu changes: *Unpack next to the archive, then open terminal*, *Unpack into this folder, then open terminal* and *Unpack, then open as administrator*. The archive is unpacked as a job with your other transfers; when it is done the terminal opens in the unpacked copy of the folder you were looking at. The right-click menu says the same ("Unpack, then open terminal here"), and an archive file itself has *Unpack, then open terminal in it*. On a server, where a terminal cannot open either, the terminal entries are left out.

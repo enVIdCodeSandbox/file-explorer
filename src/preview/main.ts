@@ -184,6 +184,53 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     return { name, path, parent: path.slice(0, Math.max(0, path.length - name.length - 1)), kind: isDir ? "folder" : "file", size: isDir ? 0 : 88_000, sizeOnDisk: isDir ? null : 90_112, created: now - 40 * day, modified: now - 2 * day, accessed: now - day, readonly: false, hidden: false, extension: isDir ? null : name.split(".").pop() ?? null, mime: isDir ? null : "application/octet-stream", symlinkTarget: null, unix: null, attributes: ["Archive"], image: null, itemCount: isDir ? 12 : null, volume: { name: "Local Disk", mount: "C:\\", fs: "NTFS", total: 512e9, available: 190e9, media: "ssd", removable: false, readOnly: false, online: true }, media: [] };
   },
   folder_stats: () => ({ files: 403, folders: 97, totalBytes: 9.66e9, maxDepth: 6, largest: [], byType: [{ extension: "zip", count: 79, bytes: 5.16e9 }, { extension: "mp4", count: 8, bytes: 2.15e9 }], newest: null, oldest: null, emptyFolders: 3, complete: true }),
+  tool_cancel: () => null,
+  tool_run: async (a) => {
+    const spec = a.spec as { kind: string };
+    const id = Number(a.id);
+    await emit("tool-progress", { id, done: 1, total: 2, note: "working" });
+    switch (spec.kind) {
+      case "compareFiles":
+        return { result: "text", changed: 1, added: 1, removed: 0, truncated: false, rows: [
+          { kind: "same", aNo: 1, a: "alpha", bNo: 1, b: "alpha" },
+          { kind: "changed", aNo: 2, a: "beta", bNo: 2, b: "BETA!" },
+          { kind: "added", aNo: null, a: "", bNo: 3, b: "gamma" } ] };
+      case "compareDirs":
+        return { same: 5, truncated: false, entries: [
+          { rel: "a.txt", status: "leftOnly", left: { size: 10, modified: 1, isDir: false }, right: null },
+          { rel: "sub\\b.txt", status: "rightNewer", left: { size: 10, modified: 1, isDir: false }, right: { size: 12, modified: 5, isDir: false } } ] };
+      case "duplicates":
+        return [{ size: 2048, files: [{ path: "C:\\x\\a.bin", modified: 1000 }, { path: "C:\\x\\copy of a.bin", modified: 2000 }] }];
+      case "grep":
+        await emit("tool-hits", { id, hits: [{ path: "C:\\x\\notes.txt", entry: null, line: 3, text: "the needle is here" }, { path: "C:\\x\\doc.docx", entry: "word/document.xml", line: 1, text: "needle again" }] });
+        return { files: 12, hits: 2, truncated: false };
+      case "split": return ["C:\\x\\big.001", "C:\\x\\big.002", "C:\\x\\big.crc"];
+      case "join": return { path: "C:\\x\\big", verified: true };
+      case "encode": return "C:\\x\\big.uue";
+      case "decode": return ["C:\\x\\big"];
+      case "convert": return [{ path: "C:\\x\\p.png", out: "C:\\x\\p.jpg", error: null }];
+    }
+    return null;
+  },
+  view_info: (a) => ({ name: String(a.path).split(/[\\/]/).pop(), size: /\.png$/i.test(String(a.path)) ? 70 : 1_000_000 * 40, modified: now }),
+  view_read: (a) => {
+    const offset = Number(a.offset);
+    const len = Number(a.len);
+    if (/\.png$/i.test(String(a.path))) return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    // 40 bytes per line: "Line 123456 xxxxx…" and a line feed.
+    let out = "";
+    const first = Math.floor(offset / 40);
+    for (let k = first; out.length < len + 40 && k < 1_000_000; k++) out += `Line ${k} `.padEnd(39, "x") + "\n";
+    const text = out.slice(offset - first * 40, offset - first * 40 + len);
+    return btoa(text);
+  },
+  view_find: (a) => {
+    const needle = atob(String(a.needle));
+    const m = /^line (\d+)/i.exec(needle);
+    return m ? Number(m[1]) * 40 : null;
+  },
+  archive_stage: (a) => a.sources,
+  run_program: (a) => { ((window as unknown as { __ran?: unknown[] }).__ran ??= []).push(a); return null; },
   term_info: () => ({ appElevated: false, os, defaultShell: os === "windows" ? "pwsh" : "bash" }),
   term_list: () => [...fakeSessions.values()],
   term_spawn: (a) => {

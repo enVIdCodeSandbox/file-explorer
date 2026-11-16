@@ -52,7 +52,22 @@ pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Ses
 
     let (handle, sftp) = rt.block_on(async {
         let addr = (server.host.as_str(), server.port);
-        let mut handle = match tokio::time::timeout(Duration::from_secs(20), client::connect(config, addr, handler)).await {
+        // Through the proxy, when one is set: the connection is made first and handed to the SSH client.
+        let connecting = async {
+            if super::proxy::current().is_some() {
+                let (host, port) = (server.host.clone(), server.port);
+                let tcp = tokio::task::spawn_blocking(move || super::proxy::connect(&host, port, Duration::from_secs(20)))
+                    .await
+                    .map_err(|e| russh::Error::IO(std::io::Error::other(e.to_string())))?
+                    .map_err(russh::Error::IO)?;
+                tcp.set_nonblocking(true).map_err(russh::Error::IO)?;
+                let tcp = tokio::net::TcpStream::from_std(tcp).map_err(russh::Error::IO)?;
+                client::connect_stream(config, tcp, handler).await
+            } else {
+                client::connect(config, addr, handler).await
+            }
+        };
+        let mut handle = match tokio::time::timeout(Duration::from_secs(20), connecting).await {
             Err(_) => return Err(fail(format!("{} did not answer in time.", server.host))),
             Ok(Ok(h)) => h,
             Ok(Err(e)) => {

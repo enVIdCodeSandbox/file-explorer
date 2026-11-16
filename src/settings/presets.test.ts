@@ -31,6 +31,7 @@ const blank = (): Settings =>
     advanced: {},
     keys: {},
     customActions: [],
+    userCommands: [],
     profiles: [],
     activeProfile: "",
     setupDone: false,

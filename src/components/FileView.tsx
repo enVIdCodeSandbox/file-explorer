@@ -4,6 +4,8 @@
 
 import { viewLevelOf } from "../util/viewLevel";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { SelectGroup } from "./SelectGroup";
+import { fileToolsItems } from "./Tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, on, type FileEntry, type FolderSize, type Listing } from "../api";
 import {
@@ -91,6 +93,9 @@ export function FileView({ path }: { path: string }) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [group, setGroup] = useState<"select" | "deselect" | null>(null);
+  // The selection from before the last time it was cleared or replaced as a whole, for "Restore selection" (Num /).
+  const lastSelection = useRef<{ now: Set<string>; before: Set<string> }>({ now: new Set(), before: new Set() });
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [width, setWidth] = useState(800);
   // The columns this folder shows: its own choice, else the one for all folders (always that one when "same columns in every folder" is on).
@@ -308,12 +313,30 @@ export function FileView({ path }: { path: string }) {
       });
   };
 
+  useEffect(() => {
+    const keep = lastSelection.current;
+    // One item ticked or unticked is an edit; anything bigger (cleared, all, a group, a new folder) replaces the selection.
+    let changed = 0;
+    selected.forEach((n) => keep.now.has(n) || changed++);
+    keep.now.forEach((n) => selected.has(n) || changed++);
+    if (keep.now.size > 0 && (changed > 1 || selected.size === 0)) keep.before = keep.now;
+    keep.now = selected;
+  }, [selected]);
+  const restoreSelection = () => {
+    const names = new Set(entries.map((e) => e.name));
+    const before = [...lastSelection.current.before].filter((n) => names.has(n));
+    if (before.length) setSelected(new Set(before));
+  };
+
   // Commands from the command bar (Select all, Rename…) and a name to select
   // once it exists (after creating something).
   useEffect(() => {
     if (!command) return;
     if (command.name === "selectAll") setSelected(new Set(entries.map((e) => e.name)));
     else if (command.name === "selectNone") setSelected(new Set());
+    else if (command.name === "selectGroup") setGroup("select");
+    else if (command.name === "deselectGroup") setGroup("deselect");
+    else if (command.name === "restoreSelection") restoreSelection();
     else if (command.name === "invert") setSelected(new Set(entries.filter((e) => !selected.has(e.name)).map((e) => e.name)));
     else if (command.name === "rename") startRename();
     else if (command.name === "select") setSelecting(true);
@@ -504,6 +527,9 @@ export function FileView({ path }: { path: string }) {
     const items: (MenuItem | false | null | undefined)[] = target
       ? [
           single && { id: "open", label: "Open", shortcut: "Enter", run: () => open(single) },
+          picked.length > 0 && { id: "fileTools", label: "File tools", children: fileToolsItems(picked.map((x) => fullPath(x.name))) },
+          single && !single.isDir && { id: "view", label: "View", shortcut: "F3", run: () => viewFile(single, false) },
+          single && !single.isDir && { id: "quickLook", label: "Quick look", shortcut: "Space", run: () => viewFile(single, true) },
           single?.isDir && { id: "openNewTab", label: "Open in new tab", run: () => newTab(fullPath(single.name), { background: true }) },
           single && !single.isDir && !isRemote(fullPath(single.name)) && !isArchiveLoc(fullPath(single.name)) && { id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(fullPath(single.name)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
@@ -700,6 +726,16 @@ export function FileView({ path }: { path: string }) {
     virtualizer.scrollToIndex(Math.floor(i / columnsPerRow));
   };
 
+  /** Open the viewer on a file, with the other files of the folder a key press away. */
+  const viewFile = (e: FileEntry, quick: boolean) => {
+    const siblings = entries.filter((x) => !x.isDir).map((x) => fullPath(x.name));
+    const path = fullPath(e.name);
+    const engine = String(settings.advanced["files.previewEngine"] ?? "builtin");
+    const builtIn = () => useStore.getState().openViewer(path, { quick, siblings });
+    if (quick && engine !== "builtin" && !isRemote(path) && !isArchiveLoc(path)) void api.previewExternal(path, engine).then((ok) => ok || builtIn()).catch(builtIn);
+    else builtIn();
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (renaming || (e.target as HTMLElement).tagName === "INPUT") return;
     const mod = e.ctrlKey || e.metaKey;
@@ -709,6 +745,11 @@ export function FileView({ path }: { path: string }) {
     // Shortcuts from Settings (the defaults are the keys below, so nothing changes unless they were).
     const cmd = commandFor(settings, e.nativeEvent);
     if (cmd === "open" && first) open(first);
+    else if (e.code === "NumpadAdd" && !e.ctrlKey && !e.altKey && !e.metaKey) setGroup("select");
+    else if (e.code === "NumpadSubtract" && !e.ctrlKey && !e.altKey && !e.metaKey) setGroup("deselect");
+    else if (e.code === "NumpadMultiply" && !e.ctrlKey && !e.altKey && !e.metaKey) setSelected(new Set(entries.filter((x) => !selected.has(x.name)).map((x) => x.name)));
+    else if (e.code === "NumpadDivide" && !e.ctrlKey && !e.altKey && !e.metaKey) restoreSelection();
+    else if (cmd === "view" && first && !first.isDir) viewFile(first, false);
     else if (cmd === "rename" && first) startRename();
     else if (cmd === "delete" && paths.length) void deletePaths(paths, e.shiftKey);
     else if (cmd === "newFolder") void create(true);
@@ -723,6 +764,7 @@ export function FileView({ path }: { path: string }) {
     else if (e.key === "PageDown") moveCursor(columnsPerRow * 15, e.shiftKey);
     else if (e.key === "PageUp") moveCursor(-columnsPerRow * 15, e.shiftKey);
     else if (checks && e.key === " " && entries[cursor.current]) selectIndex(cursor.current, { ctrlKey: false, metaKey: false, shiftKey: false });
+    else if (cmd === "quickLook" && first && !first.isDir) viewFile(first, true);
     else if (e.key === "Enter" && first) open(first);
     else if (e.key === "Backspace" && typeFind && findText) typeInto(e.key);
     else if (e.key === "Backspace") {
@@ -1198,6 +1240,15 @@ export function FileView({ path }: { path: string }) {
 
   return (
     <div className="file-view" data-view={details ? "details" : "grid"} data-level={level} data-selecting={(mobile && selecting) || undefined}>
+      {group && (
+        <SelectGroup
+          mode={group}
+          entries={entries}
+          folder={path}
+          onClose={() => setGroup(null)}
+          onApply={(names) => setSelected(group === "select" ? new Set([...selected, ...names]) : new Set([...selected].filter((n) => !names.includes(n))))}
+        />
+      )}
       <div
         ref={scroller}
         className="file-scroller"
