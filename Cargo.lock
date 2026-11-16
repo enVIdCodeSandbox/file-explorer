@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "fast-core"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -1629,6 +1629,7 @@ dependencies = [
  "trash",
  "webpki-roots",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "windows-sys 0.59.0",
  "zbus",
  "zip",
@@ -1636,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "fast-file-explorer"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",

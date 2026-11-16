@@ -95,6 +95,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Needed by the #[implement] macro (a drag that offers only a list of paths).
+windows-core = "0.62"
+
 # The system's own right-click menu (entries added by other programs).
 windows = { version = "0.62", features = [
     "Win32_Foundation",

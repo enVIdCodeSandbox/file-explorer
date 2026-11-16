@@ -51,6 +51,8 @@ pub mod thumbs;
 pub mod transfer;
 pub mod treemap;
 pub mod crashlog;
+#[cfg(windows)]
+pub mod netdrag;
 pub mod usage;
 pub mod watch;
 

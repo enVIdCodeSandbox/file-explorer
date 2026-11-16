@@ -211,6 +211,27 @@ mod imp {
         true
     }
 
+    /// Windows, for items on a network location: offer the system only the list of paths. The system's own data
+    /// object looks the items up (a folder's whole contents, over the network) on the window's thread, which froze the
+    /// app for as long as the share took to answer. The program receiving the drop reads the files itself.
+    #[cfg(windows)]
+    pub fn drag_paths_only(window: &tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
+        let files: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).filter(|p| p.is_absolute()).collect();
+        if files.is_empty() {
+            return Err("Nothing to drag".into());
+        }
+        fast_core::crashlog::note(&format!("drag out (list of paths only): {} item(s), first {}", files.len(), files[0].display()));
+        fast_core::crashlog::flush();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        window
+            .run_on_main_thread(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || fast_core::netdrag::drag_paths(files).map(|_| ())));
+                let _ = tx.send(outcome.unwrap_or_else(|_| Err("The system could not start the drag".to_string())));
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(Ok(()))
+    }
+
     pub fn drag_out(window: &tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
         use std::path::PathBuf;
         let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()).collect();
@@ -349,6 +370,10 @@ pub async fn drag_out(window: tauri::WebviewWindow, state: State<'_, Shared>, pa
     };
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = &state;
+    #[cfg(windows)]
+    if paths.iter().any(|p| network::is_network(std::path::Path::new(p))) && !state.settings.read().advanced.get("drag.network").and_then(|v| v.as_str()).is_some_and(|m| m != "direct") {
+        return imp::drag_paths_only(&window, paths);
+    }
     imp::drag_out(&window, paths)
 }
 
