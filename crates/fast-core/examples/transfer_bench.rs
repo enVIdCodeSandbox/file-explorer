@@ -116,7 +116,7 @@ fn median(mut v: Vec<Duration>) -> Duration {
 }
 
 fn engine(set: &Set, dest: &Path, method: MethodPref, max_parallel: usize, budget: &Budget) -> bool {
-    let spec = TransferSpec { sources: vec![set.folder.clone()], dest_dir: dest.to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: true, large_threshold: 0, max_parallel, method, skip_identical: true, active_files: 0, speed_test: false };
+    let spec = TransferSpec { sources: vec![set.folder.clone()], dest_dir: dest.to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: true, large_threshold: 0, max_parallel, method, skip_identical: true, active_files: 0, speed_test: false, early_start_ms: 0 };
     let last = std::sync::Arc::new(parking_lot::Mutex::new(None));
     let sink = last.clone();
     let handle = transfer::start(1, spec, budget.clone(), fast_core::drives::list_drives(), None, move |p| *sink.lock() = Some(p));

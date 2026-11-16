@@ -21,6 +21,8 @@ pub struct SizeEntry {
 pub struct SizeCache {
     map: HashMap<String, SizeEntry>,
     dirty: bool,
+    /// The saved file is still being read in the background: nothing is written until it has been merged in.
+    loading: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,7 +44,20 @@ impl SizeCache {
             .filter(|d| d.version == 1)
             .map(|d| d.entries)
             .unwrap_or_default();
-        SizeCache { map: entries.into_iter().collect(), dirty: false }
+        SizeCache { map: entries.into_iter().collect(), dirty: false, loading: false }
+    }
+
+    /// An empty cache that is waiting for `finish_loading`, so the app need not read a big file before it starts.
+    pub fn loading() -> SizeCache {
+        SizeCache { loading: true, ..Default::default() }
+    }
+
+    /// Merge what was read from the file; sizes measured in the meantime win over older ones.
+    pub fn finish_loading(&mut self, loaded: SizeCache) {
+        for (k, v) in loaded.map {
+            self.map.entry(k).or_insert(v);
+        }
+        self.loading = false;
     }
 
     pub fn get(&self, path: &Path) -> Option<SizeEntry> {
@@ -103,7 +118,7 @@ impl SizeCache {
 
     /// Writes the file if anything changed since the last save.
     pub fn save(&mut self, file: &Path) -> crate::Result<()> {
-        if !self.dirty {
+        if !self.dirty || self.loading {
             return Ok(());
         }
         if self.map.is_empty() {
@@ -200,5 +215,25 @@ mod tests {
         let file = dir.join("sizes.json");
         std::fs::write(&file, b"{not json").unwrap();
         assert!(SizeCache::load(&file).is_empty());
+    }
+
+    #[test]
+    fn a_cache_still_loading_writes_nothing_and_keeps_newer_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sizes.json");
+        let mut old = super::SizeCache::default();
+        old.put(std::path::Path::new("/a"), 1, 1, 1);
+        old.put(std::path::Path::new("/b"), 2, 2, 2);
+        old.save(&file).unwrap();
+
+        let mut c = super::SizeCache::loading();
+        c.put(std::path::Path::new("/a"), 99, 9, 50);
+        c.save(&file).unwrap();
+        assert!(super::SizeCache::load(&file).get(std::path::Path::new("/b")).is_some(), "the saved file was not overwritten while loading");
+        c.finish_loading(super::SizeCache::load(&file));
+        assert_eq!(c.get(std::path::Path::new("/a")).unwrap().bytes, 99);
+        assert_eq!(c.get(std::path::Path::new("/b")).unwrap().bytes, 2);
+        c.save(&file).unwrap();
+        assert_eq!(super::SizeCache::load(&file).get(std::path::Path::new("/a")).unwrap().bytes, 99);
     }
 }

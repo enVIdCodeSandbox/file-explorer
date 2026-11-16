@@ -100,7 +100,8 @@ pub fn run() {
                 index_wake: Default::default(),
                 search_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
                 size_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
-                folder_sizes: Mutex::new(fast_core::sizecache::SizeCache::load(&paths.sizes)),
+                // Read in the background (a long-used cache is tens of MB of JSON): sizes show as they are found until it is in.
+                folder_sizes: Mutex::new(fast_core::sizecache::SizeCache::loading()),
                 locks: RwLock::new(fast_core::locks::Locks::load(&paths.locks)),
                 monitor: Mutex::new(sysinfo::System::new()),
                 transfers: Mutex::new(HashMap::new()),
@@ -109,6 +110,13 @@ pub fn run() {
                 paths,
             });
             app.manage(state.clone());
+            {
+                let st = state.clone();
+                let _ = std::thread::Builder::new().name("size-cache".into()).spawn(move || {
+                    let loaded = fast_core::sizecache::SizeCache::load(&st.paths.sizes);
+                    st.folder_sizes.lock().finish_loading(loaded);
+                });
+            }
             crash::remember_previous(earlier);
             crash::send_pending(&state);
 
@@ -181,6 +189,10 @@ pub fn run() {
             tools::view_find,
             commands::thumbs_prewarm,
             commands::stat_many,
+            commands::trash_list,
+            commands::trash_restore,
+            commands::trash_purge,
+            commands::trash_empty,
             commands::rename_by_copy,
             commands::folder_fill,
             commands::run_program,
@@ -357,6 +369,7 @@ pub fn run() {
             crash::crash_log_read,
             crash::crash_send,
             crash::crash_log_save,
+            crash::save_text_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FAST File Explorer")

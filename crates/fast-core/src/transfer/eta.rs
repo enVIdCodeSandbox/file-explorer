@@ -318,6 +318,112 @@ mod tests {
 }
 
 
+/// How fast the job is really getting done, measured, not modelled.
+///
+/// The cost model above needs files to finish one by one under its own eyes, and starts from what past
+/// jobs cost; a tool such as Robocopy reports only totals, and a past job on another day may have been
+/// ten times slower. This measures the one number that matters: how much of the job (as a share of the
+/// whole, weighted between files and bytes) is finished each second.
+///
+/// Which stretch of the past is worth looking at depends on how far ahead the guess has to reach. With
+/// minutes to go, a few seconds of speed say little and a minute of it says more; with seconds to go the
+/// last few seconds are what matters. So the rate is taken over a window about half as long as the time
+/// left, grown from a few seconds as long as the older stretch was going at about the same pace as the
+/// newer one. When the pace really changed, the older stretch disagrees, the window stops short of it,
+/// and the estimate lands on the new pace within seconds instead of averaging it with the old one.
+#[derive(Debug, Default)]
+pub struct LiveRate {
+    /// (seconds since copying began, finished share of the job), newest last.
+    samples: std::collections::VecDeque<(f64, f64)>,
+    /// Share of the job finished per second, as currently believed.
+    rate: Option<f64>,
+    /// Seconds left as last worked out: it says how far ahead the next guess has to reach.
+    hint: f64,
+}
+
+const WINDOWS: [f64; 7] = [4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
+/// Samples further back than this are not needed.
+const HISTORY_SECS: f64 = 520.0;
+
+impl LiveRate {
+    /// The finished share at `t` seconds after the start, read linearly between samples (the job began at 0).
+    fn share_at(&self, t: f64) -> Option<f64> {
+        self.samples.back()?;
+        let mut prev = (0.0, 0.0);
+        for &(ts, sh) in self.samples.iter() {
+            if ts >= t {
+                let span = ts - prev.0;
+                return Some(if span <= 0.0 { sh } else { prev.1 + (sh - prev.1) * ((t - prev.0) / span).clamp(0.0, 1.0) });
+            }
+            prev = (ts, sh);
+        }
+        Some(prev.1)
+    }
+
+    /// Rate over the stretch from `from` to `to` (seconds since the start), when there is data for all of it.
+    fn rate_between(&self, from: f64, to: f64) -> Option<f64> {
+        if to - from < 0.5 || from < -1e-9 {
+            return None;
+        }
+        let (a, b) = (self.share_at(from)?, self.share_at(to)?);
+        Some(((b - a) / (to - from)).max(0.0))
+    }
+
+    /// Add a reading and return the current rate (share of the job per second), once there is one.
+    pub fn update(&mut self, t: f64, share: f64) -> Option<f64> {
+        if !t.is_finite() || !share.is_finite() {
+            return self.rate;
+        }
+        if self.samples.back().is_some_and(|l| t - l.0 < 0.2) {
+            self.samples.pop_back();
+        }
+        self.samples.push_back((t, share));
+        while self.samples.len() > 2 && t - self.samples[1].0 >= HISTORY_SECS {
+            self.samples.pop_front();
+        }
+        if t < 0.8 {
+            return self.rate;
+        }
+        // How far back to look: about half the time left, from a few seconds to minutes.
+        let reach = if self.hint > 0.0 { (self.hint * 0.5).clamp(4.0, 256.0) } else { 256.0 };
+        let mut best = self.rate_between((t - WINDOWS[0]).max(0.0), t).or(self.rate_between(0.0, t));
+        let mut previous = WINDOWS[0];
+        for &w in WINDOWS.iter().skip(1) {
+            // Wider only while the stretch before the window can be looked at too, and the window is within reach.
+            if w > reach || w > t {
+                break;
+            }
+            let (Some(inner), Some(older), Some(wide)) = (self.rate_between(t - previous, t), self.rate_between(t - 2.0 * previous, t - previous), self.rate_between(t - w, t)) else { break };
+            // The newer stretch against the one just before it: a different pace means the older one is another regime.
+            let ratio = if inner.min(older) <= 1e-12 { if inner.max(older) <= 1e-12 { 1.0 } else { f64::MAX } } else { inner.max(older) / inner.min(older) };
+            if ratio - 1.0 > 0.15 + 0.9 / previous.sqrt() {
+                break;
+            }
+            best = Some(wide);
+            previous = w;
+        }
+        self.rate = best;
+        self.rate
+    }
+
+    /// Seconds left at the current rate, when the rate is known and above zero.
+    pub fn remaining(&mut self, share: f64) -> Option<f64> {
+        let rate = self.rate.filter(|r| *r > 1e-9)?;
+        let left = ((1.0 - share).max(0.0)) / rate;
+        self.hint = left;
+        Some(left)
+    }
+}
+
+/// Joins what the cost model expects with what is measured. Measurement takes over as it gets
+/// reliable: after a few seconds, or when a few percent of the job is done, whichever comes first.
+pub fn blend_estimates(model: Option<f64>, live: Option<f64>, copying: f64, share: f64) -> Option<f64> {
+    let Some(live) = live else { return model };
+    let Some(model) = model else { return Some(live) };
+    let trust = (copying / 6.0).max(share / 0.02).clamp(0.0, 1.0);
+    Some(live * trust + model * (1.0 - trust))
+}
+
 /// Smooths the time-left readout and says how far to trust it (0..=1).
 ///
 /// Confidence needs both enough data (some seconds of copying, or a good
@@ -382,9 +488,17 @@ impl EtaTracker {
         } else if confidence >= 0.85 {
             self.trusted = true;
         }
-        let alpha = 0.1 + 0.4 * (1.0 - confidence);
+        // The shown time counts down by the clock, and is pulled toward the new estimate at a pace that depends on
+        // the scale: with minutes left a few seconds of difference barely move it, with seconds left it follows closely,
+        // and an estimate that is far off lands quickly whatever the scale.
         let shown = match self.shown {
-            Some(prev) => (prev - dt).max(0.0) * (1.0 - alpha) + raw * alpha,
+            Some(prev) => {
+                let counted = (prev - dt).max(0.0);
+                let off = ((raw - counted).abs() / raw.max(counted).max(1.0)).min(1.0);
+                let tau = (0.1 * raw).clamp(1.0, 30.0) / (1.0 + 10.0 * off);
+                let alpha = 1.0 - (-dt.max(0.0) / tau).exp();
+                counted + (raw - counted) * alpha
+            }
             None => raw,
         };
         self.shown = Some(shown);
@@ -436,5 +550,172 @@ mod tracker_tests {
         let (a, _) = t.update(Some(30.0), 0.1, 0.0, 0.0);
         let (b, _) = t.update(Some(40.0), 0.1, 0.0, 0.1);
         assert!(b.unwrap() < 40.0 && b.unwrap() > a.unwrap() - 0.1);
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    /// Runs a job whose speed (share per second) is given by `speed(t)`; returns (t, estimated total secs) each second.
+    fn run(total: f64, speed: impl Fn(f64) -> f64, model: Option<f64>) -> Vec<(f64, f64)> {
+        let (mut lr, mut share, mut t) = (LiveRate::default(), 0.0f64, 0.0f64);
+        let mut out = Vec::new();
+        while share < 1.0 && t < total * 5.0 {
+            t += 0.25;
+            share = (share + speed(t) * 0.25).min(1.0);
+            let live = lr.update(t, share).and_then(|_| lr.remaining(share));
+            if let Some(left) = blend_estimates(model, live, t, share) {
+                out.push((t, t + left));
+            }
+        }
+        out
+    }
+
+    fn at(v: &[(f64, f64)], t: f64) -> f64 {
+        v.iter().find(|p| p.0 >= t).unwrap().1
+    }
+
+    #[test]
+    fn a_steady_job_is_estimated_closely_within_seconds() {
+        // 200 seconds in all.
+        let v = run(200.0, |_| 1.0 / 200.0, None);
+        for t in [5.0, 20.0, 100.0] {
+            let est = at(&v, t);
+            assert!((est - 200.0).abs() / 200.0 < 0.05, "at {t}s the job was said to take {est}s");
+        }
+    }
+
+    #[test]
+    fn a_model_that_is_ten_times_off_is_overruled_quickly() {
+        // The model says 27 minutes (1620s ahead); the job takes 270s.
+        let v = run(270.0, |_| 1.0 / 270.0, Some(1620.0));
+        let est = at(&v, 10.0);
+        assert!((est - 270.0).abs() / 270.0 < 0.15, "after 10s: {est}");
+        let est = at(&v, 30.0);
+        assert!((est - 270.0).abs() / 270.0 < 0.05, "after 30s: {est}");
+    }
+
+    #[test]
+    fn a_burst_at_the_start_does_not_ruin_the_estimate() {
+        // A cache soaks up the first two seconds at 20x speed, then the real speed (270 s job).
+        let v = run(270.0, |t| if t < 2.0 { 20.0 / 270.0 } else { 1.0 / 270.0 }, None);
+        // The burst did 15% of the job in 2 s: the job takes 2 + 0.85 * 270 s in all.
+        let truth = 2.0 + 0.85 * 270.0;
+        let est = at(&v, 30.0);
+        assert!((est - truth).abs() / truth < 0.08, "after 30s: {est} vs {truth}");
+    }
+
+    #[test]
+    fn a_real_change_of_speed_lands_within_seconds() {
+        // 100 s at one speed, then twice as fast: the job (done 40% in the first 100s) ends at 100 + 60%/(2/250).
+        let speed = |t: f64| if t < 100.0 { 0.4 / 100.0 } else { 2.0 * 0.4 / 100.0 };
+        let v = run(250.0, speed, None);
+        let truth = 100.0 + 0.6 / (0.8 / 100.0);
+        let est = at(&v, 112.0);
+        assert!((est - truth).abs() / truth < 0.12, "12s after the change: {est} vs {truth}");
+        let est = at(&v, 130.0);
+        assert!((est - truth).abs() / truth < 0.05, "30s after: {est} vs {truth}");
+    }
+
+    #[test]
+    fn jitter_does_not_make_the_number_jump() {
+        // Speed wobbles +-40% every second; the estimate stays within 10% of the truth.
+        let v = run(300.0, |t| (1.0 + 0.4 * (t * 6.283).sin()) / 300.0, None);
+        for (t, est) in v.iter().filter(|p| p.0 > 15.0 && p.0 < 250.0) {
+            assert!((est - 300.0).abs() / 300.0 < 0.10, "at {t}s: {est}");
+        }
+    }
+
+    #[test]
+    fn a_stall_stretches_the_estimate_instead_of_dividing_by_zero() {
+        let mut lr = LiveRate::default();
+        let mut share = 0.0;
+        for i in 1..=40 {
+            let t = i as f64 * 0.5;
+            share += 0.002;
+            lr.update(t, share);
+        }
+        let before = lr.remaining(share).unwrap();
+        for i in 41..=100 {
+            lr.update(i as f64 * 0.5, share);
+        }
+        let after = lr.remaining(share).filter(|r| r.is_finite());
+        assert!(after.is_none_or(|a| a > before * 2.0), "{before} then {after:?}");
+    }
+
+    #[test]
+    fn the_screenshot_case() {
+        // 12% done after 46 s (37 MB/s, 570 files/s, 128k files and 9.7 GB left): about 5.5 minutes, not 27.
+        let mut lr = LiveRate::default();
+        for i in 1..=46 {
+            lr.update(i as f64, 0.12 * i as f64 / 46.0);
+        }
+        let left = blend_estimates(Some(27.0 * 60.0), lr.remaining(0.12), 46.0, 0.12).unwrap();
+        assert!((left - 337.0).abs() < 40.0, "{left}");
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    /// A tracker whose estimate has settled at `secs` left.
+    fn settled(secs: f64) -> EtaTracker {
+        let mut t = EtaTracker::default();
+        for i in 0..60 {
+            t.update(Some(secs), 0.25, 0.3, 30.0 + i as f64 * 0.25);
+        }
+        t
+    }
+
+    #[test]
+    fn with_minutes_left_seconds_of_noise_barely_move_the_time() {
+        let mut t = settled(1200.0);
+        let before = t.shown.unwrap();
+        // One estimate that is 30 seconds off (2.5%) for a moment.
+        let (shown, _) = t.update(Some(1230.0), 0.25, 0.3, 46.0);
+        assert!((shown.unwrap() - (before - 0.25)).abs() < 1.0, "{before} -> {shown:?}");
+    }
+
+    #[test]
+    fn with_seconds_left_a_few_seconds_matter_at_once() {
+        let mut t = settled(20.0);
+        let mut shown = 0.0;
+        // The estimate jumps to 30 s left: within two seconds most of the way there.
+        for i in 0..8 {
+            let gone = (i + 1) as f64 * 0.25;
+            shown = t.update(Some(30.0 - gone), 0.25, 0.9, 46.0 + gone).0.unwrap();
+        }
+        // 2 s later the truth is 28 s left; the readout is within 3 s of it.
+        assert!((shown - 28.0).abs() < 3.0, "{shown}");
+    }
+
+    #[test]
+    fn a_far_off_estimate_lands_quickly_at_any_scale() {
+        let mut t = settled(1620.0);
+        let mut shown = 0.0;
+        // The truth is 300 s: 15 seconds later the readout is most of the way down.
+        for i in 0..60 {
+            let gone = (i + 1) as f64 * 0.25;
+            shown = t.update(Some(300.0 - gone), 0.25, 0.3, 46.0 + gone).0.unwrap();
+        }
+        // 15 s later the truth is 285 s left: the readout is within 30% of it (a 5x error cut to under 1.3x).
+        assert!((shown - 285.0).abs() / 285.0 < 0.30, "{shown}");
+    }
+
+    #[test]
+    fn the_readout_changes_by_the_same_share_whether_it_counts_seconds_or_minutes() {
+        // Same 10% disagreement: the readout moves a similar share of the way in a similar time.
+        for left in [60.0, 600.0, 3600.0] {
+            let mut t = settled(left);
+            let start = t.shown.unwrap();
+            let mut shown = start;
+            for i in 0..12 {
+                shown = t.update(Some(left * 1.1), 0.25, 0.3, 46.0 + i as f64 * 0.25).0.unwrap();
+            }
+            let moved = (shown - (start - 3.0)) / (left * 1.1 - (start - 3.0));
+            assert!((0.0..=1.0).contains(&moved), "{left}: moved {moved}");
+        }
     }
 }

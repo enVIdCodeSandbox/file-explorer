@@ -42,9 +42,11 @@ Copy and Cut put the files on the system clipboard, so you can paste into other 
 
 Copies, moves and deletes appear as cards at the bottom. Each shows speed, time remaining and the algorithm in use.
 
+* **Big folders start at once.** Counting the files of a large folder can take minutes over a network, so the copy begins after half a second of counting and the card says *Counting files…* with how many were found so far. The time remaining appears when the count is over. Change the delay (or turn this off) in Settings → Advanced → Speed and memory → *Start copying while still counting*.
 * **Pause / resume.** Work continues where it stopped.
 * **Cancel.** Stops safely. If a transfer is stuck (a share that stopped answering, for example) a **Force stop** button appears; Shift-click the ✕ to force at once. A force-stopped transfer disappears immediately; files already copied stay.
-* **Time remaining** starts as a rough guess (it says so) and improves as the transfer settles. For big jobs the app first runs a very short speed test of the drives involved; it leaves nothing behind.
+* **Time remaining** is worked out from how fast the job is really going, looking back about half as far as the time that is left: a minute or more when minutes remain, a few seconds when seconds remain, and not further back than when the speed last changed, so it settles on a new speed within seconds. What is shown counts down by the clock and moves toward a new estimate in proportion to its size: seconds of difference barely move a 20-minute readout and matter a lot on a 20-second one, and an estimate that is far off corrects quickly. It starts from what earlier jobs and the drive tests say and hands over to the measured speed within about six seconds.
+* **Time remaining (first seconds)** starts as a rough guess (it says so) and improves as the transfer settles. For big jobs the app first runs a very short speed test of the drives involved; it leaves nothing behind.
 * **The graph** shows bytes/s and files/s over time. The dashed line at the right edge is the current speed.
 * **Deleting, compressing and unpacking are measured like copies.** Their cards show the same speed, time left (with the same *rough estimate → settled* note) and, in the expanded window, the same graph (items per second, plus bytes per second when the job knows how many bytes there are), typical time, average and peak speed. Moving to the Recycle Bin / Trash counts items only. Each finished job is remembered with the others (unless *Remember how fast my drives are* is off in Settings → File transfers), kept apart by kind: a delete is judged by earlier deletes on the same drive, not by copies. Copying and moving between folders run through the transfer engine and have always had all of this. A move inside one drive is instant but is still shown and remembered: its graph is a short rise to its speed, and it is kept in the history without ever shaping an estimate.
 * **Which method is being used.** Settings → Advanced → Transfers → *Transfer methods in use* shows how every kind of job is being carried out right now: copies and moves (built-in engine, Robocopy, rsync, rclone, SMB-tuned or NFS-tuned), deletes (direct removal or the Recycle Bin / Trash), compressing and unpacking, copies into and out of archives, servers and phones (the connection, such as SFTP over SSH, FTP, WebDAV or MTP) and update downloads. It also shows the latest method of each kind, which copy methods this computer can use, and for each method and kind how many remembered jobs used it and their average speed. The expanded Transfers window names the method of each transfer under *Algorithm* too.
@@ -67,6 +69,18 @@ Folders with the same name are merged, and the files inside them are asked about
 ## Deleting
 
 Delete (or the toolbar button) sends items to the Recycle Bin / Trash after the usual confirmation. **Shift+Delete**, or **Shift-click on the toolbar Delete button**, deletes permanently after a confirmation. As administrator, items cannot go to the bin and are deleted permanently; the prompt says so.
+
+**Always delete permanently.** Settings → General → *Always delete permanently (skip the Recycle Bin / Trash)* makes every delete remove items for good, without going through the bin. It is off by default and carries a warning: items deleted this way cannot be recovered. It follows *Ask before deleting* (turn that off too and nothing asks); Shift+Delete and phones always ask.
+
+## The Recycle Bin / Trash
+
+*Recycle Bin* (*Trash* on macOS and Linux) is in the navigation pane right under This PC. It lists everything that was deleted with where it came from, when and how big it was; click a heading to sort.
+
+* **Looking without restoring.** **Open** (Enter, double-click) opens a deleted file in its program or a deleted folder as a folder you can browse, and **Preview** (Space, or right-click) shows a file in the app's viewer. Nothing is put back, and nothing leaves the bin.
+* **Copy to…** copies the selected items to a folder you choose; the originals stay in the bin.
+* **Put back** returns items to where they were deleted from (Windows and Linux; macOS cannot do this from outside Finder).
+* **Delete permanently** and **Empty the Recycle Bin** ask first and cannot be undone.
+* On Windows the list also finds items through the bin's own records on each drive, so they can be opened even where the system names them differently.
 
 Pasting into a folder that a delete is still working on does not race it: the paste waits in line (shown at the bottom with the other jobs, with a ✕ to take it out) and starts by itself when the delete is over, so the files that were deleted are replaced by the pasted ones. Pastes that overlap wait for each other in the order you made them, and pasting the very same thing again while it waits does nothing new.
 
@@ -286,13 +300,17 @@ Settings > Performance > *When minimized or in the background* decides how much 
 
 Performance presets set this too (the heaviest ones use Gentle, the rest Aggressive). As soon as you change it yourself, *Keep my background setting when I apply a preset* turns on and presets leave it alone. Turn that off to let presets set it again.
 
+## Starting fast
+
+The window is drawn at once: a plain placeholder in your theme appears before anything loads, and the whole window (tabs, sidebar, folder) is then drawn from a copy of how it was last time, with the real data taking over a moment later. Settings → Advanced → Speed and memory → *Draw the window at once from how it was last time* turns this off (no copy is kept then). The copy never holds the update token. Things nobody waits for (following growing files, the crash trail, the check for a crash last time, start-with-computer, the network check) wait until the first screen is up, and the big list of remembered folder sizes loads in the background.
+
 ## Updates
 
 Settings → Updates (also asked on first run, everything on by default). The app looks in two places and offers the newer of what it finds: the repository's **Releases** page (the installer for your kind of computer, no sign-in needed) and the builds of its **GitHub Actions** workflow. Releases are compared by commit when the release names one, otherwise by version number; workflow builds by the commit they were built from. When both have the same build, the release is used because it needs no token.
 
 * **Checking.** When the app opens and then every few hours while it stays open (not while it is minimized with the background saver on). *Check now* checks at once.
 * **Telling you.** A short note appears in the notifications once for each new build, then never again until the next one.
-* **Downloading.** With *Download new builds automatically* the build downloads as a job with your other transfers (cancel it there like any transfer). Otherwise press *Update now*.
+* **Downloading.** With *Download new builds automatically* the build downloads as a job with your other transfers (cancel it there like any transfer). Otherwise press *Update now*, which starts at once from what the last check found. A build of a few MB or more is fetched over several connections at once (up to 8, one for each 2 MB), so a fast link is used in full; a part that breaks is asked for again from where it stopped, and a server that cannot do parts is simply read over one connection.
 * **Installing.** No installer screens: on Windows the setup program runs silently after the app closes and the app starts again; an AppImage is replaced in place and restarted. For `.deb`, `.rpm` and macOS `.dmg` the system's own installer opens, because a program cannot install those silently without administrator rights. When a download finishes you are asked to **restart now** or **later**; if you wait, *Restart to finish updating* stays in Settings → Updates and you are asked again next time the app opens.
 * **What counts as newer.** A release is newer when its version number is higher (and it was not published before the running build was made). Any other build is newer when it is a different build **and** dated after the moment the running build was made (the date is built into the app). An older release or an old kept workflow run is never offered, which stops the app from "updating" back and forth between two builds.
 * **Releases only by default.** The app looks only at the repository's Releases, which download straight from GitHub. Builds from the automated runs ("unreleased", fetched through nightly.link unless you give a token) are used only when *Also offer unreleased builds* is on.
@@ -318,6 +336,12 @@ Right-click a folder or a drive and choose **Lock with passcode…** (the last i
 ## Thumbnails
 
 In the larger icon views (Medium, Large, Extra large) files show a preview of their contents: pictures, the first page of PDFs and Office documents, and a frame from videos. Details, List and Small icons keep the plain icon, and the details pane always shows a preview of the selected file. All of that is in Settings > Thumbnails: each kind of file, each view, sharpness, how many are made at once, network drives (**Automatic** by default: thumbnails are made while the computer is on a cable, Ethernet or fibre, and not on Wi-Fi or mobile data; or Always on / Always off), the largest picture to preview and which frame of a video to show. Windows uses the same preview handlers as Explorer and macOS uses Quick Look. On Linux, PDFs need `pdftoppm` (poppler-utils) and videos need `ffmpegthumbnailer` or `ffmpeg`; without them those files keep their icons. Office documents are previewed only on Windows and macOS. Every performance level that has thumbnails shows them for pictures, documents and videos; videos and documents can be switched off separately in Settings > Thumbnails. Photos taken in portrait are turned the right way up from their camera's orientation tag.
+
+## Typing a shell in the address bar
+
+Type `cmd`, `powershell`, `pwsh`, `wt` or `wsl` (on macOS and Linux: `terminal`, `bash`, `zsh`, `fish` or `sh`) in the address bar and press Enter: the real Command Prompt, PowerShell or terminal opens in the folder you are viewing (your home folder on pages that are not a folder), as in Windows Explorer. Settings → Advanced → Terminal panel → *Typing cmd, powershell… in the address bar* can open a tab in the built-in terminal instead, or turn this off. While the built-in terminal has the keyboard, Ctrl+R and Ctrl+Y go to the shell, not to Refresh and Redo.
+
+**Text size.** Ctrl + scroll, or Ctrl + and Ctrl − (Ctrl 0 resets), changes the size of the text in the built-in terminal (kept in Settings → Advanced → Terminal panel → Text size). In a folder, Ctrl + and Ctrl − change the view just like Ctrl + scroll (Settings → Files and lists → *Ctrl + scroll changes the view* turns both off).
 
 ## Built-in terminal (Ctrl+`)
 
@@ -455,3 +479,10 @@ Find them in Settings > Storage > Crash logs: Copy, Save as text file, or Send t
 Some shares refuse to rename a file that is plainly there and can be read (a pool that combines a fast cache disk and a big disk behind one share is the usual case: the rename fails with "not found", in Windows Explorer too). When that happens, and the setting is turned on, the app can rename the file by copying it under the new name next to it and then removing the original, which is what moving it out, renaming it and putting it back does. It copies the whole file, shows progress in the task list, can be cancelled (the original is then kept) and can be undone. Files only, not folders.
 
 Settings > Advanced > "When a server will not rename a file": off (the default, the error is just shown), offer to rename by copying, or always rename by copying.
+
+## Finished jobs
+
+When a copy, move, delete or other job ends cleanly, its card and the operations window (the one with the speed graph) close at once, and a notification says it is done. Jobs that finish with errors stay on screen until you dismiss them.
+
+The last state of every finished job is kept in memory until you close the app, nothing is written to disk. Reopen it from the small **Finished (n)** button where the cards appear, or from **Graph and details** on the notification: you get the final graph and every detail row, as they stood at the end. **Save…** writes a job to a file you choose: a web page with the graph, a text report, or data (JSON). The newest 30 are kept. The old setting "Hide a finished transfer after" is gone, since they now close immediately.
+

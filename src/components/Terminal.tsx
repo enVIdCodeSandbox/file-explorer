@@ -15,6 +15,7 @@ import { startFolder, useTerminal, useTerminalClear, type Pane, type Tab } from 
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { useLayout } from "./Layout";
+import { wheelSteps, zoomStep } from "../util/zoomKeys";
 
 const encoder = new TextEncoder();
 const toB64 = (bytes: Uint8Array) => {
@@ -23,6 +24,22 @@ const toB64 = (bytes: Uint8Array) => {
   return btoa(s);
 };
 const fromB64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+const DEFAULT_FONT = 13;
+
+/** Make the terminal text bigger or smaller (0 = back to the default); the size is the one in Settings, so it is kept. */
+function zoomText(step: 1 | -1 | 0) {
+  const st = useStore.getState();
+  const now = adv<number>(st.settings, "terminal.fontSize");
+  const next = step === 0 ? DEFAULT_FONT : Math.max(8, Math.min(32, now + step));
+  if (next !== now) st.updateSettings((s) => void (s.advanced["terminal.fontSize"] = next));
+}
+
+/** The xterm option that tells it a Windows ConPTY is on the other end (nothing on other systems). */
+export function windowsScreen(info: { os: string; windowsBuild?: number } | null | undefined) {
+  if (info?.os !== "windows") return {};
+  return { windowsPty: { backend: "conpty" as const, buildNumber: info.windowsBuild || 19045 } };
+}
 
 /** Colors for the screen, from the theme in use. */
 function themeColors() {
@@ -62,6 +79,9 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
       theme: themeColors(),
       allowProposedApi: true,
       macOptionIsMeta: true,
+      // Windows shells run behind ConPTY, which redraws the screen itself when it is resized. The screen must know,
+      // or both reflow the text and lines and letters come out doubled.
+      ...windowsScreen(useTerminal.getState().info),
     });
     const f = new FitAddon();
     t.loadAddon(f);
@@ -100,6 +120,14 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
         return;
       }
       try {
+        // Measure the screen before replaying: what the shell printed was laid out for a screen of the right size.
+        if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+          try {
+            f.fit();
+          } catch {
+            /* hidden */
+          }
+        }
         const a = await api.termAttach(sid);
         if (!live) return;
         t.write(fromB64(a.data));
@@ -148,6 +176,8 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
       if (e.ctrlKey && !e.shiftKey && e.key === "c" && t.hasSelection()) return copy(), t.clearSelection(), false;
       if (e.metaKey && e.key === "c") return copy(), false;
       if (e.metaKey && e.key === "v") return paste(), false;
+      const zoom = zoomStep(e);
+      if (zoom !== null) return zoomText(zoom), false;
       if (commandFor(useStore.getState().settings, e) === "toggleTerminal") return useTerminal.getState().toggle(), false;
       return true;
     });
@@ -161,12 +191,24 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
         }
       }
     };
+    // Ctrl + scroll changes the text size, as it does in the folder view.
+    let wheelCarry = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const r = wheelSteps(wheelCarry, e.deltaY);
+      wheelCarry = r.carry;
+      if (r.steps) zoomText(r.steps > 0 ? 1 : -1);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
     const ro = new ResizeObserver(refit);
     ro.observe(el);
     return () => {
       live = false;
       clearTimeout(titleTimer);
       ro.disconnect();
+      el.removeEventListener("wheel", onWheel, { capture: true });
       unlisten.forEach((u) => u());
       t.dispose();
       term.current = null;

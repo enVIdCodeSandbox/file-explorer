@@ -1229,6 +1229,37 @@ pub async fn trash_paths(app: AppHandle, state: State<'_, Shared>, paths: Vec<St
     .await
 }
 
+/// What is in the Recycle Bin / Trash.
+#[tauri::command]
+pub async fn trash_list() -> CmdResult<fast_core::trashbin::Bin> {
+    blocking(|| fast_core::trashbin::list().map_err(err)).await
+}
+
+/// Put items from the bin back where they were; says how many were found.
+#[tauri::command]
+pub async fn trash_restore(app: AppHandle, state: State<'_, Shared>, ids: Vec<String>, parents: Vec<String>) -> CmdResult<usize> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let n = fast_core::trashbin::restore(&ids).map_err(err)?;
+        let parents: Vec<PathBuf> = parents.into_iter().map(PathBuf::from).collect();
+        fs_changed(&app, &st, parents);
+        Ok(n)
+    })
+    .await
+}
+
+/// Delete items in the bin for good.
+#[tauri::command]
+pub async fn trash_purge(ids: Vec<String>) -> CmdResult<usize> {
+    blocking(move || fast_core::trashbin::purge(&ids).map_err(err)).await
+}
+
+/// Empty the bin.
+#[tauri::command]
+pub async fn trash_empty() -> CmdResult<usize> {
+    blocking(|| fast_core::trashbin::empty().map_err(err)).await
+}
+
 /// Put items back from the Trash; says how many were found there.
 #[tauri::command]
 pub async fn restore_from_trash(app: AppHandle, state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<usize> {
@@ -1453,6 +1484,7 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
         spec.max_parallel = s.transfer.max_parallel;
         // The list of files being copied is only tracked when its line is switched on.
         let shown = |id: &str| s.advanced.get(&format!("transfer.show.{id}")).and_then(|v| v.as_bool()).unwrap_or(true);
+        spec.early_start_ms = adv_num(&s, "transfer.earlyStartMs", 500).min(10_000) as u64;
         spec.speed_test = s.advanced.get("transfers.speedTest").and_then(|v| v.as_bool()).unwrap_or(false);
         spec.active_files = if shown("activeFiles") { adv_num(&s, "transfer.activeFilesCount", 4).clamp(1, 16) as usize } else { 0 };
         let rules = fast_core::transfer::method::Rules {
@@ -1991,7 +2023,7 @@ pub async fn open_system_chooser(path: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: TerminalMode) -> CmdResult<()> {
+pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: TerminalMode, shell: Option<String>, login_shell: Option<String>) -> CmdResult<()> {
     let st = state.inner().clone();
     blocking(move || {
         let opts = {
@@ -2010,6 +2042,17 @@ pub async fn open_terminal(state: State<'_, Shared>, path: String, mode: Termina
                 new_tab: t.new_tab,
             }
         };
+        // Typing "cmd" or "powershell" in the address bar asks for that one, whatever the settings prefer.
+        let mut opts = opts;
+        if let Some(sh) = shell.filter(|s| !s.is_empty()) {
+            opts.shell = sh;
+            // A shell chosen by name is run as it is, not through a custom command line or a startup command.
+            opts.custom.clear();
+            opts.profile.clear();
+        }
+        if let Some(l) = login_shell.filter(|s| !s.is_empty()) {
+            opts.login_shell = l;
+        }
         // Only a real folder on this computer can hold a terminal (not one inside an archive or on a server).
         if matches!(mode, TerminalMode::Here | TerminalMode::Admin) && !Path::new(&path).is_dir() {
             return Err(format!("\"{path}\" is not a folder on this computer, so a terminal cannot open there."));

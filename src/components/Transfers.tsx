@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type DeleteProgress, type Progress } from "../api";
 import { retryTransferAsAdmin, useStore, type Sample } from "../store";
+import { reportFiles, reportOf } from "../util/jobReport";
 import { formatCount, formatDuration, formatEta, formatRate, formatSize } from "../util/format";
 import { baseName } from "../util/path";
 import { adv } from "../settings/advanced";
@@ -21,7 +22,8 @@ const STRATEGY_LABEL: Record<NonNullable<Progress["strategy"]>, string> = {
 
 const MEDIA_LABEL: Record<string, string> = { ssd: "SSD", hdd: "hard disk", network: "network", removable: "removable", unknown: "unknown drive" };
 
-type Job = { kind: "transfer"; p: Progress } | { kind: "delete"; p: DeleteProgress };
+/** `at` is when a finished job ended (jobs shown from the finished list have it). */
+type Job = ({ kind: "transfer"; p: Progress } | { kind: "delete"; p: DeleteProgress }) & { at?: number };
 
 function isActive(j: Job): boolean {
   return j.p.phase === "running" || j.p.phase === "scanning" || (j.kind === "transfer" && j.p.phase === "queued") || (j.kind === "transfer" && j.p.phase === "paused");
@@ -132,6 +134,7 @@ function Card({ job }: { job: Job }) {
   const { dismissTransfer, dismissDelete } = useStore.getState();
   const active = isActive(job);
   const queued = job.kind === "transfer" && job.p.phase === "queued";
+  const counting = job.kind === "transfer" && !!job.p.counting;
   const scanning = job.p.phase === "scanning" || queued;
   const p = job.p;
   const needsAdmin = !active && p.errors.some((e) => e.needsElevation);
@@ -170,16 +173,16 @@ function Card({ job }: { job: Job }) {
       {active && <ForceStop j={job} />}
       {active && (
         <>
-          <Bar fraction={fraction} indeterminate={scanning} />
+          <Bar fraction={fraction} indeterminate={scanning || counting} />
           {job.kind === "transfer" ? (
             <>
               <div className="transfer-stats">
-                <span className="eta-line">{job.p.phase === "paused" ? "Paused" : formatEta(job.p.etaSecs)}<EtaNote p={job.p} /></span>
+                <span className="eta-line">{job.p.phase === "paused" ? "Paused" : counting ? "Counting files…" : formatEta(job.p.etaSecs)}<EtaNote p={job.p} /></span>
                 <span className="transfer-rate">{job.p.phase === "running" ? formatRate(job.p) : ""}</span>
               </div>
               <div className="transfer-stats muted">
-                <span>{formatCount(job.p.filesDone)} / {formatCount(job.p.filesTotal)} items</span>
-                <span>{formatSize(job.p.bytesDone)} / {formatSize(job.p.bytesTotal)}</span>
+                <span>{formatCount(job.p.filesDone)} / {formatCount(job.p.filesTotal)}{counting ? "+" : ""} items</span>
+                <span>{formatSize(job.p.bytesDone)} / {formatSize(job.p.bytesTotal)}{counting ? "+" : ""}</span>
               </div>
             </>
           ) : (
@@ -389,7 +392,7 @@ function ActiveFiles({ p }: { p: Progress }) {
   );
 }
 
-function TransferDetail({ p }: { p: Progress }) {
+function TransferDetail({ p, endedAt }: { p: Progress; endedAt?: number }) {
   const fraction = useStore((s) => s.shown[p.id] ?? 0);
   const series = useStore((s) => s.series[p.id]) ?? [];
   const settings = useStore((s) => s.settings);
@@ -397,8 +400,9 @@ function TransferDetail({ p }: { p: Progress }) {
   const [more, setMore] = useState(true);
   const active = isActive({ kind: "transfer", p });
   const remainingItems = Math.max(0, p.filesTotal - p.filesDone);
+  const counting = !!p.counting;
   const typical = p.prediction?.typicalSecs;
-  const started = useRef(Date.now() - p.elapsedSecs * 1000);
+  const started = useRef((endedAt ?? Date.now()) - p.elapsedSecs * 1000);
   const methodName = p.method ? METHOD_NAME[p.method] : null;
   const current = p.current || p.activeFiles?.[0]?.path || "";
   const finishAt = active && p.phase === "running" && p.etaSecs != null ? clock(Date.now() + p.etaSecs * 1000) : null;
@@ -407,10 +411,10 @@ function TransferDetail({ p }: { p: Progress }) {
   return (
     <div className="transfer-detail">
       <div className="percent">
-        <strong>{Math.round(fraction * 100)}% complete</strong>
+        <strong>{counting ? `Counting files… ${formatCount(p.filesTotal)} found` : `${Math.round(fraction * 100)}% complete`}</strong>
         <span className="muted">{active ? (p.phase === "paused" ? "Paused" : formatRate(p)) : ""}</span>
       </div>
-      <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
+      <Bar fraction={fraction} indeterminate={p.phase === "scanning" || counting} />
       {on("graph") && (
         <>
           <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} />
@@ -445,7 +449,7 @@ function TransferDetail({ p }: { p: Progress }) {
         {on("timeRemaining") && (
           <>
             <dt>Time remaining</dt>
-            <dd className="eta-line">{active ? formatEta(p.etaSecs).replace(" left", "") : "—"}<EtaNote p={p} /></dd>
+            <dd className="eta-line">{counting ? "Counting files first…" : active ? formatEta(p.etaSecs).replace(" left", "") : "—"}<EtaNote p={p} /></dd>
           </>
         )}
         {on("finishAt") && (
@@ -457,13 +461,13 @@ function TransferDetail({ p }: { p: Progress }) {
         {on("copied") && (
           <>
             <dt>Copied</dt>
-            <dd>{formatSize(p.bytesDone)} of {formatSize(p.bytesTotal)}</dd>
+            <dd>{formatSize(p.bytesDone)} of {formatSize(p.bytesTotal)}{counting ? " so far" : ""}</dd>
           </>
         )}
         {on("itemsRemaining") && (
           <>
             <dt>Items remaining</dt>
-            <dd>{formatCount(remainingItems)} ({formatSize(Math.max(0, p.bytesTotal - p.bytesDone))})</dd>
+            <dd>{counting ? `${formatCount(remainingItems)} found so far` : `${formatCount(remainingItems)} (${formatSize(Math.max(0, p.bytesTotal - p.bytesDone))})`}</dd>
           </>
         )}
         {on("filesDone") && (
@@ -698,21 +702,39 @@ function ReattachButton() {
   );
 }
 
-function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
-  const [picked, setPicked] = useState<string | null>(null);
+/** Save a finished job as a file: a page with its graph, a text report, or data. */
+async function saveReport(j: Job) {
+  const st = useStore.getState();
+  const op = j.kind === "transfer" ? st.specs[j.p.id]?.op : undefined;
+  const r = reportOf(j, st.series[j.p.id] ?? [], op);
+  try {
+    const where = await api.saveTextFile(r.title.slice(0, 60), reportFiles(r));
+    if (where) st.showToast(`Saved to ${where}`);
+  } catch (e) {
+    st.showToast(String(e));
+  }
+}
+
+function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; past?: boolean }) {
+  const [picked, setPicked] = useState<string | null>(past ? useStore.getState().finishedPick : null);
   const spec = useStore((s) => s.specs);
-  const { dismissTransfer, dismissDelete } = useStore.getState();
+  const { dismissTransfer, dismissDelete, forgetFinished } = useStore.getState();
   const keyOf = (j: Job) => `${j.kind}-${j.p.id}`;
   const open = jobs.find((j) => keyOf(j) === picked) ?? jobs.find(isActive) ?? jobs[0];
-  const title = jobs.length === 1 ? titleOf(jobs[0]) : `${jobs.length} jobs`;
+  const title = past ? `Finished (${jobs.length})` : jobs.length === 1 ? titleOf(jobs[0]) : `${jobs.length} jobs`;
   return (
     <div className="transfer-window" data-detached={detached || undefined} role="dialog" aria-label="Transfers">
       <div className="transfer-window-head">
         <strong>{title}</strong>
         {detached && <ReattachButton />}
+        {past && (
+          <button className="link-button" onClick={() => forgetFinished()} title="Forget these until the app is closed anyway">
+            Clear
+          </button>
+        )}
         {!detached && (
           <span className="transfer-window-buttons">
-            <button
+            {!past && <button
               className="icon-button"
               aria-label="Open in its own window"
               title="Open in its own window: move it anywhere and resize it"
@@ -722,8 +744,8 @@ function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
               }}
             >
               <Icon name="popout" size={13} />
-            </button>
-            <button className="icon-button" aria-label="Collapse to small cards" title="Collapse" onClick={() => useStore.setState({ transfersOpen: false })}>
+            </button>}
+            <button className="icon-button" aria-label={past ? "Close" : "Collapse to small cards"} title={past ? "Close" : "Collapse"} onClick={() => useStore.setState(past ? { finishedOpen: false } : { transfersOpen: false })}>
               <Icon name="collapse" size={13} />
             </button>
           </span>
@@ -738,6 +760,7 @@ function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
               <div className="transfer-row" onClick={() => setPicked(keyOf(j))}>
                 <Icon name={expanded ? "expand" : "chevron"} size={11} />
                 <span className="grow file-name">{titleOf(j)}</span>
+                {j.at && <span className="muted transfer-ended" title="When it finished">{new Date(j.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
                 {!expanded && active && <SmallBar job={j} />}
                 {j.kind === "transfer" && active && j.p.phase !== "scanning" && j.p.phase !== "queued" && (
                   <button
@@ -749,18 +772,23 @@ function Window({ jobs, detached }: { jobs: Job[]; detached?: boolean }) {
                     <Icon name={j.p.phase === "paused" ? "play" : "pause"} size={12} />
                   </button>
                 )}
+                {j.at && (
+                  <button className="link-button" aria-label="Save as a file" title="Save this as a file: a page with the graph, a text report, or data" onClick={(e) => (e.stopPropagation(), void saveReport(j))}>
+                    Save…
+                  </button>
+                )}
                 <button
                   className="icon-button"
                   data-action={active ? "cancel" : "dismiss"}
                   aria-label={active ? "Cancel" : "Dismiss"}
-                  title={active ? "Cancel (Shift-click to force stop)" : "Dismiss"}
-                  onClick={(e) => (e.stopPropagation(), active ? cancel(j, e.shiftKey) : j.kind === "delete" ? dismissDelete(j.p.id) : dismissTransfer(j.p.id))}
+                  title={active ? "Cancel (Shift-click to force stop)" : j.at ? "Forget this" : "Dismiss"}
+                  onClick={(e) => (e.stopPropagation(), active ? cancel(j, e.shiftKey) : j.at ? forgetFinished(keyOf(j)) : j.kind === "delete" ? dismissDelete(j.p.id) : dismissTransfer(j.p.id))}
                 >
                   <Icon name="close" size={12} />
                 </button>
               </div>
               {active && <ForceStop j={j} />}
-              {expanded && (j.kind === "transfer" ? <TransferDetail p={j.p} /> : <DeleteDetail p={j.p} />)}
+              {expanded && (j.kind === "transfer" ? <TransferDetail p={j.p} endedAt={j.at} /> : <DeleteDetail p={j.p} />)}
               <Issues
                 p={j.p}
                 retry={j.kind === "transfer" && !active && j.p.errors.some((e) => e.needsElevation) && spec[j.p.id] ? () => { const s = spec[j.p.id]; dismissTransfer(j.p.id); void retryTransferAsAdmin(s); } : undefined}
@@ -795,9 +823,17 @@ function useJobs(): Job[] {
   );
 }
 
+/** Jobs that ended cleanly, newest first. They stay in memory until the app is closed. */
+function useFinished(): Job[] {
+  const finished = useStore((s) => s.finished);
+  return useMemo<Job[]>(() => Object.values(finished).sort((a, b) => b.at - a.at) as Job[], [finished]);
+}
+
 /** The content of the separate transfers window. */
 export function DetachedTransfers() {
   const jobs = useJobs();
+  const past = useFinished();
+  if (!jobs.length && past.length) return <Window jobs={past} detached past />;
   if (!jobs.length) {
     return (
       <div className="transfer-window" data-detached>
@@ -856,7 +892,24 @@ export function Transfers() {
   const detached = useStore((s) => s.detached.transfers);
   const waiting = useStore((s) => Object.keys(s.queuedJobs).length + Object.keys(s.startingJobs).length > 0);
   const jobs = useJobs();
-  if ((!jobs.length && !waiting) || detached) return null;
+  const past = useFinished();
+  const pastOpen = useStore((s) => s.finishedOpen);
+  if (detached) return null;
+  // Nothing running: just a small way back to what finished, until the app is closed.
+  if (!jobs.length && !waiting) {
+    if (!past.length) return null;
+    return (
+      <div className="transfers" data-open={pastOpen || undefined}>
+        {pastOpen ? (
+          <Window jobs={past} past />
+        ) : (
+          <button className="transfer-recent" onClick={() => useStore.setState({ finishedOpen: true })} title="Look again at the graphs and details of what finished">
+            <Icon name="clock" size={12} /> Finished ({past.length})
+          </button>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="transfers" data-open={open || undefined} aria-live="polite">
       {waiting && <Waiting />}

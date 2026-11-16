@@ -56,7 +56,15 @@ export function useAppearance() {
     if (!appearance) return;
     const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => (root.dataset.theme = resolveTheme(appearance.theme, media.matches));
+    const apply = () => {
+      root.dataset.theme = resolveTheme(appearance.theme, media.matches);
+      // The next start paints this theme before any script has run.
+      try {
+        localStorage.setItem("fast.theme", root.dataset.theme);
+      } catch {
+        // storage may be unavailable
+      }
+    };
     apply();
     media.addEventListener("change", apply);
     root.dataset.density = appearance.density;

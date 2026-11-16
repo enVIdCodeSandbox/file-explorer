@@ -17,6 +17,9 @@ type CmdResult<T> = Result<T, String>;
 #[derive(Default)]
 pub struct Bridge {
     client: Mutex<Option<Arc<Client>>>,
+    /// Held while a connection is being made, so two requests that arrive together make one connection, not two
+    /// (each connection passes on the shell's output, so two would print everything twice).
+    connecting: Mutex<()>,
 }
 
 #[derive(Serialize, Clone)]
@@ -38,6 +41,8 @@ pub struct TerminalInfo {
     /// Whether the app itself runs as administrator (Windows) or root.
     app_elevated: bool,
     os: &'static str,
+    /// The Windows build number (0 elsewhere): it decides how the screen must treat resizing.
+    windows_build: u32,
     /// The shell used when none is chosen.
     default_shell: String,
 }
@@ -86,11 +91,14 @@ pub fn split_command(text: &str) -> Vec<String> {
 
 /// Connect to the host, starting it when it is not running.
 fn connect(app: &AppHandle, st: &Shared) -> CmdResult<Arc<Client>> {
-    {
-        let guard = st.terminal.client.lock();
-        if let Some(c) = guard.as_ref().filter(|c| !c.is_closed()) {
-            return Ok(c.clone());
-        }
+    let current = || st.terminal.client.lock().as_ref().filter(|c| !c.is_closed()).cloned();
+    if let Some(c) = current() {
+        return Ok(c);
+    }
+    let _one_at_a_time = st.terminal.connecting.lock();
+    // Another request may have connected while this one waited.
+    if let Some(c) = current() {
+        return Ok(c);
     }
     let dir = dir(st);
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -135,6 +143,7 @@ pub async fn term_info(state: State<'_, Shared>) -> CmdResult<TerminalInfo> {
     Ok(TerminalInfo {
         app_elevated: host::is_elevated(),
         os: fast_core::platform::os_name(),
+        windows_build: fast_core::platform::windows_build(),
         default_shell: split_command(&shell).first().cloned().unwrap_or_else(|| host::default_shell().0),
     })
 }

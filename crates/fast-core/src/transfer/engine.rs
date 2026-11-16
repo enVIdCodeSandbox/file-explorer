@@ -2,7 +2,7 @@
 //! a [`Plan`], runs worker threads and reports [`Progress`] about ten times a
 //! second. Nothing here touches the UI thread.
 
-use super::eta::{DisplayMode, EtaModel, EtaParams, EtaTracker};
+use super::eta::{blend_estimates, DisplayMode, EtaModel, EtaParams, EtaTracker, LiveRate};
 use crate::history::{Prediction, Query, Route};
 use super::method::{self, Method, MethodChooser, MethodPref};
 use super::probe;
@@ -123,6 +123,10 @@ pub struct TransferSpec {
     /// default: it delays the start, and what earlier transfers and the first seconds of the copy tell is nearly as good.
     #[serde(default)]
     pub speed_test: bool,
+    /// Begin copying while the folders are still being counted, once the count has taken this many
+    /// milliseconds (0: wait for the whole count first).
+    #[serde(default)]
+    pub early_start_ms: u64,
 }
 
 fn yes() -> bool {
@@ -208,6 +212,10 @@ pub struct Progress {
     /// The files being copied right now, one per busy worker (as many as `TransferSpec::active_files` allows).
     #[serde(default)]
     pub active_files: Vec<ActiveFile>,
+    /// Copying has begun but the folders are still being counted: the totals are what has been found so far,
+    /// and there is no time estimate yet.
+    #[serde(default)]
+    pub counting: bool,
 }
 
 /// Asked once, after the sources are scanned, what similar past transfers say.
@@ -257,6 +265,18 @@ struct Shared {
     run_started: Mutex<Option<Instant>>,
     /// Files found so far while the sources are being looked at.
     scanned: AtomicU64,
+    scan_bytes: AtomicU64,
+    /// The walk was stopped on purpose (a tool finished the job by itself).
+    scan_abort: AtomicBool,
+    /// The walk of the sources is over, and `total_files`/`total_bytes` are final.
+    scan_done: AtomicBool,
+    /// What the job comes to so far, when copying began before the count was over.
+    total_files: AtomicU64,
+    total_bytes: AtomicU64,
+    moved_dirs: Mutex<Vec<PathBuf>>,
+    /// Copying began before the count was over: a file's folder is made when it is needed.
+    lazy_dirs: AtomicBool,
+    made_dirs: Mutex<std::collections::HashSet<PathBuf>>,
     /// This job's place in the queue has been given back (by finishing, or by being let go of while stuck).
     gate_released: AtomicBool,
     /// What each worker is copying now (empty text when idle). Only used when the spec asks for it.
@@ -310,6 +330,21 @@ impl Shared {
             let _ = self.control.compare_exchange(ST_RUN, to, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
+    /// Make a destination folder once (when copying began before the count was over, so no skeleton was made).
+    fn ensure_dir(&self, d: &Path, report: bool) {
+        if self.made_dirs.lock().contains(d) {
+            return;
+        }
+        match fs::create_dir_all(d) {
+            Ok(()) => {
+                self.made_dirs.lock().insert(d.to_path_buf());
+            }
+            Err(e) if report => self.error(d, &e),
+            // A file that cannot go into its folder says so itself when it is copied.
+            Err(_) => {}
+        }
+    }
+
     /// Note what a worker is copying (or that it is idle). Costs nothing when the spec did not ask for it.
     fn set_slot(&self, slot: usize, item: Option<&Item>) {
         let mut slots = self.slots.lock();
@@ -510,6 +545,14 @@ pub fn start_with(
         timed_out: AtomicBool::new(false),
         run_started: Mutex::new(None),
         scanned: AtomicU64::new(0),
+        scan_bytes: AtomicU64::new(0),
+        scan_abort: AtomicBool::new(false),
+        scan_done: AtomicBool::new(false),
+        total_files: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        moved_dirs: Mutex::new(Vec::new()),
+        lazy_dirs: AtomicBool::new(false),
+        made_dirs: Mutex::new(Default::default()),
         gate_released: AtomicBool::new(false),
         slots: Mutex::new(Vec::new()),
     });
@@ -525,26 +568,28 @@ pub fn start_with(
     handle
 }
 
-/// What the first look at the sources found.
-struct Phase1 {
-    items: Vec<Item>,
-    dirs: Vec<PathBuf>,
-    /// Source directories to remove after a copy-based move, deepest last.
-    moved_dirs: Vec<PathBuf>,
-    renamed_all: bool,
-    /// What each top-level source becomes, for tools that copy whole folders.
-    tops: Vec<method::Top>,
-    /// Something with the same name is already at the destination (a folder merge, or a file to replace).
-    clash_possible: bool,
+/// What the walk of the sources reports, in the order it finds things.
+enum Found {
+    /// The top-level items are decided (quick). Everything else follows while folders are walked.
+    Tops {
+        tops: Vec<method::Top>,
+        renamed_all: bool,
+        /// Something with the same name is already at the destination (a folder merge, or a file to replace).
+        clash_possible: bool,
+    },
+    Items(Vec<Item>),
+    /// Destination folders that will be needed (including empty ones).
+    Dirs(Vec<PathBuf>),
+    /// The walk is over. Source folders to remove after a copy-based move, deepest last.
+    Done { moved_dirs: Vec<PathBuf> },
 }
 
-/// Look at every source: finish what a rename can finish, decide the top-level conflicts, and walk the folders.
-fn phase1(spec: &TransferSpec, shared: &Shared) -> Phase1 {
-    let mut items: Vec<Item> = Vec::new();
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut moved_dirs: Vec<PathBuf> = Vec::new();
+/// Look at every source: finish what a rename can finish, decide the top-level conflicts (quick, all
+/// sources first), then walk the folders, sending what is found as it is found.
+fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
     let mut renamed_all = spec.op == Op::Move;
     let mut tops: Vec<method::Top> = Vec::new();
+    let mut files: Vec<Item> = Vec::new();
     let mut clash_possible = false;
     for src in &spec.sources {
         if shared.cancelled() {
@@ -595,13 +640,22 @@ fn phase1(spec: &TransferSpec, shared: &Shared) -> Phase1 {
         }
         renamed_all = false;
         tops.push(method::Top { src: src.clone(), dst: dst.clone(), is_dir: meta.is_dir() });
-        if meta.is_dir() {
-            scan(src, &dst, &mut items, &mut dirs, &mut moved_dirs, shared);
-        } else {
-            items.push(Item { src: src.clone(), dst, size: meta.len() });
+        if !meta.is_dir() {
+            shared.scanned.fetch_add(1, Ordering::Relaxed);
+            shared.scan_bytes.fetch_add(meta.len(), Ordering::Relaxed);
+            files.push(Item { src: src.clone(), dst, size: meta.len() });
         }
     }
-    Phase1 { items, dirs, moved_dirs, renamed_all, tops, clash_possible }
+    let dir_tops: Vec<(PathBuf, PathBuf)> = tops.iter().filter(|t| t.is_dir).map(|t| (t.src.clone(), t.dst.clone())).collect();
+    let _ = tx.send(Found::Tops { tops, renamed_all, clash_possible });
+    if !files.is_empty() {
+        let _ = tx.send(Found::Items(files));
+    }
+    let moved = parking_lot::Mutex::new(Vec::new());
+    for (src, dst) in &dir_tops {
+        scan(src, dst, shared, tx, &moved);
+    }
+    let _ = tx.send(Found::Done { moved_dirs: moved.into_inner() });
 }
 
 fn run(
@@ -653,6 +707,7 @@ fn run(
         timed_out: false,
         queued_ahead: 0,
         active_files: Vec::new(),
+        counting: false,
     };
     // Wait for a turn when too many transfers are already working.
     {
@@ -696,55 +751,77 @@ fn run(
     // while this one watches: it reports what has been found so far, and Cancel ends the job at once
     // instead of waiting for the drive. A walk that is cancelled stops by itself at the next folder.
     let phase1_started = Instant::now();
-    let Phase1 { items, dirs, moved_dirs, renamed_all, tops, clash_possible } = {
-        let (tx, rx) = std::sync::mpsc::channel();
-        {
-            let (spec, shared) = (spec.clone(), shared.clone());
-            let _ = std::thread::Builder::new().name(format!("prepare-{id}")).spawn(move || {
-                let _ = tx.send(phase1(&spec, &shared));
-            });
-        }
+    let scan_rx = {
+        let (tx, rx) = chan::unbounded::<Found>();
+        let (spec, shared) = (spec.clone(), shared.clone());
+        let _ = std::thread::Builder::new().name(format!("prepare-{id}")).spawn(move || phase1(&spec, &shared, &tx));
+        rx
+    };
+    let mut items: Vec<Item> = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut moved_dirs: Vec<PathBuf> = Vec::new();
+    let mut found_tops: Option<(Vec<method::Top>, bool, bool)> = None;
+    // Once the count has taken this long, copying begins with what has been found, and the count carries on.
+    let early_after = Duration::from_millis(spec.early_start_ms);
+    let mut go_early = false;
+    {
         let mut last = Instant::now() - Duration::from_secs(1);
+        let cancelled_now = |progress: &mut Progress| {
+            shared.fill(progress);
+            progress.phase = Phase::Cancelled;
+            progress.current.clear();
+            progress.elapsed_secs = started.elapsed().as_secs_f64();
+        };
         loop {
-            match rx.recv_timeout(Duration::from_millis(25)) {
-                Ok(found) if !shared.cancelled() => break found,
-                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    // Cancelled while preparing (or the preparation died): nothing was copied.
-                    shared.fill(&mut progress);
-                    progress.phase = Phase::Cancelled;
-                    progress.current.clear();
-                    progress.elapsed_secs = started.elapsed().as_secs_f64();
-                    on_progress(progress);
-                    return;
+            if shared.cancelled() {
+                // Nothing was copied yet, or not much: stop at once instead of waiting for the drive.
+                cancelled_now(&mut progress);
+                on_progress(progress);
+                return;
+            }
+            match scan_rx.recv_timeout(Duration::from_millis(25)) {
+                Ok(Found::Tops { tops, renamed_all, clash_possible }) => found_tops = Some((tops, renamed_all, clash_possible)),
+                Ok(Found::Items(v)) => items.extend(v),
+                Ok(Found::Dirs(v)) => dirs.extend(v),
+                Ok(Found::Done { moved_dirs: m }) => {
+                    moved_dirs = m;
+                    shared.scan_done.store(true, Ordering::Relaxed);
+                    break;
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if shared.cancelled() {
-                        shared.fill(&mut progress);
-                        progress.phase = Phase::Cancelled;
-                        progress.current.clear();
-                        progress.elapsed_secs = started.elapsed().as_secs_f64();
-                        on_progress(progress);
-                        return;
-                    }
-                    if last.elapsed() >= Duration::from_millis(250) {
-                        last = Instant::now();
-                        let n = shared.scanned.load(Ordering::Relaxed);
-                        shared.fill(&mut progress);
-                        progress.phase = Phase::Scanning;
-                        progress.current = if n > 0 { format!("Counting files… {n} so far") } else { "Reading the folders…".into() };
-                        progress.elapsed_secs = started.elapsed().as_secs_f64();
-                        on_progress(progress.clone());
-                    }
+                Err(chan::RecvTimeoutError::Timeout) => {}
+                // The walk died without finishing: go on with what it found.
+                Err(chan::RecvTimeoutError::Disconnected) => {
+                    shared.scan_done.store(true, Ordering::Relaxed);
+                    break;
                 }
             }
+            if early_after > Duration::ZERO && found_tops.is_some() && !items.is_empty() && phase1_started.elapsed() >= early_after {
+                go_early = true;
+                break;
+            }
+            if last.elapsed() >= Duration::from_millis(250) {
+                last = Instant::now();
+                let n = shared.scanned.load(Ordering::Relaxed);
+                shared.fill(&mut progress);
+                progress.phase = Phase::Scanning;
+                progress.current = if n > 0 { format!("Counting files… {n} so far") } else { "Reading the folders…".into() };
+                progress.elapsed_secs = started.elapsed().as_secs_f64();
+                on_progress(progress.clone());
+            }
         }
-    };
+    }
+    let (tops, renamed_all, clash_possible) = found_tops.unwrap_or_else(|| (Vec::new(), spec.op == Op::Move, false));
 
     let large_threshold =
         if spec.large_threshold > 0 { spec.large_threshold } else { strategy::DEFAULT_LARGE_THRESHOLD };
-    let bytes_total: u64 = items.iter().map(|i| i.size).sum();
+    let mut bytes_total: u64 = items.iter().map(|i| i.size).sum();
     let renamed = shared.files_done.load(Ordering::Relaxed);
-    let files_total = items.len() as u64 + renamed;
+    let mut files_total = items.len() as u64 + renamed;
+    if go_early {
+        shared.total_files.store(items.len() as u64, Ordering::Relaxed);
+        shared.total_bytes.store(bytes_total, Ordering::Relaxed);
+        shared.lazy_dirs.store(true, Ordering::Relaxed);
+    }
 
     let first_src = spec.sources.first().cloned().unwrap_or_default();
     let src_vol = drives::volume_for(&first_src, &drives).map(|d| d.mount.clone());
@@ -898,8 +975,49 @@ fn run(
     progress.method = Some(method);
     progress.phase = Phase::Running;
 
+    // A system tool copies whole top-level items by itself, so it has to know where they end: finish the count.
+    if go_early && method != Method::Native {
+        let mut last = Instant::now() - Duration::from_secs(1);
+        loop {
+            if shared.cancelled() {
+                shared.fill(&mut progress);
+                progress.phase = Phase::Cancelled;
+                progress.current.clear();
+                progress.elapsed_secs = started.elapsed().as_secs_f64();
+                on_progress(progress);
+                return;
+            }
+            match scan_rx.recv_timeout(Duration::from_millis(25)) {
+                Ok(Found::Items(v)) => items.extend(v),
+                Ok(Found::Dirs(v)) => dirs.extend(v),
+                Ok(Found::Done { moved_dirs: m }) => {
+                    moved_dirs = m;
+                    break;
+                }
+                Ok(Found::Tops { .. }) | Err(chan::RecvTimeoutError::Timeout) => {}
+                Err(chan::RecvTimeoutError::Disconnected) => break,
+            }
+            if last.elapsed() >= Duration::from_millis(250) {
+                last = Instant::now();
+                shared.fill(&mut progress);
+                progress.phase = Phase::Scanning;
+                progress.current = format!("Counting files… {} so far", shared.scanned.load(Ordering::Relaxed));
+                progress.elapsed_secs = started.elapsed().as_secs_f64();
+                on_progress(progress.clone());
+            }
+        }
+        shared.scan_done.store(true, Ordering::Relaxed);
+        go_early = false;
+        shared.lazy_dirs.store(false, Ordering::Relaxed);
+        bytes_total = items.iter().map(|i| i.size).sum();
+        files_total = items.len() as u64 + renamed;
+        progress.files_total = files_total;
+        progress.bytes_total = bytes_total;
+    }
+
     // ---- Phase 2: create the directory skeleton, then copy -------------------
-    if method == Method::Native {
+    // (When copying begins before the count is over, folders are made as they are needed instead.)
+    if method == Method::Native && !go_early {
         for d in &dirs {
             if shared.cancelled() {
                 break;
@@ -923,7 +1041,14 @@ fn run(
     for i in large {
         let _ = large_tx.send(i);
     }
-    drop((small_tx, large_tx));
+    // While the count goes on, the walk keeps feeding the lanes: their senders go to the feeder.
+    let mut feed_lanes = if go_early {
+        Some((small_tx, large_tx))
+    } else {
+        // Everything is already queued: closing the lanes is what tells the workers they are done.
+        drop((small_tx, large_tx));
+        None
+    };
 
     let workers = Arc::new(AtomicUsize::new(0));
     let next_slot = AtomicUsize::new(0);
@@ -968,12 +1093,31 @@ fn run(
                 workers.fetch_sub(1, Ordering::Relaxed);
             });
         }
+        if let Some((small_tx, large_tx)) = feed_lanes.take() {
+            let (dir_tx, dir_rx) = chan::unbounded::<PathBuf>();
+            let native = method == Method::Native;
+            if native {
+                for d in dirs.drain(..) {
+                    let _ = dir_tx.send(d);
+                }
+                s.spawn(move || {
+                    for d in dir_rx.iter() {
+                        if shared.cancelled() {
+                            break;
+                        }
+                        shared.ensure_dir(&d, true);
+                    }
+                });
+            }
+            s.spawn(move || feed(scan_rx, small_tx, large_tx, dir_tx, large_threshold, native, shared));
+        }
 
         // ---- Progress ticker -------------------------------------------------
         let mut last = Instant::now();
         let (mut last_bytes, mut last_files) = (0u64, renamed);
         let (mut bps, mut fps) = (0f64, 0f64);
         let mut tracker = EtaTracker::with_head_start(head_start);
+        let mut live = LiveRate::default();
         loop {
             // Report every `progress_ms`, but notice at once when the workers are done:
             // sleeping the whole interval made every job end up to that much late.
@@ -999,6 +1143,13 @@ fn run(
 
             let skipped = shared.skipped.load(Ordering::Relaxed);
             let errors = shared.error_count.load(Ordering::Relaxed);
+            // Copying began before the count was over: the totals are what has been found so far.
+            let counting = go_early && !shared.scan_done.load(Ordering::Relaxed);
+            let (files_total, bytes_total) = if go_early {
+                (renamed + shared.total_files.load(Ordering::Relaxed), shared.total_bytes.load(Ordering::Relaxed))
+            } else {
+                (files_total, bytes_total)
+            };
             let files_left = files_total.saturating_sub(files + skipped + errors);
             let bytes_left = bytes_total.saturating_sub(bytes);
             let est = shared.model.lock().estimate(files_left, bytes_left, alive.max(1));
@@ -1017,8 +1168,23 @@ fn run(
                 let b = if bytes_total > 0 { bytes as f64 / bytes_total as f64 } else { f };
                 f.max(b).min(1.0)
             };
-            if state == ST_RUN {
-                let (eta, conf) = tracker.update(est.map(|e| e.seconds), dt, done_share, copying_now);
+            progress.counting = counting;
+            progress.files_total = files_total;
+            progress.bytes_total = bytes_total;
+            if counting {
+                // No honest estimate while the size of the job is still growing.
+                progress.eta_secs = None;
+                progress.eta_confidence = 0.0;
+            } else if state == ST_RUN {
+                // What the cost model expects is only a start: the measured pace of the job takes over within seconds.
+                let weighted = {
+                    let f = if files_total > 0 { ((files + skipped + errors) as f64 / files_total as f64).min(1.0) } else { 0.0 };
+                    let b = if bytes_total > 0 { (bytes as f64 / bytes_total as f64).min(1.0) } else { f };
+                    file_weight * f + (1.0 - file_weight) * b
+                };
+                live.update(copying_now, weighted);
+                let raw = blend_estimates(est.map(|e| e.seconds), live.remaining(weighted), copying_now, weighted);
+                let (eta, conf) = tracker.update(raw, dt, done_share, copying_now);
                 progress.eta_secs = eta;
                 progress.eta_confidence = conf;
             }
@@ -1042,7 +1208,9 @@ fn run(
             let by_files = if files_total > 0 { ((files + skipped + errors) as f64 / files_total as f64).min(1.0) } else { 0.0 };
             let by_bytes = if bytes_total > 0 { (bytes as f64 / bytes_total as f64).min(1.0) } else { by_files };
             // Counters only grow, but clamp anyway so nothing can move it back.
-            last_fraction = last_fraction.max(file_weight * by_files + (1.0 - file_weight) * by_bytes).min(0.999);
+            if !counting {
+                last_fraction = last_fraction.max(file_weight * by_files + (1.0 - file_weight) * by_bytes).min(0.999);
+            }
             progress.fraction = last_fraction;
             if alive == 0 {
                 break;
@@ -1053,7 +1221,17 @@ fn run(
 
     // ---- Phase 3: finish a copy-based move -----------------------------------
     let cancelled = shared.cancelled();
-    if spec.op == Op::Move && !cancelled {
+    if go_early {
+        // The count finished while copying; its totals are the job's totals.
+        files_total = renamed + shared.total_files.load(Ordering::Relaxed);
+        bytes_total = shared.total_bytes.load(Ordering::Relaxed);
+        moved_dirs = std::mem::take(&mut *shared.moved_dirs.lock());
+    }
+    progress.files_total = files_total;
+    progress.bytes_total = bytes_total;
+    progress.counting = false;
+    // A move only removes folders it has seen to the end.
+    if spec.op == Op::Move && !cancelled && shared.scan_done.load(Ordering::Relaxed) {
         // Deepest first; remove_dir only succeeds on empty directories, so
         // anything that failed to copy keeps its folder.
         for d in moved_dirs.iter().rev() {
@@ -1264,14 +1442,6 @@ fn flight_destination(top: &method::Top, name: &str) -> Option<PathBuf> {
     }
 }
 
-/// What a folder tree holds, in the order a plain walk would find it.
-#[derive(Default)]
-struct Scanned {
-    items: Vec<Item>,
-    dirs: Vec<PathBuf>,
-    moved_dirs: Vec<PathBuf>,
-}
-
 /// Threads used to walk folders. Listing a folder is mostly waiting (for the disk, and on a
 /// share for the network), so more than one folder at a time is a large win on both.
 const SCAN_THREADS: usize = 8;
@@ -1279,35 +1449,86 @@ const SCAN_THREADS: usize = 8;
 /// Recursively collect files and directories under `src`. Folders are listed in parallel;
 /// the result is in the same order as a sequential walk (a folder, its files, then each
 /// subfolder in turn), which keeps files that sit together on disk together in the queue.
-fn scan(src: &Path, dst: &Path, items: &mut Vec<Item>, dirs: &mut Vec<PathBuf>, moved_dirs: &mut Vec<PathBuf>, shared: &Shared) {
-    let walk = || scan_dir(src, dst, shared);
+fn scan(src: &Path, dst: &Path, shared: &Shared, tx: &chan::Sender<Found>, moved: &parking_lot::Mutex<Vec<PathBuf>>) {
     // Over a network the walk waits on the wire, not the disk: more folders are read at once.
     let threads = if method::NetMap::read().kind(src).is_some() { SCAN_THREADS * 3 } else { SCAN_THREADS };
-    let found = match rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("scan-{i}")).build() {
+    let walk = || scan_dir(src, dst, shared, tx, moved);
+    match rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("scan-{i}")).build() {
         Ok(pool) => pool.install(walk),
         Err(_) => walk(),
-    };
-    items.extend(found.items);
-    dirs.extend(found.dirs);
-    moved_dirs.extend(found.moved_dirs);
+    }
 }
 
-fn scan_dir(src: &Path, dst: &Path, shared: &Shared) -> Scanned {
-    use rayon::prelude::*;
-    let mut out = Scanned::default();
-    if shared.cancelled() {
-        return out;
+/// Passes what the walk finds on to the copy while the count is still going: files into the lanes the workers
+/// drain, folders to be made, totals for the progress. Ends when the walk does (or on cancel), which closes the lanes.
+fn feed(
+    rx: chan::Receiver<Found>,
+    small_tx: chan::Sender<Item>,
+    large_tx: chan::Sender<Item>,
+    dir_tx: chan::Sender<PathBuf>,
+    large_threshold: u64,
+    native: bool,
+    shared: &Shared,
+) {
+    loop {
+        if shared.cancelled() || shared.scan_abort.load(Ordering::Relaxed) {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(25)) {
+            Ok(Found::Items(v)) => {
+                shared.total_files.fetch_add(v.len() as u64, Ordering::Relaxed);
+                shared.total_bytes.fetch_add(v.iter().map(|i| i.size).sum::<u64>(), Ordering::Relaxed);
+                if native {
+                    for i in v {
+                        let _ = if i.size >= large_threshold { large_tx.send(i) } else { small_tx.send(i) };
+                    }
+                }
+            }
+            Ok(Found::Dirs(v)) => {
+                if native {
+                    for d in v {
+                        let _ = dir_tx.send(d);
+                    }
+                }
+            }
+            Ok(Found::Done { moved_dirs }) => {
+                *shared.moved_dirs.lock() = moved_dirs;
+                shared.scan_done.store(true, Ordering::Relaxed);
+                break;
+            }
+            Ok(Found::Tops { .. }) | Err(chan::RecvTimeoutError::Timeout) => {}
+            Err(chan::RecvTimeoutError::Disconnected) => {
+                shared.scan_done.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
     }
-    out.dirs.push(dst.to_path_buf());
-    out.moved_dirs.push(src.to_path_buf());
+}
+
+/// Files are handed over in batches this big, so a huge folder starts producing work before it is read to the end.
+const SCAN_BATCH: usize = 512;
+
+fn scan_dir(src: &Path, dst: &Path, shared: &Shared, tx: &chan::Sender<Found>, moved: &parking_lot::Mutex<Vec<PathBuf>>) {
+    use rayon::prelude::*;
+    if shared.cancelled() || shared.scan_abort.load(Ordering::Relaxed) {
+        return;
+    }
+    // Tests make a walk slow (as a network share is) by naming a folder so.
+    #[cfg(test)]
+    if src.to_string_lossy().contains("slowscan") {
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    let _ = tx.send(Found::Dirs(vec![dst.to_path_buf()]));
+    moved.lock().push(src.to_path_buf());
     let rd = match fs::read_dir(src) {
         Ok(rd) => rd,
         Err(e) => {
             shared.error(src, &e);
-            return out;
+            return;
         }
     };
     let mut subdirs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut batch: Vec<Item> = Vec::new();
     for e in rd.filter_map(|e| e.ok()) {
         let path = e.path();
         let target = dst.join(e.file_name());
@@ -1316,18 +1537,19 @@ fn scan_dir(src: &Path, dst: &Path, shared: &Shared) -> Scanned {
             Ok(_) => {
                 let size = e.metadata().map(|m| m.len()).unwrap_or(0);
                 shared.scanned.fetch_add(1, Ordering::Relaxed);
-                out.items.push(Item { src: path, dst: target, size });
+                shared.scan_bytes.fetch_add(size, Ordering::Relaxed);
+                batch.push(Item { src: path, dst: target, size });
+                if batch.len() >= SCAN_BATCH {
+                    let _ = tx.send(Found::Items(std::mem::take(&mut batch)));
+                }
             }
             Err(err) => shared.error(&path, &err),
         }
     }
-    let below: Vec<Scanned> = subdirs.par_iter().map(|(s, d)| scan_dir(s, d, shared)).collect();
-    for b in below {
-        out.items.extend(b.items);
-        out.dirs.extend(b.dirs);
-        out.moved_dirs.extend(b.moved_dirs);
+    if !batch.is_empty() {
+        let _ = tx.send(Found::Items(batch));
     }
-    out
+    subdirs.par_iter().for_each(|(s, d)| scan_dir(s, d, shared, tx, moved));
 }
 
 /// Whether `dst` is, as far as its size and modified time say, the very file `src` is.
@@ -1363,6 +1585,11 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
 }
 
 fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
+    if shared.lazy_dirs.load(Ordering::Relaxed) {
+        if let Some(parent) = item.dst.parent() {
+            shared.ensure_dir(parent, false);
+        }
+    }
     let mut dst = item.dst.clone();
     if spec.skip_identical && same_file(&item.src, &dst) {
         shared.skipped.fetch_add(1, Ordering::Relaxed);
@@ -1640,7 +1867,7 @@ mod tests {
     fn spec(sources: Vec<PathBuf>, dest: &Path, op: Op, conflict: Conflict) -> TransferSpec {
         TransferSpec {
             sources, dest_dir: dest.to_path_buf(), op, conflict,
-            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false,
+            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false, early_start_ms: 0,
         }
     }
 
@@ -1712,6 +1939,14 @@ mod tests {
             timed_out: AtomicBool::new(false),
             run_started: Mutex::new(None),
             scanned: AtomicU64::new(0),
+            scan_bytes: AtomicU64::new(0),
+            scan_abort: AtomicBool::new(false),
+            scan_done: AtomicBool::new(false),
+            total_files: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(0),
+            moved_dirs: Mutex::new(Vec::new()),
+            lazy_dirs: AtomicBool::new(false),
+            made_dirs: Mutex::new(Default::default()),
             gate_released: AtomicBool::new(false),
             slots: Mutex::new(Vec::new()),
         }
@@ -1740,7 +1975,7 @@ mod tests {
         let shared = test_shared();
         shared.limiter.set_rate(1_000_000);
         let plan = strategy::choose(&JobProfile { file_count: 1, total_bytes: 1_000_000, large_bytes: 0, large_count: 0, same_volume: false, is_move: false, src: crate::drives::Media::Ssd, dst: crate::drives::Media::Ssd }, &Budget::minimal(), 64 * 1024 * 1024, 0);
-        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 0, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false };
+        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 0, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false, early_start_ms: 0 };
         shared.clone_ok.store(false, Ordering::Relaxed);
         let t = Instant::now();
         assert!(copy_one(&a, &b, 1_000_000, &plan, &spec, &shared).unwrap());
@@ -1802,8 +2037,19 @@ mod tests {
         let src = tempfile::tempdir().unwrap();
         make_tree(src.path());
         let shared = test_shared();
-        let (mut items, mut dirs, mut moved) = (Vec::new(), Vec::new(), Vec::new());
-        scan(src.path(), Path::new("/dst"), &mut items, &mut dirs, &mut moved, &shared);
+        let (tx, rx) = chan::unbounded();
+        let moved = parking_lot::Mutex::new(Vec::new());
+        scan(src.path(), Path::new("/dst"), &shared, &tx, &moved);
+        drop(tx);
+        let (mut items, mut dirs): (Vec<Item>, Vec<PathBuf>) = (Vec::new(), Vec::new());
+        for f in rx.iter() {
+            match f {
+                Found::Items(v) => items.extend(v),
+                Found::Dirs(v) => dirs.extend(v),
+                _ => {}
+            }
+        }
+        let moved = moved.into_inner();
         assert_eq!(items.len(), 40 + 1 + 1);
         assert_eq!(dirs.len(), 4); // root, a, a/b, empty
         assert_eq!(dirs[0], Path::new("/dst"));
@@ -2093,6 +2339,110 @@ mod tests {
 
         let p = run_job(spec(vec![d.path().join("missing")], d.path(), Op::Copy, Conflict::Overwrite));
         assert_eq!(p.error_count, 1);
+    }
+
+    /// A tree whose folders are slow to read (the name makes the test walk wait), with files at several depths.
+    fn slow_tree(root: &Path, folders: usize) -> (PathBuf, usize) {
+        let src = root.join("slowscan");
+        let mut n = 0;
+        for i in 0..folders {
+            let d = src.join(format!("f{i}"));
+            fs::create_dir_all(d.join("deep")).unwrap();
+            for j in 0..3 {
+                fs::write(d.join(format!("a{j}.txt")), format!("{i}-{j}")).unwrap();
+                fs::write(d.join("deep").join(format!("b{j}.txt")), format!("{i}-{j}-deep")).unwrap();
+                n += 2;
+            }
+        }
+        fs::create_dir_all(src.join("empty")).unwrap();
+        (src, n)
+    }
+
+    #[test]
+    fn copying_begins_before_the_count_is_over_and_ends_exactly() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, n) = slow_tree(d.path(), 12);
+        let dest = d.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let mut s = spec(vec![src.clone()], &dest, Op::Copy, Conflict::Overwrite);
+        s.early_start_ms = 60;
+        let seen = Arc::new(StdMutex::new(Vec::<Progress>::new()));
+        let s2 = seen.clone();
+        let budget = Budget { io_threads: 4, progress_ms: 50, ..Budget::minimal() };
+        let h = start(7, s, budget, Vec::new(), None, move |p| s2.lock().unwrap().push(p));
+        h.wait();
+        let seen = seen.lock().unwrap();
+        let last = seen.last().unwrap();
+        assert_eq!(last.phase, Phase::Done, "{last:?}");
+        assert_eq!((last.files_done, last.files_total), (n as u64, n as u64), "{last:?}");
+        assert!(!last.counting);
+        assert!(seen.iter().any(|p| p.counting && p.files_done > 0), "files were copied while the count was still going");
+        assert!(seen.iter().filter(|p| p.counting).all(|p| p.eta_secs.is_none()), "no estimate while counting");
+        // Every file, every folder (also the empty one), with its content.
+        assert!(dest.join("slowscan/empty").is_dir());
+        for i in 0..12 {
+            assert_eq!(fs::read(dest.join(format!("slowscan/f{i}/deep/b2.txt"))).unwrap(), format!("{i}-2-deep").into_bytes());
+        }
+    }
+
+    #[test]
+    fn a_small_job_never_goes_early() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        for i in 0..5 {
+            fs::write(src.join(format!("{i}.txt")), b"x").unwrap();
+        }
+        let dest = d.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let mut s = spec(vec![src], &dest, Op::Copy, Conflict::Overwrite);
+        s.early_start_ms = 500;
+        let seen = Arc::new(StdMutex::new(Vec::<Progress>::new()));
+        let s2 = seen.clone();
+        let h = start(8, s, Budget { io_threads: 4, ..Budget::minimal() }, Vec::new(), None, move |p| s2.lock().unwrap().push(p));
+        h.wait();
+        let seen = seen.lock().unwrap();
+        assert!(seen.iter().all(|p| !p.counting));
+        assert_eq!(seen.last().unwrap().files_done, 5);
+    }
+
+    #[test]
+    fn cancelling_during_the_count_stops_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, n) = slow_tree(d.path(), 40);
+        let dest = d.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let mut s = spec(vec![src], &dest, Op::Copy, Conflict::Overwrite);
+        s.early_start_ms = 40;
+        let last = Arc::new(StdMutex::new(None::<Progress>));
+        let l2 = last.clone();
+        let h = start(9, s, Budget { io_threads: 4, ..Budget::minimal() }, Vec::new(), None, move |p| *l2.lock().unwrap() = Some(p));
+        std::thread::sleep(Duration::from_millis(500));
+        let t = Instant::now();
+        h.cancel();
+        h.wait();
+        assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+        let p = last.lock().unwrap().clone().unwrap();
+        assert_eq!(p.phase, Phase::Cancelled);
+        assert!(p.files_done < n as u64);
+    }
+
+    #[test]
+    fn a_move_that_began_early_removes_its_source_folders_when_done() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, n) = slow_tree(d.path(), 8);
+        let dest_root = d.path().join("elsewhere");
+        fs::create_dir(&dest_root).unwrap();
+        // A rename would finish the move instantly: ask for a copy-based one by making the destination exist.
+        let dest = dest_root.clone();
+        fs::create_dir_all(dest.join("slowscan")).unwrap();
+        let mut s = spec(vec![src.clone()], &dest, Op::Move, Conflict::Overwrite);
+        s.early_start_ms = 60;
+        let p = run_job(s);
+        assert_eq!(p.phase, Phase::Done, "{p:?}");
+        assert_eq!(p.files_done, n as u64);
+        assert!(!src.exists(), "the emptied source folders are gone");
+        assert!(dest.join("slowscan/f3/a1.txt").exists());
     }
 
     #[test]

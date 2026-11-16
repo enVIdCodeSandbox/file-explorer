@@ -954,3 +954,19 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .active-files li { display: flex; gap: 10px; justify-content: space-between; min-width: 0; padding: 2px 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .active-files .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .active-files .muted { flex: none; }
+
+/* Recycle Bin / Trash */
+.trash-view { display: flex; flex-direction: column; min-height: 0; }
+.trash-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.trash-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.trash-note { margin: 0 0 8px; }
+.trash-table { display: flex; flex-direction: column; min-width: 0; }
+.trash-row { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(120px, 2fr) minmax(120px, 1fr) 90px; gap: 12px; align-items: center; padding: 5px 8px; border-radius: 6px; min-width: 0; user-select: none; }
+.trash-row > span, .trash-th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trash-row:not(.trash-header):hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.trash-row[data-selected] { background: var(--selected, rgba(76, 194, 255, 0.22)); }
+.trash-name { display: flex; align-items: center; gap: 8px; }
+.trash-size { text-align: right; }
+.trash-header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.25)); border-radius: 0; z-index: 1; }
+.trash-th { background: none; border: 0; padding: 0; text-align: left; font: inherit; font-weight: 600; color: inherit; cursor: pointer; }
+.trash-th[data-active] { color: var(--accent); }

@@ -12,6 +12,18 @@ How a copy, move or delete actually runs, from the click to the last byte. Code:
 6. **Run.** Worker lanes copy; a ticker thread reports `Progress` events at the progress interval.
 7. **Finish.** The result is recorded in the history so later jobs choose better.
 
+## Starting before the count is over
+
+`phase1` no longer returns one big result. It sends `Found` messages on a channel: `Tops` (the top-level items, decided first and quickly), then `Items` in batches of 512 and `Dirs` as the folder walk (parallel, `scan_dir`) finds them, and `Done`. `run()` receives them for up to `TransferSpec::early_start_ms` (setting `transfer.earlyStartMs`, default 500). If the walk finishes sooner, the job runs exactly as before. Otherwise, once at least one file is known, copying begins (`go_early`):
+
+* the lanes stay open and a feeder thread (`feed`) puts each batch into the small or large lane; a second thread makes folders, and `process()` also makes a file's folder when it is missing (`lazy_dirs`, `ensure_dir`), so nothing waits for a full folder skeleton;
+* the ticker reads the totals from `Shared::total_files`/`total_bytes`, which grow with the walk, and reports `Progress::counting = true`: no time estimate and a frozen fraction until the walk ends (`scan_done`);
+* a system tool (Robocopy, rsync, rclone) copies whole top-level items and needs the count, so when the chosen method is not the built-in engine the walk is finished first; the method is chosen from what has been found so far;
+* a move removes its emptied source folders only after the walk was seen to the end;
+* cancelling while counting stops the walk (`shared.cancelled()` is checked in every folder) and ends the job at once.
+
+Large-lane workers only help with small files once the large lane is closed, so while the count goes on a job of only small files is copied by the small-lane workers.
+
 ## Conflicts (files that already exist)
 
 `Conflict` is `ask`, `skip`, `overwrite` or `keepBoth`. The last three are applied silently. With `ask`:

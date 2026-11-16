@@ -103,7 +103,7 @@ const session: Session = {
 };
 const info: AppInfo = {
   os,
-  version: "preview",
+  version: __APP_VERSION__,
   separator: sep,
   home: root,
   budget: { tier: "balanced", ioThreads: 2, indexThreads: 1, thumbThreads: 1, cacheMb: 64, indexMaxEntries: 100_000, listingCacheDirs: 32, backgroundIndexing: false, prefetch: false, thumbnails: false, background: false },
@@ -150,6 +150,18 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
   default_fm_status: () => fm,
   default_fm_set: (a) => (fm = { ...fm, active: Boolean(a.on), detail: a.on ? "Folders opened from other apps open here." : "Folders opened from other apps go to File Explorer." }),
+  trash_list: () => ({
+    canRestore: true,
+    label: "Recycle Bin",
+    items: [
+      { id: "t1", name: "old-render.mp4", originalParent: "C:\\Users\\me\\Videos", deleted: Math.floor(Date.now() / 1000) - 3600, size: 482_000_000, entries: null, isDir: false, path: null },
+      { id: "t2", name: "Budget 2025.xlsx", originalParent: "C:\\Users\\me\\Documents", deleted: Math.floor(Date.now() / 1000) - 86400 * 2, size: 48_200, entries: null, isDir: false, path: null },
+      { id: "t3", name: "node_modules", originalParent: "C:\\Projects\\site", deleted: Math.floor(Date.now() / 1000) - 86400 * 9, size: null, entries: 214, isDir: true, path: null },
+    ],
+  }),
+  trash_restore: () => 1,
+  trash_purge: () => 1,
+  trash_empty: () => 3,
   app_info: () => info,
   get_drives: () => drives,
   known_folders: () => places,
@@ -242,7 +254,8 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
   archive_stage: (a) => a.sources,
   run_program: (a) => { ((window as unknown as { __ran?: unknown[] }).__ran ??= []).push(a); return null; },
-  term_info: () => ({ appElevated: false, os, defaultShell: os === "windows" ? "pwsh" : "bash" }),
+  save_text_file: () => null,
+  term_info: () => ({ appElevated: false, os, windowsBuild: os === "windows" ? 22621 : 0, defaultShell: os === "windows" ? "pwsh" : "bash" }),
   term_list: () => [...fakeSessions.values()],
   term_spawn: (a) => {
     const sid = `s${fakeSessions.size + 1}`;
@@ -295,11 +308,14 @@ Object.assign(answers, {
 });
 
 mockWindows("main");
+// `&lag=300` makes every answer take that many milliseconds, as a busy or slow backend would.
+const lag = Number(q.get("lag") ?? 0);
+const later = <T,>(v: T): T | Promise<T> => (lag > 0 ? new Promise<T>((r) => setTimeout(() => r(v), lag)) : v);
 mockIPC(
   (cmd, payload) => {
     const a = (payload ?? {}) as Record<string, unknown>;
-    if (cmd in answers) return answers[cmd](a);
-    if (lists.test(cmd)) return [];
+    if (cmd in answers) return later(answers[cmd](a));
+    if (lists.test(cmd)) return later([]);
     if (cmd.startsWith("plugin:")) return null;
     return null;
   },

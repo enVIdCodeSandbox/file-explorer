@@ -828,7 +828,7 @@ mod tests {
             max_parallel: 0,
             method: Default::default(),
             skip_identical: true,
-            active_files: 0, speed_test: false,
+            active_files: 0, speed_test: false, early_start_ms: 0,
         };
         let job = Job::Transfer { spec };
         let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&job).unwrap());
@@ -852,7 +852,7 @@ mod tests {
                 max_parallel: 0,
                 method: Default::default(),
                 skip_identical: true,
-            active_files: 0, speed_test: false,
+            active_files: 0, speed_test: false, early_start_ms: 0,
             },
         };
         assert_eq!(job.touched_dirs(), vec![PathBuf::from("/x"), PathBuf::from("/y"), PathBuf::from("/z")]);

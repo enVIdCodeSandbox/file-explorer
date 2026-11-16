@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "fast-core"
-version = "0.12.1"
+version = "0.14.3"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "fast-file-explorer"
-version = "0.12.1"
+version = "0.14.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1656,6 +1656,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tokio",
  "ureq",
 ]

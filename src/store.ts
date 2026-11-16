@@ -35,7 +35,8 @@ import { metricOn } from "./settings/transferMetrics";
 import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
-import { HOME, THIS_PC, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
+import { flushBoot, readBoot, writeBoot, type Boot } from "./util/bootCache";
+import { HOME, THIS_PC, trashLabel, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
@@ -200,6 +201,14 @@ interface State {
   shown: Record<number, number>;
   /** The transfers window is expanded (otherwise just the small cards). */
   transfersOpen: boolean;
+  /** Jobs that ended cleanly, kept in memory (not saved) until the app is closed, so the graphs and details can be looked at again. */
+  finished: Record<string, FinishedJob>;
+  /** The list of finished jobs is open. */
+  finishedOpen: boolean;
+  /** Which finished job it opens on ("transfer-12"), when opened from a notification. */
+  finishedPick: string | null;
+  /** Open the finished list on this job. */
+  showFinished: (key: string) => void;
   /** Which panels are open as their own windows right now. */
   detached: { settings: boolean; transfers: boolean };
   /** Where the in-window Settings panel sits (an offset from the center) so it comes back where it was left. */
@@ -281,6 +290,8 @@ interface State {
   unreadNotices: number;
 
   init: () => Promise<void>;
+  /** Draw the last window from the saved copy at once; false when there is none to use. */
+  bootFromCache: () => boolean;
   navigate: (location: string, opts?: { tabId?: string; replace?: boolean }) => void;
   back: () => void;
   forward: () => void;
@@ -349,6 +360,10 @@ interface State {
   forceStop: (kind: "transfer" | "delete", id: number) => void;
   dismissTransfer: (id: number) => void;
   dismissDelete: (id: number) => void;
+  /** A job that ended cleanly: its card goes away at once and its final state is kept until the app closes. */
+  finishJob: (kind: "transfer" | "delete", p: Progress | DeleteProgress) => void;
+  /** Forget one finished job (its key is "transfer-12" / "delete-12"), or all of them. */
+  forgetFinished: (key?: string) => void;
   setSort: (sort: { key: SortKey; asc: boolean }) => void;
   /** Change the columns: for the open folder (or every folder when views are not kept per folder), or for all folders. */
   setColumns: (set: ColumnSet, scope: "here" | "all") => void;
@@ -389,6 +404,12 @@ let nextNoticeId = 1;
 const trashedBy = new Map<number, string[]>();
 /** Where each running delete is taking items from, to reload those folders when it ends. */
 const deletedFrom = new Map<number, string[]>();
+/** A job as it stood when it ended. */
+export type FinishedJob = ({ kind: "transfer"; p: Progress } | { kind: "delete"; p: DeleteProgress }) & { at: number };
+
+/** How many finished jobs are kept for looking at again. */
+export const FINISHED_KEPT = 30;
+
 /** What a running delete or copy is about to take away or put down, for ordering later jobs after it. */
 interface Footprint {
   removes: string[];
@@ -514,6 +535,9 @@ export const useStore = create<State>((set, get) => ({
   link: "unknown",
   drivesFresh: false,
   transfers: {},
+  finished: {},
+  finishedOpen: false,
+  finishedPick: null,
   specs: {},
   cancelling: {},
   clipboard: null,
@@ -614,56 +638,49 @@ export const useStore = create<State>((set, get) => ({
   noticesOpen: false,
   unreadNotices: 0,
 
+  /** Draw the window as it was last time, before anything is asked of the backend. */
+  bootFromCache: () => {
+    if (booted || get().ready) return true;
+    const isView = typeof (window as unknown as { __VIEW__?: string }).__VIEW__ === "string";
+    const isExtra = typeof (window as unknown as { __OPEN__?: string }).__OPEN__ === "string";
+    if (isView || isExtra) return false;
+    const cached = readBoot();
+    if (!cached || !cached.settings.general.restoreSession || adv<boolean>(cached.settings, "startup.instant") === false) return false;
+    const patch = startState(cached.settings, cached.session, cached.info, false);
+    if (!patch) return false;
+    booted = true;
+    bootTabs = JSON.stringify(patch.tabs);
+    set({ ...patch, places: cached.places, servers: cached.servers });
+    return true;
+  },
+
   init: async () => {
     const [settings, session, info] = await Promise.all([api.getSettings(), api.getSession(), api.appInfo()]);
     const isView = typeof (window as unknown as { __VIEW__?: string }).__VIEW__ === "string";
     const isExtra = typeof (window as unknown as { __OPEN__?: string }).__OPEN__ === "string";
     // Folders the app was started with (a folder on the command line, or another app's "Show in folder").
     const launches = isView || isExtra ? [] : await api.takeLaunch().catch(() => [] as Launch[]);
-    const start = settings.general.startPage === "thisPc" ? THIS_PC : HOME;
     // A window made by dragging a tab out starts with just that tab and does
     // not touch the saved session of the main window.
     const opened = (window as unknown as { __OPEN__?: string }).__OPEN__;
     detachedView = (window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers";
     secondary = typeof opened === "string" || detachedView;
-    let tabs = secondary ? [makeTab(opened!)] : settings.general.restoreSession ? session.tabs : [];
-    // Started for particular folders without tabs to restore: show just those.
-    if (!tabs.length) tabs = [makeTab(launches[0]?.folder ?? start)];
-    const activeTab = tabs.some((t) => t.id === session.activeTab) ? session.activeTab! : tabs[0].id;
-    // The filter from last time, when filters are kept.
-    let savedFilter: FilterState | null = null;
-    try {
-      const raw = adv<boolean>(settings, "files.keepFilter") ? localStorage.getItem("fast.filter") : null;
-      const parsed = raw ? (JSON.parse(raw) as Partial<FilterState>) : null;
-      if (parsed && typeof parsed === "object") savedFilter = { ...NO_FILTER, ...parsed, subfolders: false };
-    } catch {
-      savedFilter = null;
-    }
+    const patch = startState(settings, session, info, secondary, opened, launches[0]?.folder)!;
+    // When the window was drawn from the saved copy, what the person has done since (opened a folder, a tab)
+    // is theirs: only the settings and the facts about this computer are replaced, and the tabs only if untouched.
+    const untouched = !booted || JSON.stringify(get().tabs) === bootTabs;
+    const { tabs, groups, activeTab, pins, recent, searches, sort, ...rest } = patch;
     set({
-      ...(savedFilter ? { filter: savedFilter } : {}),
-      ready: true,
-      isSecondary: secondary,
-      settings,
-      info,
-      budget: info.budget,
-      indexStatus: info.index,
-      tabs,
-      groups: !secondary && settings.general.restoreSession ? session.groups : [],
-      activeTab,
-      pins: session.pins ?? [],
-      recent: session.recent,
-      searches: session.searches ?? [],
-      sort: adv<boolean>(settings, "files.rememberSort")
-        ? { key: adv<string>(settings, "files.sortKey") as SortKey, asc: adv<boolean>(settings, "files.sortAsc") }
-        : get().sort,
-      // The list from the previous run paints immediately; live data follows.
-      drives: session.drives,
+      ...rest,
+      ...(untouched ? { tabs, groups, activeTab, pins, recent, searches, sort } : {}),
     });
+    booted = false;
     get().showLaunches(launches);
     get().refreshDrives();
     get().refreshFrequent();
     void api.serversList().then((servers) => set({ servers })).catch(() => {});
     void api.knownFolders().then((places) => set({ places })).catch(() => {});
+    watchBoot();
   },
 
   navigate: (location, opts) => {
@@ -1086,12 +1103,10 @@ export const useStore = create<State>((set, get) => ({
       get().bumpDirs([p.destDir]);
     }
     if (p.conflict && !detachedView) void askAboutConflict(p.id, p.conflict, get().dialog == null);
+    // A job that ended cleanly leaves at once (failures stay until dismissed); its last state is kept to look at again.
+    if (p.phase === "cancelled" && p.errorCount === 0) get().finishJob("transfer", p);
     if (p.phase === "done" && p.errorCount === 0) {
-      // Successful jobs leave on their own; failures stay until dismissed.
-      let secs = adv<number>(get().settings, "transfers.dismissSecs");
-      // A job that was over in a moment has already said so in a notice; do not leave its card lingering.
-      if (secs > 0 && p.elapsedSecs < 3) secs = Math.min(secs, 1.5);
-      if (secs > 0) setTimeout(() => get().dismissTransfer(p.id), secs * 1000);
+      get().finishJob("transfer", p);
       const spec = get().specs[p.id];
       // Reload what the job touched, so the sort and filter apply to the finished result.
       if (adv<boolean>(get().settings, "files.sortAfterJobs")) {
@@ -1102,14 +1117,18 @@ export const useStore = create<State>((set, get) => ({
       if (detachedView) return;
       if (spec) {
         const t = transferNotice(spec.op === "move" ? "move" : "copy", spec.sources, spec.destDir);
-        get().notify(spec.op === "move" ? "move" : "copy", t.title, t.detail, itemFacts(spec.op === "move" ? "Move" : "Copy", spec.sources, [
-          ["To", spec.destDir],
-          ["Files", String(p.filesDone)],
-          ["Elapsed", formatDuration(p.elapsedSecs)],
-          ...(p.skipped ? ([["Skipped", String(p.skipped)]] as [string, string][]) : []),
-        ]));
-      } else get().notify("info", `Finished ${p.filesDone} item${p.filesDone === 1 ? "" : "s"}`);
+        get().notify(spec.op === "move" ? "move" : "copy", t.title, t.detail, {
+          ...itemFacts(spec.op === "move" ? "Move" : "Copy", spec.sources, [
+            ["To", spec.destDir],
+            ["Files", String(p.filesDone)],
+            ["Elapsed", formatDuration(p.elapsedSecs)],
+            ...(p.skipped ? ([["Skipped", String(p.skipped)]] as [string, string][]) : []),
+          ]),
+          actions: [{ label: "Graph and details", run: () => get().showFinished(`transfer-${p.id}`) }],
+        });
+      } else get().notify("info", `Finished ${p.filesDone} item${p.filesDone === 1 ? "" : "s"}`, undefined, { actions: [{ label: "Graph and details", run: () => get().showFinished(`transfer-${p.id}`) }] });
     }
+    if (p.phase === "running" && !prev) set({ finishedOpen: false });
     if (p.phase === "running" && !prev && adv<boolean>(get().settings, "transfers.openWindow")) set({ transfersOpen: true });
   },
 
@@ -1131,14 +1150,14 @@ export const useStore = create<State>((set, get) => ({
     if (p.method && p.phase === "running") noteMethod(get, set, jobGroup(p.action, p.permanent), p.method, p.firstName);
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
     if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
-    if (p.phase === "done" && p.errorCount === 0) setTimeout(() => get().dismissDelete(p.id), 3000);
+    if ((p.phase === "done" || p.phase === "cancelled") && p.errorCount === 0 && p.action !== "update") get().finishJob("delete", p);
     if (p.action === "delete" && p.phase === "failed") {
       deletedFrom.delete(p.id);
       inFlight.delete(`d${p.id}`);
       wake();
     }
     if (p.action === "update") {
-      if (p.phase === "done") setTimeout(() => get().dismissDelete(p.id), 4000);
+      if (p.phase === "done") get().dismissDelete(p.id);
       return;
     }
     if (p.action === "rename-copy") {
@@ -1178,6 +1197,7 @@ export const useStore = create<State>((set, get) => ({
           ...(p.errorCount ? ([["Could not delete", String(p.errorCount)]] as [string, string][]) : []),
         ],
         names: trashed ? trashed.map((t) => baseName(t)) : p.firstName ? [p.firstName] : undefined,
+        actions: p.errorCount === 0 ? [{ label: "Graph and details", run: () => get().showFinished(`delete-${p.id}`) }] : undefined,
       });
       else get().notify("info", `Delete stopped`, `${p.itemsDone} of ${p.itemsTotal} done`);
     }
@@ -1220,6 +1240,34 @@ export const useStore = create<State>((set, get) => ({
     const deletes = { ...get().deletes };
     delete deletes[id];
     set({ deletes });
+  },
+
+  finishJob: (kind, p) => {
+    const finished = { ...get().finished, [`${kind}-${p.id}`]: { kind, p, at: Date.now() } as FinishedJob };
+    const keys = Object.keys(finished);
+    const series = { ...get().series };
+    if (keys.length > FINISHED_KEPT) {
+      // The oldest go, with the graph kept for them.
+      for (const k of keys.sort((a, b) => finished[a].at - finished[b].at).slice(0, keys.length - FINISHED_KEPT)) {
+        delete series[finished[k].p.id];
+        delete finished[k];
+      }
+    }
+    set({ finished, series });
+    if (kind === "delete") get().dismissDelete(p.id);
+    else get().dismissTransfer(p.id);
+    // Nothing left to show: the window closes now, not after a delay.
+    const s = get();
+    if (!Object.keys(s.transfers).length && !Object.keys(s.deletes).length) set({ transfersOpen: false, finishedOpen: false });
+  },
+
+  showFinished: (key) => set({ finishedPick: key, finishedOpen: true }),
+
+  forgetFinished: (key) => {
+    if (!key) return set({ finished: {}, finishedOpen: false });
+    const finished = { ...get().finished };
+    delete finished[key];
+    set({ finished, ...(Object.keys(finished).length ? {} : { finishedOpen: false }) });
   },
 
   setColumns: (next, scope) => {
@@ -1466,6 +1514,70 @@ function pruneGroups() {
 }
 
 /** Save tabs, pins and recents shortly after they change. */
+/** True once the window was drawn from the saved copy and the backend has not answered yet. */
+let booted = false;
+/** The tabs as drawn from the saved copy, to tell whether the person changed them before the backend answered. */
+let bootTabs = "";
+
+/** The state a start-up needs, from the settings, the saved session and the facts about this computer. */
+function startState(settings: Settings, session: Session, info: AppInfo, isSecondary: boolean, opened?: string, launchFolder?: string) {
+  const start = settings.general.startPage === "thisPc" ? THIS_PC : HOME;
+  let tabs = isSecondary ? [makeTab(opened ?? start)] : settings.general.restoreSession ? session.tabs : [];
+  // Started for particular folders without tabs to restore: show just those.
+  if (!tabs.length) tabs = [makeTab(launchFolder ?? start)];
+  const activeTab = tabs.some((t) => t.id === session.activeTab) ? session.activeTab! : tabs[0].id;
+  // The filter from last time, when filters are kept.
+  let savedFilter: FilterState | null = null;
+  try {
+    const raw = adv<boolean>(settings, "files.keepFilter") ? localStorage.getItem("fast.filter") : null;
+    const parsed = raw ? (JSON.parse(raw) as Partial<FilterState>) : null;
+    if (parsed && typeof parsed === "object") savedFilter = { ...NO_FILTER, ...parsed, subfolders: false };
+  } catch {
+    savedFilter = null;
+  }
+  return {
+    ...(savedFilter ? { filter: savedFilter } : {}),
+    ready: true,
+    isSecondary,
+    settings,
+    info,
+    budget: info.budget,
+    indexStatus: info.index,
+    tabs,
+    groups: !isSecondary && settings.general.restoreSession ? session.groups : [],
+    activeTab,
+    pins: session.pins ?? [],
+    recent: session.recent,
+    searches: session.searches ?? [],
+    sort: adv<boolean>(settings, "files.rememberSort")
+      ? { key: adv<string>(settings, "files.sortKey") as SortKey, asc: adv<boolean>(settings, "files.sortAsc") }
+      : useStore.getState().sort,
+    // The list from the previous run paints immediately; live data follows.
+    drives: session.drives,
+  };
+}
+
+let watching = false;
+/** Keep the saved first screen up to date as the window changes. */
+function watchBoot() {
+  if (watching || secondary) return;
+  watching = true;
+  const snapshot = (): Boot | null => {
+    const s = useStore.getState();
+    if (!s.settings || !s.info || s.isSecondary || !s.settings.general.restoreSession || adv<boolean>(s.settings, "startup.instant") === false) return null;
+    const session: Session = { tabs: s.tabs, groups: s.groups, activeTab: s.activeTab, pins: s.pins, recent: s.recent, searches: s.searches, drives: s.drives };
+    return { settings: s.settings, session, info: s.info, places: s.places, servers: s.servers };
+  };
+  useStore.subscribe((s, prev) => {
+    if (s.settings !== prev.settings || s.tabs !== prev.tabs || s.groups !== prev.groups || s.activeTab !== prev.activeTab || s.pins !== prev.pins || s.recent !== prev.recent || s.drives !== prev.drives || s.places !== prev.places || s.servers !== prev.servers || s.info !== prev.info) {
+      writeBoot(snapshot);
+    }
+  });
+  window.addEventListener("pagehide", flushBoot);
+  document.addEventListener("visibilitychange", () => document.hidden && flushBoot());
+  writeBoot(snapshot, 500);
+}
+
 /** True in windows made by dragging a tab out of another. */
 let secondary = false;
 /** Where in the main window's tab bar a detached tab came from. */
@@ -1498,6 +1610,8 @@ export function tabTitle(location: string): string {
       return "Home";
     case "thispc":
       return thisPcLabel(os);
+    case "trash":
+      return trashLabel(os);
     case "search":
       return `Search: ${l.query}`;
     case "analyze":
@@ -1729,9 +1843,12 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
   }
   if (isRemote(paths[0])) return deleteOnServer(paths);
   // A phone has no recycle bin the app can use, so deleting there is always for good (and always asks).
-  const permanent = forcePermanent || !s.settings.general.deleteToTrash || isMobileOs(s.info?.os);
+  const always = !s.settings.general.deleteToTrash;
+  const permanent = forcePermanent || always || isMobileOs(s.info?.os);
   const forced = adv<number>(s.settings, "files.confirmDeleteOver");
-  if (s.settings.general.confirmDelete || permanent || (forced > 0 && paths.length >= forced)) {
+  // Deleting for good because the person chose to always do so follows "Ask before deleting"; a one-off Shift+Delete, and a phone, always ask.
+  const mustAsk = forcePermanent || isMobileOs(s.info?.os);
+  if (s.settings.general.confirmDelete || mustAsk || (forced > 0 && paths.length >= forced)) {
     const what = paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`;
     const r = await ask({
       title: permanent ? `Permanently delete ${what}?` : `Move ${what} to the ${s.info?.os === "windows" ? "Recycle Bin" : "Trash"}?`,

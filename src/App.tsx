@@ -30,6 +30,9 @@ import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 import { useMobile } from "./util/device";
 import { crumb, installTrail } from "./util/crashTrail";
+import { whenIdle } from "./util/idle";
+import { viewLevelOf } from "./util/viewLevel";
+import { zoomStep } from "./util/zoomKeys";
 
 // Parts that most sessions never open are loaded when first needed, so the first screen has less to read.
 const Tools = lazy(() => import("./components/Tools").then((m) => ({ default: m.Tools })));
@@ -43,13 +46,21 @@ const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({
 const ConnectServer = lazy(() => import("./components/ConnectServer").then((m) => ({ default: m.ConnectServer })));
 const ShareDialog = lazy(() => import("./components/Share").then((m) => ({ default: m.ShareDialog })));
 const AnalyzerView = lazy(() => import("./components/Analyzer").then((m) => ({ default: m.AnalyzerView })));
+const TrashView = lazy(() => import("./components/Trash").then((m) => ({ default: m.TrashView })));
 const SmartClearView = lazy(() => import("./components/SmartClear").then((m) => ({ default: m.SmartClearView })));
 const MobileApp = lazy(() => import("./components/Mobile").then((m) => ({ default: m.MobileApp })));
 const DetachedTransfers = lazy(() => import("./components/Transfers").then((m) => ({ default: m.DetachedTransfers })));
 
 function AppInner() {
   // Follows files that are being written, so their size and speed stay current.
-  useEffect(() => startLiveTracker(), []);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    const cancel = whenIdle(() => (stop = startLiveTracker()), 1000);
+    return () => {
+      cancel();
+      stop?.();
+    };
+  }, []);
   useT(); // keeps the page language (and every label) in step with the language setting
   const ready = useStore((s) => s.ready);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
@@ -62,7 +73,9 @@ function AppInner() {
   const info = useStore((s) => s.info);
   // The crash log's trail: clicks, keys, commands, and a one-line picture of the window.
   useEffect(() => {
-    const stop = installTrail(
+    let stop: (() => void) | undefined;
+    const cancel = whenIdle(() => {
+    stop = installTrail(
       () => {
         const s = useStore.getState();
         const tab = s.tabs.find((t) => t.id === s.activeTab);
@@ -80,7 +93,11 @@ function AppInner() {
       (kind, message) => void api.crashReport(kind, message).catch(() => {}),
       () => useStore.getState().settings?.advanced["crash.trail"] !== false,
     );
-    return stop;
+    }, 1000);
+    return () => {
+      cancel();
+      stop?.();
+    };
   }, []);
   // Selected text (Ctrl+A in the Details pane, say) goes away when you click anywhere that is not text you can select.
   useEffect(() => {
@@ -107,7 +124,7 @@ function AppInner() {
   // Tell the person when the last run stopped unexpectedly, and where the report is.
   useEffect(() => {
     if (!ready) return;
-    void api.crashPrevious().then((name) => {
+    return whenIdle(() => void api.crashPrevious().then((name) => {
       if (!name) return;
       crumb("startup: the previous run ended unexpectedly");
       const { notify, showToast } = useStore.getState();
@@ -137,16 +154,16 @@ function AppInner() {
           },
         ],
       });
-    }).catch(() => {});
+    }).catch(() => {}), 2000);
   }, [ready]);
 
   // "Start with the computer" is an operating-system setting: keep it in step with the choice made in Settings.
   const startWithComputer = useStore((s) => (s.unsaved ? null : s.settings?.advanced["tasks.startWithComputer"] === true));
   useEffect(() => {
     if (startWithComputer === null || !useStore.getState().ready) return;
-    void api.autostartGet().then((now) => (now === startWithComputer ? undefined : api.autostartSet(startWithComputer))).catch((e) => {
+    return whenIdle(() => void api.autostartGet().then((now) => (now === startWithComputer ? undefined : api.autostartSet(startWithComputer))).catch((e) => {
       if (startWithComputer) useStore.getState().showToast(String(e));
-    });
+    }), 3000);
   }, [startWithComputer]);
   const os = useStore((s) => s.info?.os);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -173,7 +190,7 @@ function AppInner() {
   useEffect(() => {
     const s = useStore.getState();
     s.init().catch((e) => setFatal(String(e)));
-    s.refreshLink();
+    const firstLink = whenIdle(() => useStore.getState().refreshLink(), 1500);
     // A cable plugged in or Wi-Fi taking over changes what thumbnails of network shares do in automatic mode.
     const linkTimer = setInterval(() => !document.hidden && useStore.getState().refreshLink(), 10_000);
     const subscriptions = [
@@ -241,6 +258,7 @@ function AppInner() {
       }),
     ];
     return () => {
+      firstLink();
       clearInterval(linkTimer);
       subscriptions.forEach((p) => void p.then((off) => off()));
     };
@@ -289,8 +307,18 @@ function AppInner() {
         s.refreshTab();
         return;
       }
+      // Ctrl + and Ctrl - resize the folder view, as Ctrl + scroll does. (The built-in terminal sizes its own text.)
+      const zoom = zoomStep(e);
+      const place = s.tabs.find((t) => t.id === s.activeTab)?.location ?? "";
+      if (zoom && !typing && !isAppLocation(place) && !(e.target as HTMLElement | null)?.closest?.(".term-body, .xterm") && adv<boolean>(s.settings, "files.wheelZoom")) {
+        e.preventDefault();
+        s.setViewLevel(viewLevelOf(s.settings, s.folderView) + zoom);
+        return;
+      }
       const command = commandFor(s.settings, e);
       if (!command) return;
+      // In the built-in terminal these are the shell's own keys (Ctrl+R searches its history, Ctrl+Y pastes what was cut).
+      if (["undo", "redo", "redoAlt", "refresh", "refreshAlt"].includes(command) && (e.target as HTMLElement | null)?.closest?.(".term-body, .xterm")) return;
       const i = s.tabs.findIndex((t) => t.id === s.activeTab);
       const n = s.tabs.length;
       switch (command) {
@@ -413,6 +441,7 @@ function AppInner() {
           <div className="content-inner" key={activeTab}>
             {loc.kind === "home" && <HomeView />}
             {loc.kind === "thispc" && <DrivesView />}
+            {loc.kind === "trash" && <Suspense fallback={null}><TrashView /></Suspense>}
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
             {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
             {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}

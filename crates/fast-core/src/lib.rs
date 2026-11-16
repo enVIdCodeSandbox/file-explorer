@@ -48,6 +48,7 @@ pub mod share;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod terminal;
 pub mod thumbs;
+pub mod trashbin;
 pub mod transfer;
 pub mod treemap;
 pub mod crashlog;

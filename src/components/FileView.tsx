@@ -3,6 +3,7 @@
 // 100,000 files scrolls as smoothly as one with ten.
 
 import { viewLevelOf } from "../util/viewLevel";
+import { wheelSteps } from "../util/zoomKeys";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SelectGroup } from "./SelectGroup";
 import { fileToolsItems } from "./toolsOpen";
@@ -425,14 +426,12 @@ export function FileView({ path }: { path: string }) {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey || !adv<boolean>(useStore.getState().settings, "files.wheelZoom")) return;
       e.preventDefault();
-      wheelDelta.current += e.deltaY;
       // One step per notch; trackpads send many small deltas, so accumulate.
-      while (Math.abs(wheelDelta.current) >= 60) {
-        const dir = wheelDelta.current < 0 ? 1 : -1; // scroll up = bigger icons
-        wheelDelta.current += dir * 60;
+      const r = wheelSteps(wheelDelta.current, e.deltaY);
+      wheelDelta.current = r.carry;
+      if (r.steps) {
         const st = useStore.getState();
-        const lvl = viewLevelOf(st.settings, st.folderView);
-        setViewLevel(lvl + dir);
+        setViewLevel(viewLevelOf(st.settings, st.folderView) + r.steps);
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });

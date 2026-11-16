@@ -86,11 +86,15 @@ pub fn run_bounded(source_file: Option<&Path>, dest_dir: &Path, limit: Duration,
         .ok()?;
     let started = Instant::now();
     loop {
+        // A cancel wins even over a test that happens to finish in the same moment.
+        if cancelled() {
+            return None;
+        }
         match rx.recv_timeout(Duration::from_millis(25)) {
             Ok(result) => return result,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if started.elapsed() >= limit || cancelled() {
+                if started.elapsed() >= limit {
                     return None;
                 }
             }

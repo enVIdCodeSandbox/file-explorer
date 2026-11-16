@@ -225,3 +225,47 @@ pub async fn crash_log_save(app: tauri::AppHandle, state: State<'_, Shared>, nam
     .await
     .map_err(|e| e.to_string())?
 }
+
+/// One way of writing a file the person is saving: the label for the Save dialog, the extension, the contents.
+#[derive(serde::Deserialize)]
+pub struct SaveVariant {
+    pub label: String,
+    pub ext: String,
+    pub contents: String,
+}
+
+/// Asks where to save (a Save dialog offering each variant as a file type) and writes the one whose type was chosen.
+/// Returns where it went, or nothing if the person cancelled.
+#[tauri::command]
+pub async fn save_text_file(app: tauri::AppHandle, name: String, variants: Vec<SaveVariant>) -> CmdResult<Option<String>> {
+    if variants.is_empty() {
+        return Err("Nothing to save".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let safe: String = name.chars().map(|c| if c.is_alphanumeric() || " ._-()".contains(c) { c } else { '_' }).collect();
+        let mut dialog = app.dialog().file().set_file_name(format!("{safe}.{}", variants[0].ext));
+        for v in &variants {
+            dialog = dialog.add_filter(&v.label, &[v.ext.as_str()]);
+        }
+        let Some(to) = dialog.blocking_save_file() else { return Ok(None) };
+        let mut to = to.into_path().map_err(|e| e.to_string())?;
+        // The extension typed (or chosen) decides the format; with none, the first.
+        let chosen = to.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        let variant = variants.iter().find(|v| Some(v.ext.to_ascii_lowercase()) == chosen);
+        let variant = match variant {
+            Some(v) => v,
+            None => {
+                let v = &variants[0];
+                let mut os = to.into_os_string();
+                os.push(format!(".{}", v.ext));
+                to = std::path::PathBuf::from(os);
+                v
+            }
+        };
+        std::fs::write(&to, variant.contents.as_bytes()).map_err(|e| e.to_string())?;
+        Ok(Some(to.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

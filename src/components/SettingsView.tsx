@@ -42,19 +42,21 @@ function ControlFor({ def }: { def: SettingDef }) {
   };
 
   switch (c.type) {
-    case "toggle":
+    case "toggle": {
+      const on = c.invert ? !value : !!value;
       return (
         <button
           role="switch"
-          aria-checked={!!value}
+          aria-checked={on}
           aria-label={def.label}
           className="switch"
-          data-on={value ? true : undefined}
-          onClick={() => set(!value)}
+          data-on={on ? true : undefined}
+          onClick={() => set(c.invert ? on : !on)}
         >
           <span />
         </button>
       );
+    }
     case "select":
       return (
         <select aria-label={t(def.label)} value={String(value)} onChange={(e) => set(e.target.value)}>
@@ -312,6 +314,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
                     <div className="setting-text">
                       <span className="setting-label">{t(d.label)}</span>
                       {d.description && <span className="muted">{t(d.description)}</span>}
+                      {d.warning && <span className="setting-warning" role="note">⚠ {t(d.warning)}</span>}
                     </div>
                     <ControlFor def={d} />
                   </div>

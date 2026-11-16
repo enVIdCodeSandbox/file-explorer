@@ -37,3 +37,6 @@ open = "5"
 drag = "2"
 tauri-plugin-single-instance = "2"
 ureq = "3"
+
+[dev-dependencies]
+tempfile = "3"

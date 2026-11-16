@@ -6,7 +6,8 @@ import type { Settings } from "../api";
 import { ADVANCED, adv } from "./advanced";
 
 export type Control =
-  | { type: "toggle" }
+  /** `invert`: the switch shows the opposite of the stored value. */
+  | { type: "toggle"; invert?: boolean }
   | { type: "select"; options: { value: string; label: string }[] }
   | { type: "number"; min: number; max: number; step?: number; unit?: string }
   | { type: "text"; placeholder?: string; secret?: boolean }
@@ -33,6 +34,8 @@ export interface SettingDef {
   section: string;
   label: string;
   description?: string;
+  /** A caution shown beside the setting in a warning color. */
+  warning?: string;
   control: Control;
   /** Only shown on these operating systems. */
   os?: string[];
@@ -73,7 +76,15 @@ export const SETTINGS: SettingDef[] = [
   { key: "general.showExtensions", section: "General", label: "Show file name extensions", control: toggle },
   { key: "general.liveRefresh", section: "General", label: "Refresh folders when they change", description: "A folder that is open updates by itself when another program adds, renames or deletes files in it.", control: toggle, keywords: "watch auto update live" },
   { key: "general.foldersFirst", section: "General", label: "List folders before files", control: toggle, keywords: "sort" },
-  { key: "general.deleteToTrash", section: "General", label: "Delete moves items to the Recycle Bin / Trash", description: "Turn off to delete permanently. Shift+Delete always deletes permanently.", control: toggle },
+  {
+    key: "general.deleteToTrash",
+    section: "General",
+    label: "Always delete permanently (skip the Recycle Bin / Trash)",
+    description: "Off: Delete moves items to the Recycle Bin / Trash, where they can be looked at and put back. On: every delete removes items for good, without going through it. Shift+Delete always deletes permanently. With \"Ask before deleting\" turned off too, nothing asks.",
+    warning: "Items deleted this way cannot be recovered.",
+    control: { type: "toggle", invert: true },
+    keywords: "recycle bin trash skip automatic permanent permanently delete for good shift",
+  },
   { key: "general.confirmDelete", section: "General", label: "Ask before deleting", control: toggle, keywords: "confirm" },
   { key: "general.nativeProperties", section: "General", label: "Use the system's Properties window", description: "Opens Windows' own Properties (or the equivalent). Turn off to always use the app's own window, which also works where the system has none.", control: toggle, keywords: "properties dialog native" },
   { key: "general.shellExtras", section: "General", label: "Add entries from other programs to the right-click menu", description: "Edit with…, Open with, archivers and similar. They load a moment after the menu opens, so the menu itself is never slowed down. Turn off to skip them.", control: toggle, keywords: "context menu shell extensions 7-zip open with send to" },

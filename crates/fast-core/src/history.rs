@@ -642,6 +642,7 @@ mod tests {
             timed_out: false,
             queued_ahead: 0,
             active_files: Vec::new(),
+            counting: false,
             method: Some(Method::Native),
         }
     }

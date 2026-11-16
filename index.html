@@ -4,9 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>FAST File Explorer</title>
+    <style>
+      html, body, #root { height: 100%; margin: 0; background: var(--bg, #1c1c1c); }
+      .boot-skeleton { height: 100%; display: flex; flex-direction: column; background: var(--bg, #1c1c1c); }
+      .bs-tabs { height: 38px; flex: none; }
+      .bs-toolbar { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--surface, #272727); }
+      .bs-toolbar i { width: 28px; height: 28px; border-radius: 6px; background: var(--surface-hover, rgba(255,255,255,.06)); }
+      .bs-toolbar b { flex: 1; height: 30px; border-radius: 6px; background: var(--surface-hover, rgba(255,255,255,.06)); }
+      .bs-body { flex: 1; display: flex; min-height: 0; }
+      .bs-side { width: 220px; flex: none; padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+      .bs-side i { height: 26px; border-radius: 6px; background: var(--surface-hover, rgba(255,255,255,.06)); }
+      .bs-content { flex: 1; background: var(--surface, #272727); border-top-left-radius: 8px; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Drawn by the browser before any script has run; the app replaces it as soon as it starts. -->
+      <div class="boot-skeleton" aria-hidden="true">
+        <div class="bs-tabs"></div>
+        <div class="bs-toolbar"><i></i><i></i><i></i><b></b></div>
+        <div class="bs-body">
+          <div class="bs-side"><i></i><i></i><i></i><i></i></div>
+          <div class="bs-content"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      // The theme of last time, so the first frame is not the wrong color.
+      try { var t = localStorage.getItem("fast.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

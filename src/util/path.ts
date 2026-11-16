@@ -3,6 +3,8 @@
 
 export const HOME = "fast://home";
 export const THIS_PC = "fast://thispc";
+/** The Recycle Bin (Windows) or Trash (macOS, Linux). */
+export const TRASH = "fast://trash";
 
 export const isAppLocation = (loc: string) => loc.startsWith("fast://");
 
@@ -224,6 +226,7 @@ export function clearLocation(drive: string | null): string {
 export type Location =
   | { kind: "home" }
   | { kind: "thispc" }
+  | { kind: "trash" }
   | { kind: "search"; query: string; scope: string | null; mode: SearchMode }
   | { kind: "analyze"; path: string }
   | { kind: "clear"; drive: string | null }
@@ -232,6 +235,7 @@ export type Location =
 export function parseLocation(loc: string): Location {
   if (loc === HOME) return { kind: "home" };
   if (loc === THIS_PC) return { kind: "thispc" };
+  if (loc === TRASH) return { kind: "trash" };
   if (loc.startsWith("fast://search?")) {
     const p = new URLSearchParams(loc.slice("fast://search?".length));
     const scope = p.get("scope");
@@ -248,6 +252,9 @@ export function parseLocation(loc: string): Location {
   return { kind: "folder", path: loc };
 }
 
+/** What the bin is called here. */
+export const trashLabel = (os: string | undefined) => (os === "windows" ? "Recycle Bin" : "Trash");
+
 export function locationTitle(loc: string, thisPcLabel: string): string {
   const l = parseLocation(loc);
   switch (l.kind) {
@@ -255,6 +262,8 @@ export function locationTitle(loc: string, thisPcLabel: string): string {
       return "Home";
     case "thispc":
       return thisPcLabel;
+    case "trash":
+      return trashLabel(undefined);
     case "search":
       return `Search: ${l.query}`;
     case "analyze":

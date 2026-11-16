@@ -1,6 +1,7 @@
 // Window chrome: the title bar (tabs and window buttons in one row), the
 // address row, the command bar and the sidebar.
 
+import { shellFor } from "../util/shellWords";
 import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -28,6 +29,8 @@ import { isFiltering, toSearchQuery } from "../util/filter";
 import {
   HOME,
   THIS_PC,
+  TRASH,
+  trashLabel,
   analyzeLocation,
   clearLocation,
   archiveDisplay,
@@ -651,6 +654,15 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
                   // A server address: opens it, asking for the login if needed.
                   navigate(typed);
                   setEditing(false);
+                  return;
+                }
+                // "cmd", "powershell" and the like open that shell in this folder, as Explorer does.
+                const where = adv<string>(settings, "address.shellWords");
+                const wanted = where === "off" ? null : shellFor(typed, info?.os);
+                if (wanted) {
+                  setEditing(false);
+                  if (where === "builtin") void useTerminal.getState().newTab({ cwd: terminalDir }).catch((err) => showToast(String(err)));
+                  else void api.openTerminal(terminalDir, "here", wanted.shell, wanted.loginShell).catch((err) => showToast(String(err)));
                   return;
                 }
                 const viaArchive = archiveFromTyped(typed);
@@ -1357,6 +1369,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
       </button>
       {item("home", "Home", HOME, <Icon name="home" />)}
       {item("thispc", thisPcLabel(info?.os), THIS_PC, <Icon name="pc" />)}
+      {item("trash", trashLabel(info?.os), TRASH, <Icon name="trash" />, { tip: `${trashLabel(info?.os)}: what was deleted, and Put back` })}
       {info?.home && item("analyze", "Disk usage", analyzeLocation(info.home), <Icon name="chart" />, { tip: "Disk usage" })}
       {item("clear", "Smart Clear", clearLocation(null), <Icon name="broom" />, { tip: "Smart Clear: free up space" })}
 

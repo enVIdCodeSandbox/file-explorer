@@ -176,3 +176,8 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 
 | `folder_fill` | `paths` | `Fill[]` (`empty`/`onlyFolders`/`files`) for up to 96 folders |
 | `thumbs_prewarm` | `paths`, `size` | Makes video/document thumbnails in the background |
+
+
+`transfer-progress` events carry `counting: true` while copying has begun but the folders are still being counted; `filesTotal` and `bytesTotal` are then what has been found so far and `etaSecs` is null.
+
+`trash_list` returns `{items, canRestore, label}` (each item: `id`, `name`, `originalParent`, `deleted` Unix seconds, `size`, `entries`, `isDir`, `path` when it can be opened); `trash_restore(ids, parents)`, `trash_purge(ids)` and `trash_empty` act on them. `fast://trash` is the location the sidebar opens.

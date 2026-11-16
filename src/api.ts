@@ -245,6 +245,26 @@ export interface TransferError {
   needsElevation: boolean;
 }
 
+/** One thing in the Recycle Bin / Trash. */
+export interface BinItem {
+  id: string;
+  name: string;
+  originalParent: string | null;
+  /** Unix seconds. */
+  deleted: number | null;
+  size: number | null;
+  entries: number | null;
+  isDir: boolean;
+  /** Where it really is, when that can be opened. */
+  path: string | null;
+}
+
+export interface Bin {
+  items: BinItem[];
+  canRestore: boolean;
+  label: string;
+}
+
 export interface Progress {
   id: number;
   op: TransferOp;
@@ -256,6 +276,8 @@ export interface Progress {
   queuedAhead?: number;
   /** The files being copied right now (as many as the settings ask for). */
   activeFiles?: { path: string; size: number }[];
+  /** Copying has begun while the folders are still being counted: totals are what has been found so far. */
+  counting?: boolean;
   strategy: "rename" | "largeSequential" | "smallParallel" | "mixed" | null;
   method?: "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs" | null;
   destDir: string;
@@ -800,6 +822,10 @@ export const api = {
   frequentFolders: (limit: number) => invoke<string[]>("frequent_folders", { limit }),
   trashPaths: (paths: string[]) => invoke<void>("trash_paths", { paths }),
   restoreFromTrash: (paths: string[]) => invoke<number>("restore_from_trash", { paths }),
+  trashList: () => invoke<Bin>("trash_list"),
+  trashRestore: (ids: string[], parents: string[]) => invoke<number>("trash_restore", { ids, parents }),
+  trashPurge: (ids: string[]) => invoke<number>("trash_purge", { ids }),
+  trashEmpty: () => invoke<number>("trash_empty"),
   archiveStart: (action: "compress" | "extract", paths: string[], here = false) => invoke<number>("archive_start", { action, paths, here }),
   watchDirs: (dirs: string[]) => invoke<void>("watch_dirs", { dirs }),
   checkConflicts: (sources: string[], destDir: string) =>
@@ -820,6 +846,7 @@ export const api = {
   crashSend: (name: string) => invoke<string>("crash_send", { name }),
   crashFolder: () => invoke<string>("crash_folder"),
   crashOpenFolder: () => invoke<void>("crash_open_folder"),
+  saveTextFile: (name: string, variants: { label: string; ext: string; contents: string }[]) => invoke<string | null>("save_text_file", { name, variants }),
   crashLogSave: (name: string) => invoke<string | null>("crash_log_save", { name }),
   crashPrevious: () => invoke<string | null>("crash_previous"),
   transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>
@@ -879,7 +906,7 @@ export const api = {
   openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
   openWithApp: (path: string, app: string, always: boolean) => invoke<void>("open_with_app", { path, app, always }),
   openSystemChooser: (path: string) => invoke<void>("open_system_chooser", { path }),
-  openTerminal: (path: string, mode: TerminalMode) => invoke<void>("open_terminal", { path, mode }),
+  openTerminal: (path: string, mode: TerminalMode, shell?: string, loginShell?: string) => invoke<void>("open_terminal", { path, mode, shell: shell ?? null, loginShell: loginShell ?? null }),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   getSession: () => invoke<Session>("get_session"),
@@ -1005,6 +1032,7 @@ export interface TermSession {
 export interface TermInfo {
   appElevated: boolean;
   os: string;
+  windowsBuild: number;
   defaultShell: string;
 }
 

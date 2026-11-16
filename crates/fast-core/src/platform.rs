@@ -28,6 +28,32 @@ pub fn os_name() -> &'static str {
     std::env::consts::OS
 }
 
+/// The Windows build number (22621 for Windows 11 22H2), or 0 anywhere else or when unknown.
+pub fn windows_build() -> u32 {
+    if !cfg!(windows) {
+        return 0;
+    }
+    parse_build(&sysinfo::System::kernel_version().unwrap_or_default())
+}
+
+/// The build number from text like "22621" or "10.0.22621".
+fn parse_build(text: &str) -> u32 {
+    text.split('.').filter_map(|p| p.trim().parse::<u32>().ok()).filter(|n| *n >= 1000).last().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::parse_build;
+
+    #[test]
+    fn reads_the_build_number_however_it_is_written() {
+        assert_eq!(parse_build("22621"), 22621);
+        assert_eq!(parse_build("10.0.19045"), 19045);
+        assert_eq!(parse_build(""), 0);
+        assert_eq!(parse_build("10.0"), 0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Desktop
 // ---------------------------------------------------------------------------
