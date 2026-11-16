@@ -417,6 +417,16 @@ export function StoragePanel() {
   };
 
   const [crashes, setCrashes] = useState<CrashLog[]>([]);
+  const [crashDir, setCrashDir] = useState("");
+  const [shown, setShown] = useState<Record<string, string>>({});
+  useEffect(() => {
+    void api.crashFolder().then(setCrashDir).catch(() => {});
+  }, []);
+  const toggleLog = async (name: string) => {
+    if (name in shown) return setShown(({ [name]: _gone, ...rest }) => rest);
+    const text = await api.crashLogRead(name).catch((e) => String(e));
+    setShown((s) => ({ ...s, [name]: text }));
+  };
   useEffect(() => {
     void api.crashLogs().then(setCrashes).catch(() => {});
   }, [rows]);
@@ -490,10 +500,20 @@ export function StoragePanel() {
           Transfer history: {formatCount(history.records)} {history.records === 1 ? "transfer" : "transfers"} across {formatCount(history.routes)} {history.routes === 1 ? "route" : "routes"} in {formatSize(history.bytes)}.
         </p>
       )}
-      {crashes.length > 0 && (
-        <div className="crash-logs" data-testid="crash-logs">
-          <h4>Crash logs</h4>
-          <p className="muted">Each one lists the computer, what the app was doing and the last things you did. Copy one and paste it where it can be looked at. Clear them with the Clear button on the Crash logs row above.</p>
+      <div className="crash-logs" data-testid="crash-logs">
+        <h4>Crash logs</h4>
+        <p className="muted crash-folder">
+          Saved in <code>{crashDir}</code>
+        </p>
+        <div className="button-row">
+          <button className="secondary" onClick={() => void api.crashOpenFolder().catch((e) => showToast(String(e)))}>
+            Open crash log folder
+          </button>
+        </div>
+        {crashes.length === 0 && <p className="muted">No crash logs. Nothing has stopped unexpectedly.</p>}
+        {crashes.length > 0 && (
+          <>
+          <p className="muted">Each one lists the computer, what the app was doing and the last things you did. View one here, or copy it and paste it where it can be looked at. Clear them with the Clear button on the Crash logs row above.</p>
           <ul>
             {crashes.map((c) => (
               <li key={c.name}>
@@ -501,6 +521,9 @@ export function StoragePanel() {
                   {new Date(c.modified * 1000).toLocaleString()} · {formatSize(c.bytes)}
                   {c.sent ? " · sent" : ""}
                 </span>
+                <button className="secondary" onClick={() => void toggleLog(c.name)}>
+                  {c.name in shown ? "Hide" : "View"}
+                </button>
                 <button className="secondary" onClick={() => void copyLog(c.name)}>
                   Copy
                 </button>
@@ -512,11 +535,13 @@ export function StoragePanel() {
                     Send to GitHub issues
                   </button>
                 )}
+                {c.name in shown && <pre className="crash-text">{shown[c.name]}</pre>}
               </li>
             ))}
           </ul>
-        </div>
-      )}
+          </>
+        )}
+      </div>
       <div className="button-row">
         <button className="secondary" onClick={reload}>
           Refresh sizes

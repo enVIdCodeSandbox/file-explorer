@@ -50,6 +50,8 @@ pub fn run() {
             fast_core::crashlog::install_panic_hook();
             let earlier = fast_core::crashlog::init(&paths.crash, env!("CARGO_PKG_VERSION"), &webview);
             fast_core::crashlog::start_flusher();
+            fast_core::crashlog::install_native_handler();
+            fast_core::crashlog::start_watchdog();
             // Nothing can be reading staged files yet, so leftovers from the last run go.
             for prefix in ["paste-", "clip-", "stage-"] {
                 remote::sweep_staging(&paths.remote_tmp, prefix, None);
@@ -343,6 +345,9 @@ pub fn run() {
             commands::clear_cache,
             commands::clear_cache_for,
             crash::crash_previous,
+            crash::crash_heartbeat,
+            crash::crash_folder,
+            crash::crash_open_folder,
             crash::crash_note,
             crash::crash_context,
             crash::crash_report,

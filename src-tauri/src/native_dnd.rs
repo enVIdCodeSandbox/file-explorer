@@ -178,6 +178,38 @@ mod imp {
         String::from_utf8_lossy(&out).into_owned()
     }
 
+    /// The path the drag library will hand to the shell: it makes every path absolute and "real" first, which
+    /// turns a mapped network drive (`U:\\folder`) into the share it points at (`\\\\server\\share\\folder`).
+    #[cfg(windows)]
+    fn as_the_library_sees_it(p: &std::path::Path) -> std::path::PathBuf {
+        let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let s = real.to_string_lossy().into_owned();
+        if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+            return std::path::PathBuf::from(format!("\\\\{rest}"));
+        }
+        std::path::PathBuf::from(s.strip_prefix("\\\\?\\").unwrap_or(&s).to_string())
+    }
+
+    /// Windows builds the drag from `ILCreateFromPathW`, which answers null for a path the shell cannot
+    /// resolve right now. The drag library passes that null on unchecked and the process dies inside the
+    /// system, where nothing can catch it. Ask first, with the same path the library will use.
+    #[cfg(windows)]
+    fn shell_can_describe(p: &std::path::Path) -> bool {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ILCreateFromPathW(path: *const u16) -> *mut core::ffi::c_void;
+            fn ILFree(pidl: *mut core::ffi::c_void);
+        }
+        let wide: Vec<u16> = p.as_os_str().encode_wide().chain(Some(0)).collect();
+        let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
+        if pidl.is_null() {
+            return false;
+        }
+        unsafe { ILFree(pidl) };
+        true
+    }
+
     pub fn drag_out(window: &tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
         use std::path::PathBuf;
         let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()).collect();
@@ -185,6 +217,19 @@ mod imp {
             return Err("Nothing to drag".into());
         }
         fast_core::crashlog::note(&format!("drag out: {} item(s), first {}", files.len(), files[0].display()));
+        #[cfg(windows)]
+        for f in &files {
+            let seen = as_the_library_sees_it(f);
+            if seen != *f {
+                fast_core::crashlog::note(&format!("drag out: the system will see {} as {}", f.display(), seen.display()));
+            }
+            if !shell_can_describe(&seen) {
+                fast_core::crashlog::note(&format!("drag out refused: Windows cannot describe {}", seen.display()));
+                fast_core::crashlog::flush();
+                return Err(format!("Windows could not prepare \"{}\" for dragging out of the app (it is on a network drive that did not answer). Use Copy, then Paste in the other program.", f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+            }
+        }
+        fast_core::crashlog::note("drag out: handing over to the system");
         fast_core::crashlog::flush();
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         let win = window.clone();

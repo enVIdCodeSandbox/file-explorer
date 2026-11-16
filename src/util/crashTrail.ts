@@ -7,7 +7,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let enabled = true;
 
 /** Commands that run constantly; leaving them out keeps the trail about what matters. */
-const NOISY = new Set(["thumbnail", "folder_fill", "thumbs_prewarm", "crash_note", "crash_context", "crash_logs", "crash_report", "progress_poll", "hardware_snapshot"]);
+const NOISY = new Set(["thumbnail", "folder_fill", "thumbs_prewarm", "crash_note", "crash_heartbeat", "crash_context", "crash_logs", "crash_report", "progress_poll", "hardware_snapshot"]);
 
 function send() {
   timer = undefined;
@@ -89,6 +89,8 @@ export function installTrail(state: () => string, report: (kind: string, message
   window.addEventListener("focus", () => crumb("window focused"));
   window.addEventListener("blur", () => crumb("window lost focus"));
   document.addEventListener("visibilitychange", () => crumb(`page ${document.visibilityState}`));
+  // Once a second the page says it is still alive; when that stops the backend saves a report and closes.
+  const beat = setInterval(() => void rawInvoke("crash_heartbeat", { visible: document.visibilityState === "visible" }).catch(() => {}), 1000);
   let last = "";
   const poll = setInterval(() => {
     gate();
@@ -98,5 +100,8 @@ export function installTrail(state: () => string, report: (kind: string, message
       void rawInvoke("crash_context", { text: s }).catch(() => {});
     }
   }, 3000);
-  return () => clearInterval(poll);
+  return () => {
+    clearInterval(poll);
+    clearInterval(beat);
+  };
 }

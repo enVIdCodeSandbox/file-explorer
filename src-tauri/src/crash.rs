@@ -163,3 +163,27 @@ pub fn remember_previous(path: Option<std::path::PathBuf>) {
 pub fn crash_previous() -> Option<String> {
     PREVIOUS.lock().ok().and_then(|mut g| g.take())
 }
+
+/// Where the reports are kept.
+#[tauri::command]
+pub fn crash_folder(state: State<'_, Shared>) -> String {
+    state.paths.crash.to_string_lossy().into_owned()
+}
+
+/// Opens the folder of reports in the system's file manager.
+#[tauri::command]
+pub fn crash_open_folder(state: State<'_, Shared>) -> CmdResult<()> {
+    let dir = state.paths.crash.clone();
+    let _ = std::fs::create_dir_all(&dir);
+    fast_core::platform::open_path(&dir).map_err(|e| e.to_string())
+}
+
+/// The page reports in every second. Cheap on purpose: no logging, one lock-free store.
+#[tauri::command]
+pub fn crash_heartbeat(state: State<'_, Shared>, visible: bool) {
+    let (close, secs) = {
+        let s = state.settings.read();
+        (s.advanced.get("crash.closeWhenFrozen").and_then(|v| v.as_bool()).unwrap_or(true), s.advanced.get("crash.freezeSeconds").and_then(|v| v.as_u64()).unwrap_or(15))
+    };
+    crashlog::heartbeat(visible, close, secs);
+}

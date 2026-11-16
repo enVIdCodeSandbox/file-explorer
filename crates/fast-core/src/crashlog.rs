@@ -29,6 +29,8 @@ struct State {
 }
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+/// The computer's description, worked out once in the background (asking the system for it can be slow).
+static INFO: OnceLock<String> = OnceLock::new();
 
 fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
@@ -81,6 +83,10 @@ pub fn init(dir: &Path, version: &str, webview: &str) -> Option<PathBuf> {
         found = if died_of_panic { list(dir).first().map(|l| l.path.clone()) } else { write_report(dir, &text) };
     }
     let started = now_ms() as u64 / 1000;
+    {
+        let (v, w) = (version.to_string(), webview.to_string());
+        std::thread::Builder::new().name("crashlog-info".into()).spawn(move || drop(INFO.set(computer_info(&v, &w)))).ok();
+    }
     let _ = std::fs::write(&marker, started.to_string());
     let _ = std::fs::remove_file(&events);
     let st = State { dir: dir.to_path_buf(), trail: VecDeque::new(), dirty: false, context: String::new(), started, version: version.into(), webview: webview.into() };
@@ -175,9 +181,21 @@ pub fn install_panic_hook() {
         };
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         let loc = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-        let bt = std::backtrace::Backtrace::force_capture();
         note(&format!("PANIC on thread {thread}: {msg}"));
-        report("Panic", &format!("{msg}\nthread: {thread}\n\nBacktrace:\n{bt}"), loc.as_deref());
+        // Write the report at once. Turning the backtrace into names can take seconds, so it gets a short
+        // time to finish and is added if it does.
+        let first = report("Panic", &format!("{msg}\nthread: {thread}\n\n(backtrace follows if it was ready in time)"), loc.as_deref());
+        let bt = std::backtrace::Backtrace::force_capture();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(format!("{bt}"));
+        });
+        if let (Ok(text), Some(path)) = (rx.recv_timeout(std::time::Duration::from_millis(1500)), first) {
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
+                use std::io::Write;
+                let _ = writeln!(f, "\n--- Backtrace ---\n{}", redact(&text));
+            }
+        }
         previous(info);
     }));
 }
@@ -271,6 +289,11 @@ pub fn redact(text: &str) -> String {
     res
 }
 
+/// What is known without asking the system anything slow.
+fn quick_info(version: &str, webview: &str) -> String {
+    format!("App:        FAST File Explorer {version}\nOS:         {}\nArch:       {}\nWebView:    {webview}\n(more detail was not ready yet)\n", std::env::consts::OS, std::env::consts::ARCH)
+}
+
 /// The computer, as far as helps find a problem. No name of the computer or the person.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn computer_info(version: &str, webview: &str) -> String {
@@ -319,7 +342,7 @@ fn build(kind: &str, message: &str, location: Option<&str>, started: u64, versio
     s.push_str("\n--- Problem ---\n");
     s.push_str(&redact(message));
     s.push_str("\n\n--- Computer ---\n");
-    s.push_str(&computer_info(version, webview));
+    s.push_str(&INFO.get().cloned().unwrap_or_else(|| quick_info(version, webview)));
     if !ctx.trim().is_empty() {
         s.push_str("\n--- Window state (last known) ---\n");
         s.push_str(ctx.trim());
@@ -358,8 +381,135 @@ fn pending_commands(trail: &[String]) -> Vec<String> {
     open.into_iter().map(|(_, l)| l).collect()
 }
 
+// ---------------------------------------------------------------------------
+// Frozen window: the page reports in every second; when it stops, the report is saved and the app closes.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static LAST_BEAT: AtomicU64 = AtomicU64::new(0);
+static SEEN_BEAT: AtomicBool = AtomicBool::new(false);
+static VISIBLE: AtomicBool = AtomicBool::new(true);
+static CLOSE_ON_FREEZE: AtomicBool = AtomicBool::new(true);
+static FREEZE_MS: AtomicU64 = AtomicU64::new(15_000);
+
+/// The page is alive. `visible` is false while the window is minimized or hidden (the browser slows
+/// its timers then, so silence means nothing).
+pub fn heartbeat(visible: bool, close_on_freeze: bool, freeze_secs: u64) {
+    LAST_BEAT.store(now_ms() as u64, Ordering::Relaxed);
+    SEEN_BEAT.store(true, Ordering::Relaxed);
+    VISIBLE.store(visible, Ordering::Relaxed);
+    CLOSE_ON_FREEZE.store(close_on_freeze, Ordering::Relaxed);
+    FREEZE_MS.store(freeze_secs.clamp(5, 600) * 1000, Ordering::Relaxed);
+}
+
+/// Has the page been silent for too long? (`seen`: it has reported at least once, so start-up is not a freeze.)
+pub fn is_frozen(now: u64, last: u64, visible: bool, seen: bool, limit_ms: u64) -> bool {
+    seen && visible && now.saturating_sub(last) > limit_ms
+}
+
+/// Watches the heartbeat. A computer that slept for a while does not count as a freeze.
+pub fn start_watchdog() {
+    std::thread::Builder::new()
+        .name("crashlog-watchdog".into())
+        .spawn(|| {
+            let mut tick = now_ms() as u64;
+            let mut reported = false;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                let now = now_ms() as u64;
+                let slept = now.saturating_sub(tick) > 5000;
+                tick = now;
+                if slept {
+                    LAST_BEAT.store(now, Ordering::Relaxed);
+                    continue;
+                }
+                let last = LAST_BEAT.load(Ordering::Relaxed);
+                let frozen = is_frozen(now, last, VISIBLE.load(Ordering::Relaxed), SEEN_BEAT.load(Ordering::Relaxed), FREEZE_MS.load(Ordering::Relaxed));
+                if !frozen {
+                    reported = false;
+                    continue;
+                }
+                if reported {
+                    continue;
+                }
+                reported = true;
+                let secs = now.saturating_sub(last) / 1000;
+                note(&format!("!! window not responding for {secs} s"));
+                report("Window stopped responding", &format!("The page has not reported in for {secs} seconds while the window was visible. Either the page is stuck in a loop, or the program's main thread is blocked (look at the last events below for what it was waiting on)."), None);
+                if CLOSE_ON_FREEZE.load(Ordering::Relaxed) {
+                    clean_exit();
+                    std::process::exit(2);
+                }
+            }
+        })
+        .ok();
+}
+
+/// Windows: a crash inside the system (access violation and the like) skips the panic hook. This writes
+/// the report and ends the process at once, which also skips the system's slow "program has stopped" dialog.
+#[cfg(windows)]
+pub fn install_native_handler() {
+    #[repr(C)]
+    struct Record {
+        code: u32,
+        flags: u32,
+        chained: *mut Record,
+        address: *mut core::ffi::c_void,
+        count: u32,
+        info: [usize; 15],
+    }
+    #[repr(C)]
+    struct Pointers {
+        record: *const Record,
+        context: *mut core::ffi::c_void,
+    }
+    extern "system" {
+        fn SetUnhandledExceptionFilter(f: Option<unsafe extern "system" fn(*const Pointers) -> i32>) -> *mut core::ffi::c_void;
+        fn GetCurrentProcess() -> isize;
+        fn TerminateProcess(process: isize, code: u32) -> i32;
+    }
+    unsafe extern "system" fn handler(p: *const Pointers) -> i32 {
+        let mut what = String::from("unknown exception");
+        let mut code = 0xC000_0409u32;
+        if !p.is_null() && !(*p).record.is_null() {
+            let r = &*(*p).record;
+            code = r.code;
+            what = format!("exception 0x{:08X} at address 0x{:X}", r.code, r.address as usize);
+            if r.code == 0xC000_0005 && r.count >= 2 {
+                let op = match r.info[0] {
+                    0 => "reading",
+                    1 => "writing",
+                    _ => "running code at",
+                };
+                what.push_str(&format!(" (access violation {op} 0x{:X})", r.info[1]));
+            }
+        }
+        note(&format!("NATIVE CRASH: {what}"));
+        report("Native crash", &format!("{what}\nThe program failed inside the system or a library (not in Rust code that can be caught). The last events below show what it was doing."), None);
+        let _ = std::fs::remove_file(STATE.get().map(|s| s.lock().dir.join("running.marker")).unwrap_or_default());
+        TerminateProcess(GetCurrentProcess(), code);
+        1
+    }
+    unsafe {
+        SetUnhandledExceptionFilter(Some(handler));
+    }
+}
+
+#[cfg(not(windows))]
+pub fn install_native_handler() {}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_silent_page_is_frozen_only_when_visible_and_after_the_first_beat() {
+        use super::is_frozen;
+        assert!(is_frozen(30_000, 10_000, true, true, 15_000));
+        assert!(!is_frozen(30_000, 20_000, true, true, 15_000));
+        assert!(!is_frozen(30_000, 10_000, false, true, 15_000));
+        assert!(!is_frozen(30_000, 0, true, false, 15_000));
+    }
+
     use super::*;
 
     #[test]

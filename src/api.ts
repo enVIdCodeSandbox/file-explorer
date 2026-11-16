@@ -808,6 +808,8 @@ export const api = {
   crashLogs: () => invoke<CrashLog[]>("crash_logs"),
   crashLogRead: (name: string) => invoke<string>("crash_log_read", { name }),
   crashSend: (name: string) => invoke<string>("crash_send", { name }),
+  crashFolder: () => invoke<string>("crash_folder"),
+  crashOpenFolder: () => invoke<void>("crash_open_folder"),
   crashPrevious: () => invoke<string | null>("crash_previous"),
   transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>
     invoke<void>("transfer_resolve", { id, answer, all }),
