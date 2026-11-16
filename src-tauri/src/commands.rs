@@ -255,6 +255,34 @@ pub async fn frequent_folders(state: State<'_, Shared>, limit: usize) -> CmdResu
 // Details
 // ---------------------------------------------------------------------------
 
+/// The size and dates of a few files, cheaply, for following the ones that are being written.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveStat {
+    pub path: String,
+    pub exists: bool,
+    pub size: u64,
+    /// Milliseconds since the Unix epoch.
+    pub modified: Option<i64>,
+}
+
+#[tauri::command]
+pub async fn stat_many(paths: Vec<String>) -> Vec<LiveStat> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .take(64)
+            .map(|path| {
+                let meta = std::fs::metadata(&path).ok();
+                let modified = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64);
+                LiveStat { exists: meta.is_some(), size: meta.as_ref().map_or(0, |m| m.len()), modified, path }
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn get_details(state: State<'_, Shared>, path: String) -> CmdResult<Details> {
     let st = state.inner().clone();

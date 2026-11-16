@@ -1,9 +1,11 @@
 // Details pane: everything the OS knows about the selection, plus folder
 // statistics and checksums computed on demand in the background.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type Details, type FolderStats } from "../api";
 import { useStore } from "../store";
+import { adv } from "../settings/advanced";
+import { isLiveAt, liveKey, liveSummary, useLive, type LiveFile } from "../util/liveFiles";
 import { loadingNotice } from "../util/progressive";
 import { formatCount, formatDate, formatDuration, formatSize, kindOf, typeLabel } from "../util/format";
 import { baseName, isArchiveLoc, isRemote, maskAddresses, parentPath, parseLocation } from "../util/path";
@@ -20,11 +22,50 @@ function Row({ label, value, mono }: { label: string; value: React.ReactNode; mo
   );
 }
 
+/** The files among these paths that are being written right now (empty when following is off). */
+function useGrowing(paths: string[], on: boolean): LiveFile[] {
+  const key = useLive((st) => (on ? liveKey(st.files, paths) : ""));
+  return useMemo(() => {
+    if (!key) return [];
+    const files = useLive.getState().files;
+    return paths.map((p) => files[p]).filter((l): l is LiveFile => !!l && l.growing);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+}
+
+/** A transfer of this app that is writing into the folder of this file, if any. */
+function transferFor(path: string) {
+  const dir = parentPath(path);
+  return Object.values(useStore.getState().transfers).find((t) => t.phase === "running" && dir != null && t.destDir === dir);
+}
+
+/** How a growing file is doing: how much, how fast, for how long. */
+function LiveRows({ file, name }: { file: LiveFile; name?: string }) {
+  const sum = liveSummary(file, Date.now());
+  const t = transferFor(file.path);
+  return (
+    <dl className="details-list live-rows" data-live>
+      {name && <div className="details-row"><dt>File</dt><dd>{name}</dd></div>}
+      <Row label="Status" value={t ? "Being copied by this app" : "Being written"} />
+      <Row label="Written so far" value={`${formatSize(file.size)}${sum.added > 0 ? ` (+${formatSize(sum.added)} since it was seen)` : ""}`} />
+      <Row label="Speed now" value={file.rate > 0 ? `${formatSize(file.rate)}/s` : "paused"} />
+      <Row label="Average speed" value={sum.average > 0 ? `${formatSize(sum.average)}/s` : null} />
+      <Row label="Fastest" value={file.peak > 0 ? `${formatSize(file.peak)}/s` : null} />
+      <Row label="Followed for" value={formatDuration(sum.seconds)} />
+      <Row label="Last change" value={sum.sinceChange < 1.5 ? "just now" : `${Math.round(sum.sinceChange)} s ago`} />
+      {t && t.bytesTotal > 0 && <Row label="This copy" value={`${Math.min(100, Math.round((t.bytesDone / t.bytesTotal) * 100))}% of ${formatSize(t.bytesTotal)}${t.etaSecs ? `, about ${formatDuration(t.etaSecs)} left` : ""}`} />}
+    </dl>
+  );
+}
+
 /** What a group of selected items adds up to. */
 function MultiSummary({ paths }: { paths: string[] }) {
   const [items, setItems] = useState<Details[] | null>(null);
   const [folders, setFolders] = useState<FolderStats | "loading" | null>(null);
   const key = paths.join("\n");
+  const settings = useStore((st) => st.settings);
+  const liveOn = !!settings && adv<boolean>(settings, "live.enabled") && adv<boolean>(settings, "live.details");
+  const growing = useGrowing(paths, liveOn);
 
   useEffect(() => {
     setItems(null);
@@ -56,8 +97,10 @@ function MultiSummary({ paths }: { paths: string[] }) {
 
   const dirs = items.filter((d) => d.kind === "folder");
   const files = items.filter((d) => d.kind !== "folder");
-  const fileBytes = files.reduce((n, d) => n + d.size, 0);
-  const onDisk = files.reduce((n, d) => n + (d.sizeOnDisk ?? d.size), 0);
+  // Files being written count with the size they have now.
+  const liveSize = (d: Details) => growing.find((l) => l.path === d.path)?.size ?? d.size;
+  const fileBytes = files.reduce((n, d) => n + liveSize(d), 0);
+  const onDisk = files.reduce((n, d) => n + (growing.some((l) => l.path === d.path) ? liveSize(d) : (d.sizeOnDisk ?? d.size)), 0);
   const times = items.map((d) => d.modified).filter((m): m is number => m != null);
   const parents = new Set(items.map((d) => d.parent));
   const byType = new Map<string, { count: number; bytes: number }>();
@@ -103,6 +146,17 @@ function MultiSummary({ paths }: { paths: string[] }) {
         <Row label="Hidden" value={items.some((d) => d.hidden) ? `${items.filter((d) => d.hidden).length} of ${items.length}` : undefined} />
         {paths.length > items.length && <Row label="Note" value={`Totals cover the first ${items.length} items.`} />}
       </dl>
+      {growing.length > 0 && (
+        <div className="details-section" data-live>
+          <strong>Being written now ({growing.length})</strong>
+          <dl className="details-list">
+            <Row label="Total speed" value={`${formatSize(growing.reduce((n, l) => n + l.rate, 0))}/s`} />
+          </dl>
+          {growing.map((l) => (
+            <LiveRows key={l.path} file={l} name={baseName(l.path)} />
+          ))}
+        </div>
+      )}
       {types.length > 0 && (
         <div className="details-section">
           <strong>Types</strong>
@@ -171,10 +225,20 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   const [stats, setStats] = useState<FolderStats | "loading" | null>(null);
   const [hash, setHash] = useState<string | "loading" | null>(null);
 
+  // A different item: start clean. The same item changing on disk: keep showing it and swap the numbers in place.
   useEffect(() => {
     setDetails(null);
     setStats(null);
     setHash(null);
+  }, [target]);
+
+  const settings = useStore((st) => st.settings);
+  const liveOn = !!settings && adv<boolean>(settings, "live.enabled") && adv<boolean>(settings, "live.details");
+  const growing = useGrowing(target ? [target] : [], liveOn);
+  const live = growing[0];
+  const blockHash = !!settings && adv<boolean>(settings, "live.blockHash") && !!target && (!!live || isLiveAt(target));
+
+  useEffect(() => {
     if (!target) return;
     let alive = true;
     // Brief delay so arrowing quickly through a list does not stat every row.
@@ -232,10 +296,10 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
 
       <dl className="details-list">
         <Row label="Location" value={d.parent ? maskAddresses(d.parent) : d.parent} mono />
-        {!isDir && <Row label="Size" value={`${formatSize(d.size)} (${formatCount(d.size)} bytes)`} />}
+        {!isDir && <Row label="Size" value={`${formatSize(live?.size ?? d.size)} (${formatCount(live?.size ?? d.size)} bytes)`} />}
         {!isDir && d.sizeOnDisk != null && <Row label="Size on disk" value={formatSize(d.sizeOnDisk)} />}
         {isDir && <Row label="Contains" value={d.itemCount != null ? `${formatCount(d.itemCount)} ${d.itemCount === 1 ? "item" : "items"}` : null} />}
-        <Row label="Modified" value={formatDate(d.modified)} />
+        <Row label="Modified" value={formatDate(live?.modified ?? d.modified)} />
         <Row label="Created" value={formatDate(d.created)} />
         <Row label="Accessed" value={formatDate(d.accessed)} />
         <Row label="Content type" value={d.mime} />
@@ -263,11 +327,18 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
         )}
       </dl>
 
+      {live && (
+        <div className="details-section" data-live>
+          <strong>Being written now</strong>
+          <LiveRows file={live} />
+        </div>
+      )}
+
       {!isDir && !isRemote(d.path) && !isArchiveLoc(d.path) && (
         <div className="details-section">
           {hash === null ? (
-            <button className="secondary" onClick={calcHash}>
-              Compute SHA-256
+            <button className="secondary" disabled={blockHash} title={blockHash ? "The file is still being written. This works once it stops growing." : undefined} onClick={calcHash}>
+              {blockHash ? "Compute SHA-256 (file still being written)" : "Compute SHA-256"}
             </button>
           ) : hash === "loading" ? (
             <span className="muted">Hashing…</span>

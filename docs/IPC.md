@@ -8,6 +8,7 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `prefetch` | `prefetch` | `paths: Vec<String>` | `()` | Warm the listing cache for folders the user is likely to open next. |
 | `record_visit` | `recordVisit` | `from: Option<String>, to: String` | `Vec<String>` | Record a navigation and return the folders most likely to be opened next. Their listings are warmed in the background. |
 | `frequent_folders` | `frequentFolders` | `limit: usize` | `Vec<String>` | The folders opened most often (recent visits weigh more), skipping any that no longer exist. |
+| `stat_many` | `statMany` | `paths: Vec<String>` | `Vec<LiveStat>` | Size and modified time of up to 64 files, no more. Used to follow files that are being written (`src/util/liveFiles.ts`). |
 | `get_details` | `getDetails` | `path: String` | `Details` |  |
 | `folder_stats` | `folderStats` | `path: String` | `FolderStats` |  |
 | `folder_sizes_start` | `folderSizesStart` | `dir: String, names: Vec<String>, refresh: bool` | `()` | Measure the given subfolders of `dir` one after another in the background, sending a `folder-size` event for each. Starting another job (opening a different folder) cancels this one. Recent results are reused unless `refresh` is set. |

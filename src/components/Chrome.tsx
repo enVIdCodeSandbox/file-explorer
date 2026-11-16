@@ -21,7 +21,7 @@ import {
   useStore,
 } from "../store";
 import { adv } from "../settings/advanced";
-import { commandFor } from "../settings/keys";
+import { commandFor, keyFor } from "../settings/keys";
 import { driveName, driveRemote, hidesAddress } from "../util/drives";
 import { deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { isFiltering, toSearchQuery } from "../util/filter";
@@ -430,7 +430,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
   const info = useStore((s) => s.info);
   const drives = useStore((s) => s.drives);
   const settings = useStore((s) => s.settings)!;
-  const { navigate, back, forward, bumpDirs, showToast } = useStore.getState();
+  const { navigate, back, forward, showToast } = useStore.getState();
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -441,6 +441,15 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
   const location = tab?.location ?? HOME;
   const loc = parseLocation(location);
   const folder = loc.kind === "folder" ? loc.path : null;
+  // The refresh button turns for a moment after a refresh, so it is clear it happened.
+  const refreshedAt = useStore((st) => st.refreshedAt);
+  const [spinning, setSpinning] = useState(false);
+  useEffect(() => {
+    if (!refreshedAt) return;
+    setSpinning(true);
+    const t = setTimeout(() => setSpinning(false), 900);
+    return () => clearTimeout(t);
+  }, [refreshedAt]);
   const up = folder ? (parentPath(folder) ?? THIS_PC) : null;
 
   // The search box mirrors the query when a search tab is showing.
@@ -603,7 +612,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
         <button aria-label="Up" data-nav="up" title="Up (Alt+Up)" disabled={!up} onClick={() => up && navigate(up)}>
           <Icon name="up" />
         </button>
-        <button aria-label="Refresh" data-nav="refresh" title="Refresh (F5)" onClick={() => (folder ? bumpDirs([folder]) : useStore.getState().refreshDrives())}>
+        <button aria-label="Refresh" data-nav="refresh" data-spinning={spinning || undefined} title={`Refresh (${[keyFor(settings, "refresh"), keyFor(settings, "refreshAlt")].filter(Boolean).join(" or ")})`} onClick={() => useStore.getState().refreshTab()}>
           <Icon name="refresh" />
         </button>
       </div>
@@ -903,8 +912,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
   const more = (e: React.MouseEvent) => {
     const onThisPc = loc.kind === "thispc";
     below(e, [
-      { id: "undo", label: "Undo", icon: "undo", shortcut: "Ctrl+Z", disabled: undoCount === 0, run: () => void undoLast() },
-      { id: "redo", label: "Redo", icon: "redo", shortcut: "Ctrl+Y", disabled: redoCount === 0, run: () => void redoLast() },
+      { id: "undo", label: "Undo", icon: "undo", shortcut: keyFor(settings, "undo"), disabled: undoCount === 0, run: () => void undoLast() },
+      { id: "redo", label: "Redo", icon: "redo", shortcut: keyFor(settings, "redo"), disabled: redoCount === 0, run: () => void redoLast() },
       ...(onThisPc
         ? [
             ...networkMenuItems(drives, os, settings.appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),

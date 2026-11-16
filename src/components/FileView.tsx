@@ -7,6 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { SelectGroup } from "./SelectGroup";
 import { fileToolsItems } from "./toolsOpen";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { changedSince, followFiles, useLive } from "../util/liveFiles";
 import { api, on, type FileEntry, type FolderSize, type Listing } from "../api";
 import {
   ICON_PX,
@@ -36,7 +37,7 @@ import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
 import { taskFromSelection } from "./tasksUtil";
 import { LockedCard } from "./Locks";
-import { commandFor } from "../settings/keys";
+import { commandFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
@@ -264,12 +265,55 @@ export function FileView({ path }: { path: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [current, sized, sort, settings.general.foldersFirst, sortNeedsDisk ? extra : null],
   );
-  const entries = useMemo(
+  const listed = useMemo(
     () => applyColumnFilters(applyFilter(sorted, filter), filter.cols, columnDef, extra),
     // The fetched values only matter when a column is being filtered by them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sorted, filter, filterNeedsDisk ? extra : null],
   );
+
+  // Files of this folder that are being written: their size (and date) are kept up to date, nothing else is touched.
+  // The selector gives text, so the list only redraws when one of those files actually changed.
+  const liveEnabled = adv<boolean>(settings, "live.enabled");
+  const liveSizes = liveEnabled && details && adv<boolean>(settings, "live.sizes");
+  const growingHere = useLive((st) =>
+    !liveSizes
+      ? ""
+      : Object.values(st.files)
+          .filter((l) => l.growing && parentPath(l.path) === path)
+          .map((l) => `${l.path}:${l.size}`)
+          .join("|"),
+  );
+  const entries = useMemo(() => {
+    if (!growingHere) return listed;
+    const files = useLive.getState().files;
+    return listed.map((e) => {
+      const l = e.isDir ? undefined : files[joinPath(path, e.name)];
+      return l?.growing ? { ...e, size: l.size, modified: l.modified ?? e.modified } : e;
+    });
+  }, [listed, growingHere, path]);
+
+  // Follow the files that the listing shows changing (new, grown, touched a moment ago).
+  const lastListing = useRef<{ path: string; seen: Map<string, { size: number; modified: number | null }> } | null>(null);
+  useEffect(() => {
+    if (!current || loading || !liveEnabled || isRemote(path) || isArchiveLoc(path)) return;
+    const before = lastListing.current?.path === path ? lastListing.current.seen : null;
+    const recentMs = Math.max(1, adv<number>(settings, "live.recentSeconds")) * 1000;
+    const follow = changedSince(path, current.entries, before, recentMs);
+    if (follow.length) followFiles(follow.slice(0, 64));
+    lastListing.current = { path, seen: new Map(current.entries.map((e) => [e.name, { size: e.size, modified: e.modified }])) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, loading, liveEnabled, path]);
+
+  // A refresh you asked for shows: a bar across the top of the list and the list dips for a moment.
+  const refreshedAt = useStore((st) => st.refreshedAt);
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    if (!refreshedAt) return;
+    setRefreshing(true);
+    const t = setTimeout(() => setRefreshing(false), 900);
+    return () => clearTimeout(t);
+  }, [refreshedAt]);
 
   // Videos and documents are slow to picture: in the background, make the ones in this folder ahead of the scrolling.
   const prewarmMode = adv<string>(settings, "thumbs.videoPrewarm");
@@ -496,7 +540,7 @@ export function FileView({ path }: { path: string }) {
   const inArchiveHere = isArchiveLoc(path);
   const terminalLabel = (admin: boolean) => (inArchiveHere ? (admin ? "Unpack, then open terminal as administrator" : "Unpack, then open terminal here") : admin ? "Open terminal as administrator" : "Open terminal here");
 
-  const refresh = () => useStore.getState().bumpDirs([path]);
+  const refresh = () => useStore.getState().refreshTab();
 
   /** Right-clicking an unselected item selects just that item first. */
   const selectedPathsWith = (target: FileEntry): string[] => {
@@ -628,7 +672,7 @@ export function FileView({ path }: { path: string }) {
             })),
           },
           { id: "chooseDetails", label: "Choose details…", run: () => useStore.setState({ chooseDetailsOpen: true }) },
-          { id: "refresh", label: "Refresh", shortcut: "F5", icon: "refresh", separatorBefore: true, run: refresh },
+          { id: "refresh", label: "Refresh", shortcut: keyFor(settings, "refresh"), icon: "refresh", separatorBefore: true, run: refresh },
           { id: "copyPath", label: "Copy folder path", icon: "copy", run: () => void navigator.clipboard.writeText(path) },
           { id: "pin", label: pinned ? "Unpin this folder" : "Pin this folder", icon: "pin", run: () => togglePin(path) },
           !isRemote(path) && { id: "terminal", label: terminalLabel(false), icon: "terminal", separatorBefore: true, run: () => void terminal(path, "here") },
@@ -768,7 +812,6 @@ export function FileView({ path }: { path: string }) {
     else if (cmd === "delete" && paths.length) void deletePaths(paths, e.shiftKey);
     else if (cmd === "newFolder") void create(true);
     else if (cmd === "properties" && paths.length) void showProperties(paths);
-    else if (cmd === "refresh") refresh();
     else if (e.key === "ArrowDown") moveCursor(columnsPerRow, e.shiftKey);
     else if (e.key === "ArrowUp") moveCursor(-columnsPerRow, e.shiftKey);
     else if (e.key === "ArrowRight" && !details) moveCursor(1, e.shiftKey);
@@ -786,7 +829,6 @@ export function FileView({ path }: { path: string }) {
       if (up) navigate(up);
     } else if (e.key === "Delete" && paths.length) void deletePaths(paths, e.shiftKey);
     else if (e.key === "F2" && first) startRename();
-    else if (e.key === "F5") refresh();
     else if (mod && e.key.toLowerCase() === "a") setSelected(new Set(entries.map((x) => x.name)));
     else if (mod && e.key.toLowerCase() === "c" && paths.length) setClipboard({ paths, op: "copy" });
     else if (mod && e.key.toLowerCase() === "x" && paths.length) setClipboard({ paths, op: "move" });
@@ -1266,6 +1308,7 @@ export function FileView({ path }: { path: string }) {
       <div
         ref={scroller}
         className="file-scroller"
+        data-refreshing={refreshing || undefined}
         data-drop="folder"
         data-drop-path={path}
         tabIndex={0}

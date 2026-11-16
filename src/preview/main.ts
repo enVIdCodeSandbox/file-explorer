@@ -177,6 +177,8 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
         }),
       ),
     })),
+  // A file that grows by about 3 MB a second, so the live panel can be seen.
+  stat_many: (a) => (a.paths as string[]).map((path) => ({ path, exists: true, size: /\.mp4$/i.test(path) ? 465_000_000 + Math.floor((Date.now() % 1e7) / 1000) * 3_000_000 : 88_000, modified: Date.now() })),
   get_details: (a) => {
     const path = String(a.path);
     const name = path.split(/[\\/]/).pop() ?? path;

@@ -7,7 +7,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let enabled = true;
 
 /** Commands that run constantly; leaving them out keeps the trail about what matters. */
-const NOISY = new Set(["thumbnail", "folder_fill", "thumbs_prewarm", "crash_note", "crash_heartbeat", "crash_context", "crash_logs", "crash_report", "progress_poll", "hardware_snapshot"]);
+const NOISY = new Set(["stat_many", "thumbnail", "folder_fill", "thumbs_prewarm", "crash_note", "crash_heartbeat", "crash_context", "crash_logs", "crash_report", "progress_poll", "hardware_snapshot"]);
 
 function send() {
   timer = undefined;

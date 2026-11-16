@@ -333,6 +333,10 @@ interface State {
   pasteInto: (dest: string) => Promise<void>;
   setSelection: (paths: string[]) => void;
   bumpDirs: (dirs: string[]) => void;
+  /** Reload what the active tab shows, and make that visible (bar across the list, the button turns). */
+  refreshTab: () => void;
+  /** When the person last asked for a refresh. */
+  refreshedAt: number;
   onProgress: (p: Progress) => void;
   onDeleteProgress: (p: DeleteProgress) => void;
   /** Cancel requested, by job id and when (so a stuck cancel can offer "Force stop"). */
@@ -496,6 +500,7 @@ export const useStore = create<State>((set, get) => ({
   cancelling: {},
   clipboard: null,
   dirVersion: {},
+  refreshedAt: 0,
   loadingDir: null,
   queuedJobs: {},
   unqueue: (id) => {
@@ -1014,6 +1019,16 @@ export const useStore = create<State>((set, get) => ({
     if (move) void api.clipboardClear().catch(() => {});
   },
   setSelection: (selection) => set({ selection }),
+
+  refreshTab: () => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTab);
+    const loc = tab ? parseLocation(tab.location) : null;
+    if (tab && loc?.kind === "folder") s.bumpDirs([loc.path]);
+    else if (tab && (isRemote(tab.location) || isArchiveLoc(tab.location))) s.bumpDirs([tab.location]);
+    else s.refreshDrives();
+    set({ refreshedAt: Date.now() });
+  },
 
   bumpDirs: (dirs) => {
     const dirVersion = { ...get().dirVersion };

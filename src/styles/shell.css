@@ -939,3 +939,12 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .crash-logs code { user-select: text; -webkit-user-select: text; word-break: break-all; }
 .notice-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 8px 36px; }
 .notice-actions button { height: 26px; padding: 0 10px; font-size: var(--font-size-small); }
+
+/* After a refresh you asked for: the refresh button turns, a bar sweeps across the top of the list, and the list dips. */
+[data-nav="refresh"][data-spinning] svg { animation: refresh-turn .8s ease-in-out; }
+@keyframes refresh-turn { to { transform: rotate(360deg); } }
+.file-scroller[data-refreshing] { animation: list-dip .7s ease-out; }
+.file-scroller[data-refreshing]::before { content: ""; position: sticky; top: 0; display: block; height: 3px; margin-bottom: -3px; z-index: 6; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: refresh-sweep .85s ease-out; pointer-events: none; }
+@keyframes list-dip { 0% { opacity: .55; } 100% { opacity: 1; } }
+@keyframes refresh-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { [data-nav="refresh"][data-spinning] svg { animation: none; } .file-scroller[data-refreshing]::before { animation: bar-pulse .8s ease-out; } }

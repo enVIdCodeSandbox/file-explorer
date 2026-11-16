@@ -161,6 +161,19 @@ Right-click → Share:
 
 **Advanced > Tasks (in Settings):** turn all tasks off, hide the toolbar button, let tasks teach the time estimates, keep a record of every run (this also holds the log of interrupted and missed runs), how many runs to keep per task and for how many days, messages when a task finishes, the confirmation for tasks that delete for good, and starting with the computer.
 
+## Files that are being written or copied
+
+A file that is growing (a download, a recording, a copy from another program) is followed on its own. Only that file is checked, a few times a second, never the rest of the folder.
+
+- **Details pane:** shows "Being written now" with how much has been written, the speed now, the average and fastest speed, how long it has been followed and when it last changed. It no longer flashes when it updates. If several files are selected, every one that is growing is listed at once, with the total speed.
+- **File list:** in the Details view, the size of a growing file keeps up to date. Other rows are left alone.
+- **Checksum:** "Compute SHA-256" waits until the file stops growing.
+- **Done:** a file counts as finished after a few quiet seconds, and then the folder and details are refreshed once.
+
+Every part can be turned off in Settings > Advanced (Files and lists), and how often files are checked and how many are followed follow the performance preset (Full: twice a second, Balanced: every second and at most 12 files, Saver: every 3 seconds and at most 4) unless you choose a value.
+
+**Refresh:** F5 or Ctrl+R. The refresh button turns and a bar sweeps over the list so you can see it happened. **Undo/Redo:** Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z; all of these can be changed under Settings > Keyboard.
+
 ## Details pane (Alt+P)
 
 One item: type, size, size on disk, dates, permissions, SHA-256 and more. Several items: how many files and folders, total size, the largest file, where they are, the oldest and newest change, a breakdown by type, and a **Measure folders** button that adds up everything inside the selected folders.

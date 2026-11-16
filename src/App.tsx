@@ -21,6 +21,7 @@ import { Notices } from "./components/Notices";
 import { Transfers } from "./components/Transfers";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
+import { startLiveTracker } from "./util/liveFiles";
 import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
 import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } from "./util/path";
@@ -47,6 +48,8 @@ const MobileApp = lazy(() => import("./components/Mobile").then((m) => ({ defaul
 const DetachedTransfers = lazy(() => import("./components/Transfers").then((m) => ({ default: m.DetachedTransfers })));
 
 function AppInner() {
+  // Follows files that are being written, so their size and speed stay current.
+  useEffect(() => startLiveTracker(), []);
   useT(); // keeps the page language (and every label) in step with the language setting
   const ready = useStore((s) => s.ready);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
@@ -277,14 +280,13 @@ function AppInner() {
       if (s.dialog) return;
       // While a shortcut is being recorded in Settings, leave the keys alone.
       if ((e.target as HTMLElement | null)?.closest?.("[data-capture-key]")) return;
-      // Undo and Redo work wherever the focus is (a dialog that just closed leaves
-      // none), except while typing, where the text box has its own undo.
+      // Undo and Redo work wherever the focus is (a dialog that just closed leaves none), except while typing,
+      // where the text box has its own undo. Their keys are the ones set in Settings > Advanced > Keyboard.
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.altKey && !typing && ["z", "y"].includes(e.key.toLowerCase())) {
+      // F5 always refreshes, even if the Refresh key was changed.
+      if (e.key === "F5" && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) {
         e.preventDefault();
-        if (e.key.toLowerCase() === "y" || e.shiftKey) void redoLast();
-        else void undoLast();
+        s.refreshTab();
         return;
       }
       const command = commandFor(s.settings, e);
@@ -292,6 +294,11 @@ function AppInner() {
       const i = s.tabs.findIndex((t) => t.id === s.activeTab);
       const n = s.tabs.length;
       switch (command) {
+        case "undo": if (typing) return; void undoLast(); break;
+        case "redo":
+        case "redoAlt": if (typing) return; void redoLast(); break;
+        case "refresh":
+        case "refreshAlt": s.refreshTab(); break;
         case "newTab": s.newTab(); break;
         case "closeTab": s.closeTab(s.activeTab); break;
         case "reopenTab": s.reopenTab(); break;

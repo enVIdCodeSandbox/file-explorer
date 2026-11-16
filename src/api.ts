@@ -14,6 +14,13 @@ export interface FileEntry {
   created: number | null;
 }
 
+export interface LiveStat {
+  path: string;
+  exists: boolean;
+  size: number;
+  modified: number | null;
+}
+
 export interface Listing {
   path: string;
   parent: string | null;
@@ -769,6 +776,7 @@ export const api = {
   serversForgetHost: (host: string, port: number) => invoke<void>("servers_forget_host", { host, port }),
   prefetch: (paths: string[]) => invoke<void>("prefetch", { paths }),
   recordVisit: (from: string | null, to: string) => invoke<string[]>("record_visit", { from, to }),
+  statMany: (paths: string[]) => invoke<LiveStat[]>("stat_many", { paths }),
   getDetails: (path: string) => invoke<Details>("get_details", { path }),
   folderStats: (path: string) => invoke<FolderStats>("folder_stats", { path }),
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
