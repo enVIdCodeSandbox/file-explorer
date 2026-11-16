@@ -364,6 +364,9 @@ pub struct Updates {
     pub auto_download: bool,
     /// Say so in the notifications when a new build comes out (once for each).
     pub notify: bool,
+    /// Also look at the artifacts of the repository's workflow runs (unreleased builds, downloaded through
+    /// GitHub with a token or through nightly.link). Off: only the Releases are used.
+    pub include_unreleased: bool,
     /// "owner/name" of the repository whose builds are used.
     pub repo: String,
     pub branch: String,
@@ -381,6 +384,7 @@ impl Default for Updates {
             check_hours: 6,
             auto_download: true,
             notify: true,
+            include_unreleased: false,
             repo: crate::update::DEFAULT_REPO.into(),
             branch: crate::update::DEFAULT_BRANCH.into(),
             token: String::new(),

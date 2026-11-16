@@ -272,6 +272,7 @@ pub fn redact(text: &str) -> String {
 }
 
 /// The computer, as far as helps find a problem. No name of the computer or the person.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn computer_info(version: &str, webview: &str) -> String {
     use sysinfo::System;
     let mut sys = System::new();
@@ -288,6 +289,18 @@ pub fn computer_info(version: &str, webview: &str) -> String {
     s.push_str(&format!("WebView:    {webview}\n"));
     s.push_str(&format!("Build:      {}\n", if cfg!(debug_assertions) { "debug" } else { "release" }));
     s
+}
+
+/// Phones: the system library used on computers is not part of the mobile builds.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn computer_info(version: &str, webview: &str) -> String {
+    let cores = std::thread::available_parallelism().map_or(0, |n| n.get());
+    format!(
+        "App:        FAST File Explorer {version}\nOS:         {}\nArch:       {}\nCPU:        {cores} logical cores\nWebView:    {webview}\nBuild:      {}\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        if cfg!(debug_assertions) { "debug" } else { "release" }
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

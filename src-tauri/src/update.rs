@@ -135,9 +135,9 @@ mod http {
 /// are returned too.
 #[cfg(desktop)]
 fn find_all(st: &Shared) -> (Vec<Latest>, Vec<String>) {
-    let (repo, branch, token) = {
+    let (repo, branch, token, unreleased) = {
         let u = &st.settings.read().updates;
-        (u.repo.trim().to_string(), u.branch.trim().to_string(), u.token.clone())
+        (u.repo.trim().to_string(), u.branch.trim().to_string(), u.token.clone(), u.include_unreleased)
     };
     if repo.split('/').count() != 2 || repo.contains(' ') {
         return (Vec::new(), vec![format!("\"{repo}\" is not a repository name (use owner/name)")]);
@@ -148,7 +148,8 @@ fn find_all(st: &Shared) -> (Vec<Latest>, Vec<String>) {
         Ok(listing) => found.extend(core::pick_release(&listing, core::Target::here())),
         Err(e) => problems.push(format!("Releases: {}", missing(e))),
     }
-    if let Some(name) = core::artifact_name() {
+    // Workflow artifacts are unreleased builds and need a token or nightly.link to download: only on request.
+    if let Some(name) = core::artifact_name().filter(|_| unreleased) {
         match http::json(&format!("https://api.github.com/repos/{repo}/actions/artifacts?name={name}&per_page=50"), &token) {
             Ok(listing) => found.extend(core::pick_latest(&listing, name, &branch)),
             Err(e) => problems.push(format!("Actions: {}", missing(e))),

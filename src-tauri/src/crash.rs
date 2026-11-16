@@ -70,6 +70,12 @@ pub async fn crash_send(state: State<'_, Shared>, name: String) -> CmdResult<Str
     tauri::async_runtime::spawn_blocking(move || send(&repo, &path)).await.map_err(|e| e.to_string())?
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn send(_repo: &str, _path: &std::path::Path) -> CmdResult<String> {
+    Err("Sending crash reports is available on computers only. Copy the report from Settings > Storage instead.".into())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn send(repo: &str, path: &std::path::Path) -> CmdResult<String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let kind = text.lines().find_map(|l| l.strip_prefix("Kind: ")).unwrap_or("Crash").to_string();
@@ -111,6 +117,7 @@ fn send(repo: &str, path: &std::path::Path) -> CmdResult<String> {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn enc(s: &str) -> String {
     let mut o = String::with_capacity(s.len() * 2);
     for b in s.bytes() {

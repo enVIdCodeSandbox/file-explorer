@@ -516,6 +516,7 @@ export interface Settings {
     checkHours: number;
     autoDownload: boolean;
     notify: boolean;
+    includeUnreleased: boolean;
     repo: string;
     branch: string;
     token: string;
