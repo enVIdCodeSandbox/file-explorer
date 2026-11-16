@@ -236,9 +236,22 @@ pub fn pick_release(listing: &Value, t: Target) -> Option<Latest> {
 
 /// Is `latest` newer than the build that is running? A commit id decides when both sides have one;
 /// otherwise a release is compared by its version number.
-pub fn newer_than_running(current_sha: Option<&str>, current_version: &str, latest: &Latest) -> Newer {
+pub fn newer_than_running(current_sha: Option<&str>, current_version: &str, built_at: Option<u64>, latest: &Latest) -> Newer {
+    // A release has a version number, and a version has an order. A commit id only says "same or different",
+    // so using it here offered an older release as an update to a newer running build, which then updated
+    // itself back up from the newer build, over and over.
+    if let (Source::Release, Some(v)) = (&latest.source, &latest.version) {
+        if version_parses(v) && version_parses(current_version) {
+            // A newer version number published before this build was even made is a mislabelled old one.
+            return if version_newer(v, current_version) && !made_before(&latest.created_at, built_at) { Newer::Yes } else { Newer::No };
+        }
+    }
     if !latest.sha.is_empty() {
         let by_sha = is_newer(current_sha, &latest.sha);
+        if by_sha == Newer::Yes && made_before(&latest.created_at, built_at) {
+            // A different build, but older than this one (an old workflow run that is still kept).
+            return Newer::No;
+        }
         if by_sha != Newer::Unknown {
             return by_sha;
         }
@@ -258,8 +271,8 @@ pub fn newer_than_running(current_sha: Option<&str>, current_version: &str, late
 /// The build to offer out of everything found: the newest one that is newer than the running build,
 /// and if none is, the newest one at all (to show what the newest is). On a tie a release wins,
 /// because it can be downloaded without a token.
-pub fn best_of(found: Vec<Latest>, current_sha: Option<&str>, current_version: &str) -> Option<(Latest, Newer)> {
-    let mut judged: Vec<(Latest, Newer)> = found.into_iter().map(|l| { let n = newer_than_running(current_sha, current_version, &l); (l, n) }).collect();
+pub fn best_of(found: Vec<Latest>, current_sha: Option<&str>, current_version: &str, built_at: Option<u64>) -> Option<(Latest, Newer)> {
+    let mut judged: Vec<(Latest, Newer)> = found.into_iter().map(|l| { let n = newer_than_running(current_sha, current_version, built_at, &l); (l, n) }).collect();
     let key = |(l, n): &(Latest, Newer)| (matches!(n, Newer::Yes | Newer::Unknown), l.created_at.clone(), l.source == Source::Release);
     judged.sort_by_key(|j| key(j));
     judged.pop()
@@ -300,6 +313,22 @@ pub fn version_in_name(name: &str) -> Option<String> {
         let (a, b, c) = (dots.next(), dots.next(), dots.next());
         matches!((a, b, c), (Some(a), Some(b), Some(c)) if [a, b, c.trim_end_matches(|ch: char| !ch.is_ascii_digit())].iter().all(|x| !x.is_empty() && x.chars().all(|ch| ch.is_ascii_digit())))
     }).map(|s| s.trim_end_matches(|ch: char| !ch.is_ascii_digit() && ch != '.').to_string())
+}
+
+/// Was something published (RFC 3339, UTC, like `2026-11-15T20:39:00Z`) before the running build was made
+/// (seconds since 1970)? False when either date is not known.
+pub fn made_before(created_at: &str, built_at: Option<u64>) -> bool {
+    let Some(built) = built_at else { return false };
+    let c = created_at.trim();
+    if c.len() < 19 || !c.is_char_boundary(19) {
+        return false;
+    }
+    let b = crate::crashlog::stamp(built).replacen(' ', "T", 1);
+    c[..19] < *b.as_str()
+}
+
+fn version_parses(v: &str) -> bool {
+    v.trim_start_matches('v').split('.').all(|p| p.split(['-', '+']).next().unwrap_or("").parse::<u64>().is_ok())
 }
 
 /// Is `a` a newer "x.y.z" than `b`? Unreadable versions are never newer.
@@ -436,21 +465,30 @@ mod tests {
         let rel = |ver: &str, sha: &str, at: &str| Latest { source: Source::Release, version: Some(ver.into()), run_id: 0, artifact_id: 1, sha: sha.into(), branch: "main".into(), created_at: at.into(), size: 1, name: "x".into(), download_url: "u".into(), digest: None };
         let act = |sha: &str, at: &str| Latest { source: Source::Actions, version: None, ..rel("", sha, at) };
         // By commit id when both sides have one.
-        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", &rel("0.2.0", &sha_a, "t")), Newer::No);
-        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", &rel("0.2.1", &sha_b, "t")), Newer::Yes);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", None, &rel("0.2.0", &sha_a, "t")), Newer::No);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", None, &rel("0.2.1", &sha_b, "t")), Newer::Yes);
         // By version when this build does not know its commit, or the release does not name one.
-        assert_eq!(newer_than_running(None, "0.2.0", &rel("0.2.1", "", "t")), Newer::Yes);
-        assert_eq!(newer_than_running(None, "0.2.1", &rel("0.2.1", &sha_b, "t")), Newer::No);
-        assert_eq!(newer_than_running(None, "0.2.1", &act(&sha_b, "t")), Newer::Unknown);
+        assert_eq!(newer_than_running(None, "0.2.0", None, &rel("0.2.1", "", "t")), Newer::Yes);
+        assert_eq!(newer_than_running(None, "0.2.1", None, &rel("0.2.1", &sha_b, "t")), Newer::No);
+        assert_eq!(newer_than_running(None, "0.2.1", None, &act(&sha_b, "t")), Newer::Unknown);
+        // An older release is never an update, whatever its commit id (it used to be, and caused an update loop).
+        assert_eq!(newer_than_running(Some(&sha_a), "0.10.3", None, &rel("0.10.1", &sha_b, "t")), Newer::No);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.10.3", None, &rel("0.10.4", &sha_b, "t")), Newer::Yes);
+        // The date counts: a different build that is older than the running one is not an update; a newer one is.
+        let built = 1_763_240_000; // 2025-11-15T21:33:20Z
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", Some(built), &act(&sha_b, "2025-11-15T20:00:00Z")), Newer::No);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", Some(built), &act(&sha_b, "2025-11-15T22:00:00Z")), Newer::Yes);
+        assert_eq!(newer_than_running(Some(&sha_a), "0.2.0", Some(built), &rel("0.2.1", &sha_b, "2025-11-15T20:00:00Z")), Newer::No);
+        assert!(made_before("2025-11-15T20:00:00Z", Some(built)) && !made_before("2025-11-15T22:00:00Z", Some(built)) && !made_before("2025-11-15T20:00:00Z", None));
         // The newer of the two places wins; on a tie, the release.
-        let (l, n) = best_of(vec![rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z"), act(&"c".repeat(40), "2026-11-15T11:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        let (l, n) = best_of(vec![rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z"), act(&"c".repeat(40), "2026-11-15T11:00:00Z")], Some(&sha_a), "0.2.0", None).unwrap();
         assert_eq!((l.source, n), (Source::Actions, Newer::Yes));
-        let (l, _) = best_of(vec![act(&sha_b, "2026-11-15T10:00:00Z"), rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        let (l, _) = best_of(vec![act(&sha_b, "2026-11-15T10:00:00Z"), rel("0.3.0", &sha_b, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0", None).unwrap();
         assert_eq!(l.source, Source::Release);
         // Nothing newer: still reports the newest, as "not newer".
-        let (l, n) = best_of(vec![rel("0.2.0", &sha_a, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0").unwrap();
+        let (l, n) = best_of(vec![rel("0.2.0", &sha_a, "2026-11-15T10:00:00Z")], Some(&sha_a), "0.2.0", None).unwrap();
         assert_eq!((l.version.as_deref(), n), (Some("0.2.0"), Newer::No));
-        assert!(best_of(vec![], None, "0.2.0").is_none());
+        assert!(best_of(vec![], None, "0.2.0", None).is_none());
     }
 
     #[test]

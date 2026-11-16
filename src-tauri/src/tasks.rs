@@ -776,6 +776,7 @@ fn mac_plist() -> Option<PathBuf> {
 pub fn autostart_set(on: bool) -> Result<(), String> {
     #[cfg(desktop)]
     {
+        #[cfg_attr(target_os = "macos", allow(unused_variables))]
         let (exe, args) = autostart_command()?;
         #[cfg(windows)]
         {

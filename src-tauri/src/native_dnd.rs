@@ -47,6 +47,7 @@ mod imp {
     pub fn get_all() -> CmdResult<super::ClipFiles> {
         let ctx = ClipboardContext::new().map_err(|e| e.to_string())?;
         let mut paths = clean_paths(ctx.get_files().unwrap_or_default());
+        #[cfg_attr(not(any(target_os = "linux", windows)), allow(unused_mut))]
         let mut cut = false;
         // Linux file managers: GNOME's own list says copy or cut; KDE marks a cut separately.
         #[cfg(target_os = "linux")]

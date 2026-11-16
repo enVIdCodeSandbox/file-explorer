@@ -50,11 +50,11 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { toggleTerminalPanel, useTerminal } from "../terminal/state";
-import { fileToolsItems } from "./Tools";
-import { openCount } from "./Todo";
+import { fileToolsItems } from "./toolsOpen";
+import { openCount } from "./todoNotes";
 import { isMobileOs } from "../util/native";
 import { FileIcon, Icon } from "./Icons";
-import { useTasksRunning } from "./Tasks";
+import { useTasksRunning } from "./tasksUtil";
 
 // ---------------------------------------------------------------------------
 // Tabs

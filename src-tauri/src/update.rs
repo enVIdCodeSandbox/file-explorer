@@ -20,6 +20,11 @@ fn current_sha() -> Option<&'static str> {
     option_env!("GITHUB_SHA")
 }
 
+/// When this build was made (seconds since 1970), put in by the build script. A build is only an update if it is dated after this.
+fn built_at() -> Option<u64> {
+    option_env!("FAST_BUILD_TIME").and_then(|t| t.parse().ok())
+}
+
 /// What is remembered between runs.
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase", default)]
@@ -166,7 +171,7 @@ fn check_now(st: &Shared) -> Info {
     }
     let (found, problems) = find_all(st);
     remember(st, |m| m.last_check = chrono::Local::now().timestamp());
-    match core::best_of(found, current_sha(), env!("CARGO_PKG_VERSION")) {
+    match core::best_of(found, current_sha(), env!("CARGO_PKG_VERSION"), built_at()) {
         None if !problems.is_empty() => info(st, "error", None, problems.join(" ")),
         None => info(st, "current", None, "No build is published for this kind of computer yet.".into()),
         Some((latest, Newer::No)) => info(st, "current", Some(latest), "You have the newest build.".into()),

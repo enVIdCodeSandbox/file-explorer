@@ -4,7 +4,7 @@
 // whether or not this window is open (while the app is).
 
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { api, on } from "../api";
 import { ask, useStore } from "../store";
 import {
@@ -948,26 +948,4 @@ function PreviewPanel({ preview: p }: { preview: Preview }) {
       )}
     </div>
   );
-}
-
-/** A task already filled in from files that were chosen in the explorer ("Automate…"). */
-export function taskFromSelection(paths: string[], folder: string | null): Task {
-  const t = newTask();
-  t.name = paths.length === 1 ? `Back up ${paths[0].split(/[\\/]/).pop()}` : folder ? `Back up ${folder.split(/[\\/]/).pop() || folder}` : "New task";
-  const copy = newAction("copy");
-  if (copy.type === "copy") copy.from = paths;
-  t.actions = [copy];
-  return t;
-}
-
-export function useTasksRunning(): number {
-  const [n, setN] = useState(0);
-  const ref = useRef(0);
-  useEffect(() => {
-    const load = () => void api.tasksList().then((l) => ((ref.current = l.running.length), setN(l.running.length))).catch(() => {});
-    load();
-    const offs = [on("task-started", load), on("task-finished", load), on("tasks-changed", load)];
-    return () => offs.forEach((p) => void p.then((f) => f()));
-  }, []);
-  return n;
 }

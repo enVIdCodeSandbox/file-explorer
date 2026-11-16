@@ -1,5 +1,5 @@
 import { useT } from "./i18n";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { api, on } from "./api";
 import { adv } from "./settings/advanced";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
@@ -10,25 +10,15 @@ import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
 import { ChooseDetails } from "./components/ChooseDetails";
-import { Viewer } from "./components/Viewer";
-import { Tools, openTools } from "./components/Tools";
-import { TodoDialog } from "./components/Todo";
+import { openTools } from "./components/toolsOpen";
 import { MillerColumns, SecondPane } from "./components/Panes";
 import { ButtonBar, CommandLine } from "./components/UserCommands";
-import { TerminalPanel } from "./components/Terminal";
 import { isMobileOs } from "./util/native";
 import { toggleTerminalPanel, useTerminal } from "./terminal/state";
 import { PickBar } from "./components/PickBar";
-import { Setup } from "./components/Setup";
 import { latestLabel } from "./components/UpdatesPanel";
-import { ShareDialog } from "./components/Share";
-import { BatchRename } from "./components/BatchRename";
-import { ConnectServer } from "./components/ConnectServer";
-import { SettingsView } from "./components/SettingsView";
 import { Notices } from "./components/Notices";
-import { DetachedTransfers, Transfers } from "./components/Transfers";
-import { AnalyzerView } from "./components/Analyzer";
-import { SmartClearView } from "./components/SmartClear";
+import { Transfers } from "./components/Transfers";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
 import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
@@ -37,12 +27,26 @@ import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } f
 import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
-import { MobileApp } from "./components/Mobile";
-import { TasksView } from "./components/Tasks";
 import { useMobile } from "./util/device";
 import { crumb, installTrail } from "./util/crashTrail";
 
-export default function App() {
+// Parts that most sessions never open are loaded when first needed, so the first screen has less to read.
+const Tools = lazy(() => import("./components/Tools").then((m) => ({ default: m.Tools })));
+const TodoDialog = lazy(() => import("./components/Todo").then((m) => ({ default: m.TodoDialog })));
+const TasksView = lazy(() => import("./components/Tasks").then((m) => ({ default: m.TasksView })));
+const Viewer = lazy(() => import("./components/Viewer").then((m) => ({ default: m.Viewer })));
+const Setup = lazy(() => import("./components/Setup").then((m) => ({ default: m.Setup })));
+const SettingsView = lazy(() => import("./components/SettingsView").then((m) => ({ default: m.SettingsView })));
+const TerminalPanel = lazy(() => import("./components/Terminal").then((m) => ({ default: m.TerminalPanel })));
+const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({ default: m.BatchRename })));
+const ConnectServer = lazy(() => import("./components/ConnectServer").then((m) => ({ default: m.ConnectServer })));
+const ShareDialog = lazy(() => import("./components/Share").then((m) => ({ default: m.ShareDialog })));
+const AnalyzerView = lazy(() => import("./components/Analyzer").then((m) => ({ default: m.AnalyzerView })));
+const SmartClearView = lazy(() => import("./components/SmartClear").then((m) => ({ default: m.SmartClearView })));
+const MobileApp = lazy(() => import("./components/Mobile").then((m) => ({ default: m.MobileApp })));
+const DetachedTransfers = lazy(() => import("./components/Transfers").then((m) => ({ default: m.DetachedTransfers })));
+
+function AppInner() {
   useT(); // keeps the page language (and every label) in step with the language setting
   const ready = useStore((s) => s.ready);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
@@ -453,4 +457,12 @@ async function askToRestart() {
   } finally {
     asking = false;
   }
+}
+
+export default function App() {
+  return (
+    <Suspense fallback={null}>
+      <AppInner />
+    </Suspense>
+  );
 }

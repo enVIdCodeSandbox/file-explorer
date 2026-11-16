@@ -217,7 +217,7 @@ interface State {
   /** The file viewer (F3, or the space bar for a quick look), while it is open. */
   viewer: { path: string; quick: boolean; siblings: string[]; serial: number } | null;
   /** The file tools window (compare, duplicates, split…), while open. */
-  tools: { tab: import("./components/Tools").ToolTab; folder: string; paths: string[]; serial: number } | null;
+  tools: { tab: import("./components/toolsOpen").ToolTab; folder: string; paths: string[]; serial: number } | null;
   /** The folder whose to-do list is open. */
   todoFor: string | null;
   openViewer: (path: string, opts?: { quick?: boolean; siblings?: string[] }) => void;

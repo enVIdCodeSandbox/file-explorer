@@ -262,7 +262,17 @@ fn serve(listener: TcpListener, job: Job) {
                 }
                 let job = job.clone();
                 std::thread::spawn(move || {
+                    // Close politely: say "no more data" and let the other side finish reading, so a reply is not
+                    // cut short by a reset (macOS does that when a socket closes with anything still unread).
+                    let closer = stream.try_clone().ok();
                     let _ = handle(stream, &job);
+                    if let Some(c) = closer {
+                        let _ = c.shutdown(std::net::Shutdown::Write);
+                        let _ = c.set_read_timeout(Some(Duration::from_millis(300)));
+                        let mut sink = [0u8; 512];
+                        let mut c = c;
+                        while matches!(c.read(&mut sink), Ok(n) if n > 0) {}
+                    }
                     job.inner.active.fetch_sub(1, Ordering::SeqCst);
                 });
             }
@@ -422,7 +432,12 @@ mod tests {
         let mut s = TcpStream::connect(host).unwrap();
         write!(s, "GET /{path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
         let mut out = Vec::new();
-        s.read_to_end(&mut out).unwrap();
+        // A reset after the reply has arrived is still a complete reply.
+        match s.read_to_end(&mut out) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset && !out.is_empty() => {}
+            Err(e) => panic!("reading the reply failed: {e}"),
+        }
         let split = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         let head = String::from_utf8_lossy(&out[..split]).into_owned();
         let code = head.split(' ').nth(1).unwrap().parse().unwrap();

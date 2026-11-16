@@ -5,7 +5,7 @@
 import { viewLevelOf } from "../util/viewLevel";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SelectGroup } from "./SelectGroup";
-import { fileToolsItems } from "./Tools";
+import { fileToolsItems } from "./toolsOpen";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, on, type FileEntry, type FolderSize, type Listing } from "../api";
 import {
@@ -34,7 +34,7 @@ import { columnsPerFolder } from "../folderViews";
 import { ColumnFilter } from "./ColumnFilter";
 import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
-import { taskFromSelection } from "./Tasks";
+import { taskFromSelection } from "./tasksUtil";
 import { LockedCard } from "./Locks";
 import { commandFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";

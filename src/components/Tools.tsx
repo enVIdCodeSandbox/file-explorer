@@ -3,14 +3,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type ConvertResult, type DirCompare, type DirDiff, type DupGroup, type FileCompare, type GrepHit, type GrepSummary } from "../api";
-import { activeLocation, deletePaths, useStore } from "../store";
+import { deletePaths, useStore } from "../store";
 import { runTool, wasCancelled } from "../tools/run";
 import { joinPath } from "../util/userCommands";
 import { archiveUrl } from "../util/path";
 import { parseSize } from "../util/selectGroup";
 import { Icon } from "./Icons";
+import type { ToolTab } from "./toolsOpen";
 
-export type ToolTab = "compareFiles" | "compareDirs" | "duplicates" | "split" | "encode" | "convert" | "grep";
 const TABS: [ToolTab, string][] = [
   ["compareFiles", "Compare files"],
   ["compareDirs", "Compare folders"],
@@ -509,26 +509,4 @@ function Grep({ folder, paths, go, busy }: Ctx) {
       </div>
     </>
   );
-}
-
-/** Called from menus: open the tools on a tab, for the folder being viewed and the items selected in it. */
-export function openTools(tab: ToolTab, paths?: string[]) {
-  const s = useStore.getState();
-  const folder = activeLocation() ?? "";
-  useStore.setState({ tools: { tab, folder, paths: paths ?? s.selection, serial: Date.now() } });
-}
-
-/** The "File tools" menu: the same entries in the command bar menu and the right-click menu. */
-export function fileToolsItems(selection: string[]): import("./ContextMenu").MenuItem[] {
-  const two = selection.length === 2;
-  const item = (id: ToolTab, label: string, shortcut?: string) => ({ id: `tools-${id}`, label, shortcut, run: () => openTools(id, selection) });
-  return [
-    item("compareFiles", two ? "Compare the two files…" : "Compare files…"),
-    item("compareDirs", "Compare / synchronize folders…"),
-    item("duplicates", "Find duplicate files…"),
-    item("split", "Split or combine files…"),
-    item("encode", "Encode or decode (UUE, XXE, MIME)…"),
-    item("convert", "Convert pictures…"),
-    item("grep", "Search in files…", "Alt+F7"),
-  ];
 }
