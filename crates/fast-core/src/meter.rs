@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn an_earlier_run_gives_a_first_guess_before_any_speed_is_known() {
-        let p = Prediction { params: EtaParams { per_file_secs: 0.001, per_mb_secs: 0.0 }, typical_secs: 30.0, samples: 3, same_route: true };
+        let p = Prediction { params: EtaParams { per_file_secs: 0.001, per_mb_secs: 0.0 }, typical_secs: 30.0, samples: 3, same_route: true, shape_match: 1.0 };
         let mut m = Meter::new(Some(p));
         let s = m.update(0.2, 0, 1000, 0, 0);
         assert_eq!(s.eta_secs.map(|e| e.round()), Some(30.0));

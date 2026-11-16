@@ -3,6 +3,7 @@
 // app: the "Used by" note says where, so none of them is decoration.
 
 import type { Settings } from "../api";
+import { TRANSFER_METRICS } from "./transferMetrics";
 
 export type AdvControl =
   | { type: "toggle" }
@@ -39,7 +40,7 @@ const col = (def: string, key: string, group: string, label: string, description
   key, group, label, description, control: { type: "color" }, default: def,
 });
 
-export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks", "Terminal panel"] as const;
+export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Copy window", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks", "Terminal panel"] as const;
 
 export const ADVANCED: AdvDef[] = [
   // ---- Terminal panel (the built-in terminal; the Terminal section is for the outside one) ----
@@ -196,6 +197,17 @@ export const ADVANCED: AdvDef[] = [
   sel("auto", "thumbs.videoPrewarm", "Thumbnails", "Prepare video thumbnails in the background", [["auto", "Automatic (on at the Full and Manual performance levels)"], ["on", "Always"], ["off", "Never"]], "When a folder opens, the pictures of its videos (and documents) are made ahead and kept in the thumbnail cache, so they are ready when you scroll to them. Needs \"Keep thumbnails on disk\" (Privacy and caches) to be on. Only for files on this computer."),
   sel("direct", "drag.network", "Files and lists", "Dragging files from a network location out of the app", [["direct", "Offer just the file's path (instant, the other program reads it)"], ["copy", "Copy it to this computer first, then drag the copy"], ["refuse", "Do not allow (use Copy and Paste)"]], "Windows looks inside a dragged network folder on the app's own thread, which can freeze the app for as long as the network takes. The first choice avoids that by giving the other program only the path; it does not show a picture while dragging. Copying first works with any program but takes as long as the copy; its limit is below."),
   num(1024, "drag.networkCopyMb", "Files and lists", "Largest network drag that is copied first", 16, 20000, "MB", "Bigger drags are refused with a message when \"Copy it to this computer first\" is chosen."),
+  sel("auto", "transfer.smallFilesMethod", "Speed and memory", "Copy method for many small files", [["auto", "Automatic (rclone, then Robocopy, then rsync, whichever is installed)"], ["native", "Built-in engine"], ["robocopy", "Robocopy (Windows)"], ["rsync", "rsync (macOS / Linux)"], ["rclone", "rclone"], ["smb", "SMB-tuned"], ["nfs", "NFS-tuned"]], "Used when there is no history to learn from yet, and always when you pick one here. A tool that is not installed, or cannot run the job, falls back to the built-in engine."),
+  sel("auto", "transfer.largeFilesMethod", "Speed and memory", "Copy method for large files", [["auto", "Automatic (built-in engine: the system's own file copy, native SMB over shares)"], ["native", "Built-in engine"], ["smb", "SMB-tuned (Robocopy with compression)"], ["robocopy", "Robocopy (Windows)"], ["rsync", "rsync (macOS / Linux)"], ["rclone", "rclone"], ["nfs", "NFS-tuned"]], "Used for jobs of fewer, bigger files. Over an SMB share the built-in engine lets Windows copy the file the native way."),
+  num(1024, "transfer.smallFileKb", "Speed and memory", "Many small files means an average under", 4, 65536, "KB", "A job is treated as many small files when its average file is smaller than this."),
+  num(50, "transfer.smallFileMinCount", "Speed and memory", "...and at least this many files", 2, 100000, "files", "A few files are never worth starting a tool for."),
+  num(700, "transfer.cancelWaitMs", "Speed and memory", "Let go of a cancelled copy that does not answer after", 0, 10000, "ms", "A copy that is stuck waiting for a drive cannot hear Cancel. After this long it is stopped for you, as Force stop would. What was already copied stays. 0 leaves the Force stop button instead."),
+  sel("never", "files.renameByCopy", "Files and lists", "When a server will not rename a file", [["never", "Off: just show the error"], ["ask", "Offer to rename it by copying"], ["always", "Rename by copying it, without asking"]], "Off by default. Some shares (a pool that combines a fast cache and a big disk, say) refuse to rename a file that is plainly there. Turning this on renames it by copying it under the new name and removing the original, which copies the whole file."),
+  ...TRANSFER_METRICS.map((m) => yn(m.on, `transfer.show.${m.id}`, "Copy window", m.label, m.description)),
+  num(4, "transfer.activeFilesCount", "Copy window", "Files listed as being copied right now", 1, 16, "files", "How many of the files in flight are listed (one for each stream, at most). Takes effect on the next transfer."),
+  sel("auto", "transfer.activeFilesRefreshMs", "Copy window", "How often the file list refreshes", [["auto", "Automatic (follows the performance preset)"], ["100", "10 times a second"], ["250", "4 times a second"], ["500", "Twice a second"], ["1000", "Every second"], ["2000", "Every 2 seconds"]], "Automatic: about 5 times a second on Full, 2 to 3 on Balanced, once a second on Saver."),
+  yn(false, "transfers.speedTest", "Transfers", "Test the drives' speed before a big copy", "A short test that writes a few megabytes next to the destination, to start the time estimate better informed. It delays the start of the copy, so it is off: earlier transfers on the same route and the first seconds of the copy tell nearly as much."),
+  yn(true, "ops.checkAccess", "Transfers", "Check permissions before starting", "Looks quickly whether the job needs administrator rights, so you are asked before anything happens. Network folders are not checked either way (a refusal there is offered as a retry as administrator). Off, jobs start at once and a refusal is offered as a retry afterwards."),
   yn(true, "live.enabled", "Files and lists", "Follow files that are being written or copied", "A file that is growing (a download, a recording, a copy) is checked again and again, just that file, so its size and speed stay up to date. Nothing else in the folder is checked."),
   yn(true, "live.details", "Files and lists", "Keep the details pane up to date for them", "Shows how fast the file is growing and how much has been written, for the selected files (all of them at once when several are selected), and keeps it from flashing."),
   yn(true, "live.sizes", "Files and lists", "Keep their size in the list up to date (Details view only)", "Only the files that are growing change in the list; the other rows are left alone."),

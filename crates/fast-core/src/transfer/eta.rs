@@ -365,9 +365,14 @@ impl EtaTracker {
             0.0
         } else {
             let (lo, hi) = self.finishes.iter().fold((f64::MAX, f64::MIN), |(l, h), &(_, f)| (l.min(f), h.max(f)));
-            (1.0 - (hi - lo) / raw.max(2.0) / 0.2).clamp(0.0, 1.0)
+            // Small files over a network come in bursts: a swing of a third of the time left within a few
+            // seconds is still a steady estimate.
+            (1.0 - (hi - lo) / raw.max(2.0) / 0.35).clamp(0.0, 1.0)
         };
         let mut confidence = data * stability;
+        // However bumpy the speed, a quarter of the job done is a real basis: the estimate is at least
+        // "getting more accurate" by a fifth of the way through, and trusted a little later.
+        confidence = confidence.max((done * 2.5).min(0.7));
         if self.trusted {
             if confidence > 0.5 {
                 confidence = confidence.max(0.85);

@@ -7,6 +7,9 @@ import { api, type DeleteProgress, type Progress } from "../api";
 import { retryTransferAsAdmin, useStore, type Sample } from "../store";
 import { formatCount, formatDuration, formatEta, formatRate, formatSize } from "../util/format";
 import { baseName } from "../util/path";
+import { adv } from "../settings/advanced";
+import { metricOn } from "../settings/transferMetrics";
+import { METHOD_NAME } from "../util/methods";
 import { Icon } from "./Icons";
 
 const STRATEGY_LABEL: Record<NonNullable<Progress["strategy"]>, string> = {
@@ -29,6 +32,7 @@ function titleOf(j: Job): string {
     const p = j.p;
     const what = p.selected === 1 ? `"${p.firstName}"` : `${formatCount(p.selected)} items`;
     if (p.action === "update") return p.phase === "done" ? "Update downloaded" : p.phase === "cancelled" ? "Update download cancelled" : p.phase === "failed" ? "Could not download the update" : "Downloading the update";
+    if (p.action === "rename-copy") return p.phase === "done" ? `Renamed ${what}` : p.phase === "cancelled" ? "Rename cancelled" : p.phase === "failed" ? `Could not rename ${what}` : p.phase === "scanning" ? `Preparing to rename ${what}…` : `Renaming ${what} by copying`;
     if (p.action === "compress") return p.phase === "done" ? `Compressed ${what}` : p.phase === "cancelled" ? "Compressing cancelled" : p.phase === "failed" ? `Could not compress ${what}` : `Compressing ${what}`;
     if (p.action === "extract") return p.phase === "done" ? `Extracted ${what}` : p.phase === "cancelled" ? "Extracting cancelled" : p.phase === "failed" ? `Could not extract ${what}` : `Extracting ${what}`;
     if (p.action === "upload" || p.action === "download") {
@@ -347,13 +351,59 @@ function TransferControls({ p }: { p: Progress }) {
   );
 }
 
+/** A value that is looked at no more often than every `ms` milliseconds, so a fast stream of updates can be shown calmly. */
+function useSampled<T>(value: T, ms: number): T {
+  const [shown, setShown] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  useEffect(() => {
+    const t = setInterval(() => setShown(latest.current), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return shown;
+}
+
+/** Milliseconds between refreshes of the list of files: the setting, or what the performance preset says. */
+function activeRefreshMs(settings: ReturnType<typeof useStore.getState>["settings"], tier: string | undefined): number {
+  const chosen = adv<string>(settings, "transfer.activeFilesRefreshMs");
+  if (chosen && chosen !== "auto") return Math.max(50, Number(chosen) || 250);
+  return tier === "full" ? 200 : tier === "saver" ? 1000 : 400;
+}
+
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+function ActiveFiles({ p }: { p: Progress }) {
+  const settings = useStore((s) => s.settings);
+  const tier = useStore((s) => s.budget?.tier);
+  const files = useSampled(p.activeFiles ?? [], activeRefreshMs(settings, tier));
+  if (!files.length) return null;
+  return (
+    <ul className="active-files" aria-label="Files being copied now">
+      {files.map((f) => (
+        <li key={f.path} title={f.path}>
+          <span className="file-name">{baseName(f.path)}</span>
+          <span className="muted">{formatSize(f.size)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function TransferDetail({ p }: { p: Progress }) {
   const fraction = useStore((s) => s.shown[p.id] ?? 0);
   const series = useStore((s) => s.series[p.id]) ?? [];
+  const settings = useStore((s) => s.settings);
+  const on = (id: string) => metricOn(settings, id);
   const [more, setMore] = useState(true);
   const active = isActive({ kind: "transfer", p });
   const remainingItems = Math.max(0, p.filesTotal - p.filesDone);
   const typical = p.prediction?.typicalSecs;
+  const started = useRef(Date.now() - p.elapsedSecs * 1000);
+  const methodName = p.method ? METHOD_NAME[p.method] : null;
+  const current = p.current || p.activeFiles?.[0]?.path || "";
+  const finishAt = active && p.phase === "running" && p.etaSecs != null ? clock(Date.now() + p.etaSecs * 1000) : null;
+  const byFiles = p.filesTotal > 0 ? Math.round((p.filesDone / p.filesTotal) * 100) : 0;
+  const byBytes = p.bytesTotal > 0 ? Math.round((p.bytesDone / p.bytesTotal) * 100) : 0;
   return (
     <div className="transfer-detail">
       <div className="percent">
@@ -361,31 +411,92 @@ function TransferDetail({ p }: { p: Progress }) {
         <span className="muted">{active ? (p.phase === "paused" ? "Paused" : formatRate(p)) : ""}</span>
       </div>
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
-      <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} />
-      <div className="graph-legend">
-        <span className="files">● Files per second</span>
-        <span className="bytes">● Megabytes per second</span>
-        {typical ? <span className="typical">┆ Typical finish</span> : null}
-      </div>
-      {active && <TransferControls p={p} />}
+      {on("graph") && (
+        <>
+          <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} />
+          <div className="graph-legend">
+            <span className="files">● Files per second</span>
+            <span className="bytes">● Megabytes per second</span>
+            {typical ? <span className="typical">┆ Typical finish</span> : null}
+          </div>
+        </>
+      )}
+      {active && on("controls") && <TransferControls p={p} />}
+      {on("activeFiles") && active && <ActiveFiles p={p} />}
       <dl className="details-list transfer-facts">
-        <dt>Name</dt>
-        <dd className="path">{p.current ? baseName(p.current) : "—"}</dd>
-        <dt>Time remaining</dt>
-        <dd className="eta-line">{active ? formatEta(p.etaSecs).replace(" left", "") : "—"}<EtaNote p={p} /></dd>
-        <dt>Items remaining</dt>
-        <dd>{formatCount(remainingItems)} ({formatSize(Math.max(0, p.bytesTotal - p.bytesDone))})</dd>
-        <dt>Speed</dt>
-        <dd>{p.phase === "running" ? `${formatSize(p.bytesPerSec)}/s · ${p.filesPerSec >= 10 ? formatCount(p.filesPerSec) : p.filesPerSec.toFixed(1)} files/s` : "—"}</dd>
+        {on("method") && methodName && (
+          <>
+            <dt>Method</dt>
+            <dd>{methodName}</dd>
+          </>
+        )}
+        {on("stage") && (
+          <>
+            <dt>Stage</dt>
+            <dd>{p.phase === "scanning" ? "Counting files" : p.phase === "queued" ? "Waiting for its turn" : p.phase === "paused" ? "Paused" : p.phase === "running" ? "Copying" : p.phase}</dd>
+          </>
+        )}
+        {on("name") && (
+          <>
+            <dt>Name</dt>
+            <dd className="path">{current ? baseName(current) : "—"}</dd>
+          </>
+        )}
+        {on("timeRemaining") && (
+          <>
+            <dt>Time remaining</dt>
+            <dd className="eta-line">{active ? formatEta(p.etaSecs).replace(" left", "") : "—"}<EtaNote p={p} /></dd>
+          </>
+        )}
+        {on("finishAt") && (
+          <>
+            <dt>Finishes at</dt>
+            <dd>{finishAt ?? "—"}</dd>
+          </>
+        )}
+        {on("copied") && (
+          <>
+            <dt>Copied</dt>
+            <dd>{formatSize(p.bytesDone)} of {formatSize(p.bytesTotal)}</dd>
+          </>
+        )}
+        {on("itemsRemaining") && (
+          <>
+            <dt>Items remaining</dt>
+            <dd>{formatCount(remainingItems)} ({formatSize(Math.max(0, p.bytesTotal - p.bytesDone))})</dd>
+          </>
+        )}
+        {on("filesDone") && (
+          <>
+            <dt>Files done</dt>
+            <dd>{formatCount(p.filesDone)} of {formatCount(p.filesTotal)}</dd>
+          </>
+        )}
+        {on("progressByFiles") && (
+          <>
+            <dt>Progress</dt>
+            <dd>{byFiles}% of the files · {byBytes}% of the data</dd>
+          </>
+        )}
+        {on("speed") && (
+          <>
+            <dt>Speed</dt>
+            <dd>{p.phase === "running" ? `${formatSize(p.bytesPerSec)}/s · ${p.filesPerSec >= 10 ? formatCount(p.filesPerSec) : p.filesPerSec.toFixed(1)} files/s` : "—"}</dd>
+          </>
+        )}
       </dl>
       <button className="link-button" onClick={() => setMore(!more)}>
         {more ? "Fewer details" : "More details"}
       </button>
       {more && (
         <dl className="details-list transfer-facts">
-          <dt>Algorithm</dt>
-          <dd>{p.strategy ? STRATEGY_LABEL[p.strategy] : "Choosing…"}{p.method && p.method !== "native" ? ` · via ${METHOD_LABEL[p.method] ?? p.method}` : ""}</dd>
-          {p.plan && (
+          {on("algorithm") && (
+            <>
+              <dt>Algorithm</dt>
+              <dd>{p.strategy ? STRATEGY_LABEL[p.strategy] : "Choosing…"}{p.method && p.method !== "native" ? ` · via ${METHOD_LABEL[p.method] ?? p.method}` : ""}</dd>
+            </>
+          )}
+          {on("streams") && p.plan && (
             <>
               <dt>Streams</dt>
               <dd>
@@ -394,32 +505,92 @@ function TransferDetail({ p }: { p: Progress }) {
               </dd>
             </>
           )}
-          {p.route && (
+          {on("from") && p.route && (
             <>
               <dt>From</dt>
               <dd>{p.route.srcName || p.route.src || "this computer"} <span className="muted">({MEDIA_LABEL[p.route.srcMedia]})</span></dd>
+            </>
+          )}
+          {on("to") && p.route && (
+            <>
               <dt>To</dt>
               <dd>{p.route.dstName || p.route.dst || "this computer"} <span className="muted">({MEDIA_LABEL[p.route.dstMedia]})</span></dd>
             </>
           )}
-          <dt>Typical time</dt>
-          <dd>
-            {p.prediction
-              ? `${formatDuration(p.prediction.typicalSecs)} for similar transfers (${p.prediction.samples} past${p.prediction.sameRoute ? ", including this route" : ""})`
-              : "No similar transfers recorded yet; this one will be remembered"}
-          </dd>
-          <dt>Average speed</dt>
-          <dd>{formatSize(p.avgBytesPerSec)}/s · {p.avgFilesPerSec.toFixed(1)} files/s</dd>
-          <dt>Peak speed</dt>
-          <dd>{formatSize(p.peakBytesPerSec)}/s · {p.peakFilesPerSec.toFixed(1)} files/s</dd>
-          <dt>Time spent on</dt>
-          <dd>{Math.round(p.overheadShare * 100)}% per-file work, {Math.round((1 - p.overheadShare) * 100)}% moving data</dd>
-          <dt>Elapsed</dt>
-          <dd>{formatDuration(p.elapsedSecs)}</dd>
-          {p.current && (
+          {on("destFolder") && (
+            <>
+              <dt>Destination folder</dt>
+              <dd className="path">{p.destDir}</dd>
+            </>
+          )}
+          {on("totalSize") && (
+            <>
+              <dt>Total size</dt>
+              <dd>{formatSize(p.bytesTotal)} in {formatCount(p.filesTotal)} files</dd>
+            </>
+          )}
+          {on("avgFileSize") && p.filesTotal > 0 && (
+            <>
+              <dt>Average file size</dt>
+              <dd>{formatSize(p.bytesTotal / p.filesTotal)}</dd>
+            </>
+          )}
+          {on("startedAt") && (
+            <>
+              <dt>Started at</dt>
+              <dd>{clock(started.current)}</dd>
+            </>
+          )}
+          {on("typicalTime") && (
+            <>
+              <dt>Typical time</dt>
+              <dd>
+                {p.prediction
+                  ? `${formatDuration(p.prediction.typicalSecs)} for similar transfers (${p.prediction.samples} past${p.prediction.sameRoute ? ", including this route" : ""})`
+                  : "No earlier transfer on this route yet; this one will be remembered"}
+              </dd>
+            </>
+          )}
+          {on("confidence") && (
+            <>
+              <dt>Estimate confidence</dt>
+              <dd>{Math.round((p.etaConfidence ?? 0) * 100)}%</dd>
+            </>
+          )}
+          {on("averageSpeed") && (
+            <>
+              <dt>Average speed</dt>
+              <dd>{formatSize(p.avgBytesPerSec)}/s · {p.avgFilesPerSec.toFixed(1)} files/s</dd>
+            </>
+          )}
+          {on("peakSpeed") && (
+            <>
+              <dt>Peak speed</dt>
+              <dd>{formatSize(p.peakBytesPerSec)}/s · {p.peakFilesPerSec.toFixed(1)} files/s</dd>
+            </>
+          )}
+          {on("timeSplit") && (
+            <>
+              <dt>Time spent on</dt>
+              <dd>{Math.round(p.overheadShare * 100)}% per-file work, {Math.round((1 - p.overheadShare) * 100)}% moving data</dd>
+            </>
+          )}
+          {on("skippedErrors") && (
+            <>
+              <dt>Skipped / errors</dt>
+              <dd>{formatCount(p.skipped)} skipped · {formatCount(p.errorCount)} failed</dd>
+            </>
+          )}
+          {on("elapsed") && (
+            <>
+              <dt>Elapsed</dt>
+              <dd>{formatDuration(p.elapsedSecs)}</dd>
+            </>
+          )}
+          {on("nowAt") && current && (
             <>
               <dt>Now at</dt>
-              <dd className="path">{p.current}</dd>
+              <dd className="path">{current}</dd>
             </>
           )}
         </dl>
@@ -646,10 +817,22 @@ export function DetachedTransfers() {
 /** Pastes waiting for a delete they would collide with. */
 function Waiting() {
   const queued = useStore((s) => s.queuedJobs);
+  const starting = useStore((s) => s.startingJobs);
   const entries = Object.entries(queued);
-  if (!entries.length) return null;
+  if (!entries.length && !Object.keys(starting).length) return null;
   return (
     <div className="transfer-window transfer-queued" role="status">
+      {Object.entries(starting).map(([id, q]) => (
+        <section key={`s${id}`} className="transfer-section">
+          <div className="transfer-row">
+            <div className="loading-bar" style={{ width: 28 }} />
+            <span className="grow file-name">
+              {q.title}
+              <span className="muted"> · Starting…</span>
+            </span>
+          </div>
+        </section>
+      ))}
       {entries.map(([id, q]) => (
         <section key={id} className="transfer-section">
           <div className="transfer-row">
@@ -671,7 +854,7 @@ function Waiting() {
 export function Transfers() {
   const open = useStore((s) => s.transfersOpen);
   const detached = useStore((s) => s.detached.transfers);
-  const waiting = useStore((s) => Object.keys(s.queuedJobs).length > 0);
+  const waiting = useStore((s) => Object.keys(s.queuedJobs).length + Object.keys(s.startingJobs).length > 0);
   const jobs = useJobs();
   if ((!jobs.length && !waiting) || detached) return null;
   return (

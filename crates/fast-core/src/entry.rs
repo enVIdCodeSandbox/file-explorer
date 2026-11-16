@@ -180,6 +180,70 @@ pub fn rename(path: &Path, new_name: &str) -> Result<std::path::PathBuf> {
     Ok(target)
 }
 
+/// Whether a failed rename is worth trying again as a copy: the server refused to rename a file that can
+/// be read perfectly well (a pooled share that keeps the file on another disk than its folder, a file moved
+/// behind the share's back), as opposed to a name clash or missing permission, which a copy would not fix.
+pub fn rename_could_copy(path: &Path, error: &CoreError) -> bool {
+    let refused = match error {
+        CoreError::NotFound(_) => true,
+        // "Not the same device": ERROR_NOT_SAME_DEVICE (17) on Windows, EXDEV (18) elsewhere.
+        CoreError::Io { source, .. } => source.raw_os_error() == Some(if cfg!(windows) { 17 } else { 18 }),
+        _ => false,
+    };
+    refused && fs::metadata(path).map(|m| m.is_file()).unwrap_or(false) && fs::File::open(path).is_ok()
+}
+
+/// Rename a file by writing a copy under the new name next to it and then removing the original. It is
+/// what moving the file out, renaming it and putting it back does, in one step. Not atomic: if it stops
+/// part-way, the half-written copy is removed and the original is left alone. `progress` gets bytes done
+/// and the total; returns `Ok(false)` if cancelled.
+pub fn rename_by_copy(path: &Path, new_name: &str, cancel: &std::sync::atomic::AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<Option<std::path::PathBuf>> {
+    use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+    if new_name.is_empty() || new_name.contains(['/', '\\']) {
+        return Err(CoreError::Invalid(format!("invalid name: {new_name:?}")));
+    }
+    let target = path.parent().ok_or_else(|| CoreError::Invalid("cannot rename a root".into()))?.join(new_name);
+    if target.exists() {
+        return Err(CoreError::Invalid(format!("{new_name} already exists")));
+    }
+    let meta = fs::metadata(path).map_err(|e| CoreError::io(path, e))?;
+    let mut input = fs::File::open(path).map_err(|e| CoreError::io(path, e))?;
+    let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| CoreError::io(&target, e))?;
+    let fail = |e: std::io::Error| {
+        let _ = fs::remove_file(&target);
+        CoreError::io(&target, e)
+    };
+    let mut buf = vec![0u8; 4 << 20];
+    let mut done = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(output);
+            let _ = fs::remove_file(&target);
+            return Ok(None);
+        }
+        let n = input.read(&mut buf).map_err(|e| fail(e))?;
+        if n == 0 {
+            break;
+        }
+        output.write_all(&buf[..n]).map_err(|e| fail(e))?;
+        done += n as u64;
+        progress(done, meta.len().max(done));
+    }
+    output.flush().map_err(|e| fail(e))?;
+    if let Ok(t) = meta.modified() {
+        let _ = output.set_modified(t);
+    }
+    drop(output);
+    if done != meta.len() {
+        let _ = fs::remove_file(&target);
+        return Err(CoreError::Invalid(format!("the copy came out {done} bytes instead of {}; the original was kept", meta.len())));
+    }
+    drop(input);
+    fs::remove_file(path).map_err(|e| CoreError::Invalid(format!("copied as {new_name} but the original could not be removed: {e}")))?;
+    Ok(Some(target))
+}
+
 /// Permanently delete a file or a whole directory tree.
 pub fn delete_permanently(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path).map_err(|e| CoreError::io(path, e))?;
@@ -239,6 +303,46 @@ mod tests {
         assert!(all.iter().find(|e| e.name == "sub").unwrap().is_dir);
         #[cfg(not(windows))]
         assert_eq!(list_dir(d.path(), false).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn renaming_by_copy_keeps_the_bytes_and_removes_the_original() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a.bin");
+        let data: Vec<u8> = (0..(9 << 20)).map(|i| (i % 251) as u8).collect();
+        fs::write(&a, &data).unwrap();
+        let mut last = 0;
+        let got = rename_by_copy(&a, "b.bin", &std::sync::atomic::AtomicBool::new(false), &mut |done, total| {
+            assert!(done >= last && done <= total);
+            last = done;
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(fs::read(&got).unwrap(), data);
+        assert!(!a.exists());
+        assert_eq!(last, data.len() as u64);
+        assert!(rename_by_copy(&got, "x/y", &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).is_err());
+    }
+
+    #[test]
+    fn renaming_by_copy_can_be_cancelled_and_leaves_the_original() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a.bin");
+        fs::write(&a, vec![1u8; 1 << 20]).unwrap();
+        let r = rename_by_copy(&a, "b.bin", &std::sync::atomic::AtomicBool::new(true), &mut |_, _| {}).unwrap();
+        assert!(r.is_none());
+        assert!(a.exists() && !d.path().join("b.bin").exists());
+    }
+
+    #[test]
+    fn only_a_refused_rename_of_a_readable_file_is_worth_copying() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a.txt");
+        fs::write(&a, b"x").unwrap();
+        assert!(rename_could_copy(&a, &CoreError::NotFound(a.clone())));
+        assert!(!rename_could_copy(&a, &CoreError::PermissionDenied(a.clone())));
+        assert!(!rename_could_copy(&d.path().join("gone.txt"), &CoreError::NotFound(d.path().join("gone.txt"))));
+        assert!(!rename_could_copy(d.path(), &CoreError::NotFound(d.path().to_path_buf())), "folders are not copied");
     }
 
     #[test]

@@ -254,6 +254,8 @@ export interface Progress {
   maxSecs?: number;
   timedOut?: boolean;
   queuedAhead?: number;
+  /** The files being copied right now (as many as the settings ask for). */
+  activeFiles?: { path: string; size: number }[];
   strategy: "rename" | "largeSequential" | "smallParallel" | "mixed" | null;
   method?: "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs" | null;
   destDir: string;
@@ -328,7 +330,7 @@ export interface DeleteProgress {
   /** Name of the first selected item. */
   firstName: string;
   /** "delete", or "compress" / "extract" for an archive job shown on the same card. */
-  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete" | "update";
+  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete" | "update" | "rename-copy";
   /** For a finished archive or server job: what was made (for "open": the downloaded file). */
   result: string;
   /** Server jobs: bytes moved so far and expected in total. */
@@ -869,6 +871,7 @@ export const api = {
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
   driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),
   renameItem: (path: string, newName: string) => invoke<string>("rename_item", { path, newName }),
+  renameByCopy: (path: string, newName: string) => invoke<number>("rename_by_copy", { path, newName }),
   createItem: (dir: string, name: string, folder: boolean) =>
     invoke<string>("create_item", { dir, name, folder }),
   /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */

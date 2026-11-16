@@ -87,15 +87,37 @@ fn info(st: &Shared, status: &'static str, latest: Option<Latest>, message: Stri
 mod http {
     use super::*;
 
-    fn agent() -> ureq::Agent {
-        ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(15)))
-            .timeout_recv_response(Some(Duration::from_secs(30)))
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .user_agent("FAST-File-Explorer-updater")
-            .build()
-            .into()
+    /// One agent for the whole run, so connections (and their TLS handshakes) are reused between the
+    /// listing, the redirect and the download. A host that does not answer is given up on quickly: the
+    /// request is tried again once instead of waiting half a minute.
+    fn agent() -> &'static ureq::Agent {
+        static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+        AGENT.get_or_init(|| {
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(5)))
+                .timeout_recv_response(Some(Duration::from_secs(15)))
+                .max_redirects(0)
+                .http_status_as_error(false)
+                .user_agent("FAST-File-Explorer-updater")
+                .build()
+                .into()
+        })
+    }
+
+    /// A connection that failed or timed out is worth one more try (a dead address among several, a dropped
+    /// pooled connection); an answer from the server, even a refusal, is not.
+    fn call_with_retry(agent: &ureq::Agent, url: &str, token: &str, accept: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
+        let build = || {
+            let mut req = agent.get(url).header("Accept", accept);
+            if !token.is_empty() && url.starts_with("https://api.github.com/") {
+                req = req.header("Authorization", &format!("Bearer {token}")).header("X-GitHub-Api-Version", "2022-11-28");
+            }
+            req.call()
+        };
+        match build() {
+            Ok(r) => Ok(r),
+            Err(_) => build().map_err(|e| e.to_string()),
+        }
     }
 
     /// GET with redirects followed by hand, so the access token goes only to GitHub's API and never on to
@@ -104,11 +126,7 @@ mod http {
         let agent = agent();
         let mut url = url.to_string();
         for _ in 0..6 {
-            let mut req = agent.get(&url).header("Accept", accept);
-            if !token.is_empty() && url.starts_with("https://api.github.com/") {
-                req = req.header("Authorization", &format!("Bearer {token}")).header("X-GitHub-Api-Version", "2022-11-28");
-            }
-            let resp = req.call().map_err(|e| e.to_string())?;
+            let resp = call_with_retry(agent, &url, token, accept)?;
             let code = resp.status().as_u16();
             if (300..400).contains(&code) {
                 let Some(next) = resp.headers().get("location").and_then(|v| v.to_str().ok()) else { return Err("a redirect with nowhere to go".into()) };
@@ -149,13 +167,21 @@ fn find_all(st: &Shared) -> (Vec<Latest>, Vec<String>) {
     }
     let missing = |e: String| if e == "not found" { format!("Could not find {repo} on GitHub, or it is private (private repositories need an access token).") } else { e };
     let (mut found, mut problems) = (Vec::new(), Vec::new());
-    match http::json(&format!("https://api.github.com/repos/{repo}/releases?per_page=30"), &token) {
+    // Workflow artifacts are unreleased builds and need a token or nightly.link to download: only on request.
+    let artifacts = core::artifact_name().filter(|_| unreleased);
+    // Both lists are asked for at the same time. Ten releases are plenty to find the newest installer.
+    let (repo_ref, token_ref) = (&repo, &token);
+    let (releases, actions) = std::thread::scope(|s| {
+        let a = s.spawn(move || http::json(&format!("https://api.github.com/repos/{repo_ref}/releases?per_page=10"), token_ref));
+        let b = artifacts.map(|name| s.spawn(move || http::json(&format!("https://api.github.com/repos/{repo_ref}/actions/artifacts?name={name}&per_page=50"), token_ref)));
+        (a.join().unwrap_or_else(|_| Err("the check stopped unexpectedly".into())), b.map(|b| b.join().unwrap_or_else(|_| Err("the check stopped unexpectedly".into()))))
+    });
+    match releases {
         Ok(listing) => found.extend(core::pick_release(&listing, core::Target::here())),
         Err(e) => problems.push(format!("Releases: {}", missing(e))),
     }
-    // Workflow artifacts are unreleased builds and need a token or nightly.link to download: only on request.
-    if let Some(name) = core::artifact_name().filter(|_| unreleased) {
-        match http::json(&format!("https://api.github.com/repos/{repo}/actions/artifacts?name={name}&per_page=50"), &token) {
+    if let (Some(name), Some(result)) = (artifacts, actions) {
+        match result {
             Ok(listing) => found.extend(core::pick_latest(&listing, name, &branch)),
             Err(e) => problems.push(format!("Actions: {}", missing(e))),
         }
@@ -248,6 +274,7 @@ fn download_and_unpack(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready,
     // Only the file's own name, whatever the release called it.
     let zip_path = if is_release { dir.join(zip_path.file_name().unwrap_or_default()) } else { zip_path };
     let url = download_url(latest, &repo, &token);
+    job.emit(DeletePhase::Scanning, 0, latest.size, "Connecting to GitHub", None);
     let resp = http::open(&url, if is_release { "" } else { &token }, "application/octet-stream").map_err(|e| {
         if e == "not found" && token.is_empty() && !is_release {
             "GitHub only lets signed-in accounts download builds. Add an access token under Settings > Updates, or install nightly.link on the repository.".to_string()
@@ -258,7 +285,7 @@ fn download_and_unpack(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready,
     let total = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(latest.size);
     let mut body = resp.into_body().into_with_config().limit(8 << 30).reader();
     let mut out = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; 256 * 1024];
+    let mut buf = vec![0u8; 1 << 20];
     let (mut done, mut last) = (0u64, Instant::now() - Duration::from_secs(1));
     loop {
         if job.cancel.load(Ordering::Relaxed) {
@@ -415,7 +442,8 @@ pub fn start(app: &AppHandle, st: Shared) {
     }
     let app = app.clone();
     let _ = std::thread::Builder::new().name("updates".into()).spawn(move || {
-        std::thread::sleep(Duration::from_secs(20));
+        // Looks soon after the window is up, not half a minute later.
+        std::thread::sleep(Duration::from_secs(3));
         // A build that was downloaded and never installed is offered again.
         if let Some(r) = memory(&st).ready.filter(|r| r.installer.exists()) {
             let _ = app.emit("update-ready", info(&st, "available", None, String::new()));

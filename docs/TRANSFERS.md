@@ -41,6 +41,10 @@ A tool is only eligible when it can reproduce the built-in engine exactly: copy 
 
 If the person forces a method that is missing or does not fit the route, the job runs on the built-in engine.
 
+### Cancel and drives that do not answer
+
+The first look at the sources (and the speed test before a big copy) run on their own threads and the job watches them, so Cancel ends the job at once even if a drive is slow to answer; "Preparing" shows how many files were found so far. The speed test never holds the copy for more than 2.5 s. A cancelled copy that is stuck inside a drive call is let go of after `transfer.cancelWaitMs` (default 700 ms), as Force stop does, and its place in the queue is given to the next copy (`TransferHandle::abandon`).
+
 ### Pause, resume, cancel
 
 Pausing kills the tool; resuming starts it again, and every tool skips what is already there (rsync and rclone by comparing, Robocopy by `/XC /XN /XO`), so work continues where it stopped. Cancel kills it for good. Force stop (below) does not wait for the tool at all.
@@ -55,13 +59,23 @@ Pausing kills the tool; resuming starts it again, and every tool skips what is a
 
 `run_tool` converts these into increments on the shared counters. Totals restart from zero on each run of the tool, so a resume after a pause is handled by tracking what was already credited.
 
-## Choosing a method (`History::choose_method`)
+## Choosing a method
+
+Order of decision, in `commands.rs` (`transfer_start`):
+
+1. A method picked in Advanced for this kind of job (`transfer.smallFilesMethod` / `transfer.largeFilesMethod`) wins, if it can run.
+2. Otherwise what earlier jobs showed (`History::learned_method`, below).
+3. With nothing to learn from yet: `method::rule_choice`. Many small files (at least `transfer.smallFileMinCount`, average under `transfer.smallFileKb`) go to the first installed of rclone, Robocopy, rsync; large files stay with the built-in engine, which uses the system's own file copy (native SMB over shares).
+
+A job with conflict policy "Ask" can use a tool when nothing at the destination has the name of a top-level source (nothing can clash); otherwise it stays on the built-in engine.
+
+## Learning from history (`History::choose_method`)
 
 Every finished job is stored with its route (source and destination volume), file count, byte count, strategy, method, duration and error count.
 
 For a new job with candidates `[Native, …]`:
 
-1. Fewer than two candidates, a move, or a job under **64 MiB** → built-in. A tool costs more to start than it can save.
+1. Fewer than two candidates, a move, or a job under **64 MiB** with fewer than 50 files → no answer from history (the rule above decides). A tool costs more to start than it can save.
 2. Look at past jobs on a similar route and size (distance below 2.2). Weight each by how alike it is and by age (half-life 45 days). Score each method by speed: bytes/s when files average 1 MiB or more, files/s otherwise.
 3. A method needs **2** such results to be trusted. If the built-in engine has no score yet, built-in runs.
 4. With "Try other methods on big jobs" on, and the job at least **256 MiB**, a candidate with too few results is tried once so it can be measured.
@@ -69,11 +83,15 @@ For a new job with candidates `[Native, …]`:
 
 History file format version is `FORMAT_VERSION` in `history.rs`; method codes are stable (`Method::code`: 0 built-in, 1 Robocopy, 2 rsync, 3 rclone, 4 SMB-tuned, 5 NFS-tuned). Never renumber them.
 
+## The copy window's lines
+
+Every line of the expanded copy window has its own switch under Settings > Advanced > "Copy window" (`transfer.show.<id>`, listed in `src/settings/transferMetrics.ts`). A line that is off is not drawn; the speed graph's history is not collected, and the list of files being copied is not tracked by the engine at all (`TransferSpec::active_files` is 0). Extra lines that are off by default: stage, files done, total size, average file size, finish clock time, start time, skipped and errors, estimate confidence, destination folder, progress by files and by data. The file list shows one file per busy stream (`Progress::active_files`); how many, and how often it refreshes (automatic follows the performance preset), are settings too. Jobs run by an external tool (Robocopy, rsync, rclone) report only the file the tool names, not a list.
+
 ## Time remaining
 
 * **Model.** `time = a + b × size` per file, fitted while the job runs with exponentially weighted least squares.
 * **Head start.** A tracker (`EtaTracker::with_head_start`) begins with a prior instead of nothing:
-  * history on the same route with at least 3 jobs: confidence 0.8; fewer: 0.55; other routes: 0.3
+  * history on the same route, of whatever shape (`History::predict` carries one earlier transfer over to a job with other file sizes and counts, weighting records of a like shape more): confidence 0.7 with one transfer up to 0.9, scaled down when little of it was measured on files like these; other routes of the same device kinds: 0.3
   * otherwise a **speed probe** (`probe.rs`): about 8 MiB read, 8 MiB written in chunks of 1 MiB with a sync, and 24 tiny files, at most 1.5 s, in a hidden `.fast-probe-*` folder that is removed afterwards. It runs only when the job has at least 48 MiB or 300 files and no good history; confidence 0.45
   * with neither, default per-device costs
 * **Confidence.** The readout shows "Rough estimate", "Getting more accurate" and a brief "Estimate settled". Live data takes over once there are at least 3 samples spanning 0.8 s; the confidence window is 5 s.
@@ -138,3 +156,7 @@ What the benchmark found and fixed:
 
 Not yet measured: SSD against HDD, SMB and NFS shares, Windows, macOS, and
 Explorer or Finder as the baseline.
+
+## Start-up cost
+
+What happens between the click and the first byte, and what has been kept off the path: the card appears at once (a "Starting…" placeholder until the job's own card exists), the permission check is quick and skips network folders (`ops.checkAccess` turns it off), the speed test before a big copy is off by default (`transfers.speedTest`), the walk of the sources runs on its own threads (24 for a network source) and can be cancelled at once. The walk still finishes before the first file is copied, because the plan and the time estimate need the totals.

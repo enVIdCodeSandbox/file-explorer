@@ -181,6 +181,7 @@ pub fn run() {
             tools::view_find,
             commands::thumbs_prewarm,
             commands::stat_many,
+            commands::rename_by_copy,
             commands::folder_fill,
             commands::run_program,
             tools::preview_external,

@@ -129,6 +129,41 @@ impl MethodPref {
     }
 }
 
+/// What to do before there is any history to learn from: many small files go to a tool that handles
+/// them in parallel, big files stay with the built-in engine (which uses the operating system's own
+/// file copy, so over SMB the large files go the native way). The person can set either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rules {
+    pub small: MethodPref,
+    pub large: MethodPref,
+    /// A job is "small files" when its average file is under this many bytes.
+    pub small_avg_bytes: u64,
+    /// ...and it has at least this many files (a handful of files is not worth starting a tool for).
+    pub small_min_files: u64,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Rules { small: MethodPref::Auto, large: MethodPref::Auto, small_avg_bytes: 1 << 20, small_min_files: 50 }
+    }
+}
+
+/// The method for a job by its shape alone. `can` is what this computer and route can run.
+pub fn rule_choice(files: u64, bytes: u64, is_move: bool, can: &[Method], r: &Rules) -> Method {
+    if is_move || can.len() < 2 {
+        return Method::Native;
+    }
+    let small = files >= r.small_min_files && bytes / files.max(1) < r.small_avg_bytes;
+    let wanted = if small { r.small } else { r.large };
+    if let Some(m) = wanted.method() {
+        return if can.contains(&m) { m } else { Method::Native };
+    }
+    if !small {
+        return Method::Native;
+    }
+    [Method::Rclone, Method::Robocopy, Method::Rsync].into_iter().find(|m| can.contains(m)).unwrap_or(Method::Native)
+}
+
 /// Decides between the candidates for a job. Called once, after the sources are scanned.
 pub type MethodChooser = Box<dyn FnOnce(&super::super::history::Query, &[Method]) -> Method + Send>;
 
@@ -543,5 +578,31 @@ mod tests {
         let a: Vec<_> = command(Method::Robocopy, &f, Conflict::Overwrite, true, 4).get_args().map(|s| s.to_string_lossy().into_owned()).collect();
         assert_eq!(&a[..3], ["/d", "/b", "a.iso"]);
         assert!(!a.contains(&"/XC".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod rule_tests {
+    use super::*;
+    const ALL: &[Method] = &[Method::Native, Method::Robocopy, Method::Rclone, Method::Smb];
+
+    #[test]
+    fn many_small_files_use_a_tool_and_big_files_stay_built_in() {
+        let r = Rules::default();
+        assert_eq!(rule_choice(5000, 200 << 20, false, ALL, &r), Method::Rclone);
+        assert_eq!(rule_choice(5000, 200 << 20, false, &[Method::Native, Method::Robocopy], &r), Method::Robocopy);
+        assert_eq!(rule_choice(3, 4 << 30, false, ALL, &r), Method::Native);
+        assert_eq!(rule_choice(10, 1 << 20, false, ALL, &r), Method::Native, "too few files to bother");
+        assert_eq!(rule_choice(5000, 200 << 20, true, ALL, &r), Method::Native, "moves stay built-in");
+        assert_eq!(rule_choice(5000, 200 << 20, false, &[Method::Native], &r), Method::Native);
+    }
+
+    #[test]
+    fn a_chosen_method_wins_when_it_can_run() {
+        let r = Rules { small: MethodPref::Robocopy, large: MethodPref::Smb, ..Rules::default() };
+        assert_eq!(rule_choice(5000, 200 << 20, false, ALL, &r), Method::Robocopy);
+        assert_eq!(rule_choice(3, 4 << 30, false, ALL, &r), Method::Smb);
+        let r = Rules { small: MethodPref::Rsync, ..Rules::default() };
+        assert_eq!(rule_choice(5000, 200 << 20, false, ALL, &r), Method::Native, "not installed: built-in");
     }
 }

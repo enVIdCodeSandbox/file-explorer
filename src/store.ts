@@ -31,6 +31,7 @@ import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "
 import { columnsPerFolder, loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv } from "./settings/advanced";
+import { metricOn } from "./settings/transferMetrics";
 import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
@@ -185,6 +186,8 @@ interface State {
   loadingDir: import("./util/progressive").LoadProgress | null;
   /** Pastes waiting for a delete they would collide with. */
   queuedJobs: Record<number, { title: string; detail: string }>;
+  /** Jobs asked for whose own card is not there yet: shown at once, gone when it appears. */
+  startingJobs: Record<number, { title: string }>;
   unqueue: (id: number) => void;
   /** Paths selected in the active tab (drives the details pane). */
   selection: string[];
@@ -398,6 +401,21 @@ const inFlight = new Map<string, Footprint>();
 /** Jobs waiting for others to end: each wakes when none of the jobs it waits for is left. */
 const waiters: { ids: Set<string>; queue: number; wake: () => void }[] = [];
 let queueSeq = 0;
+
+/** Take the "Starting…" line away once the job's own card is there (or after a moment, whatever happens). */
+function stopStarting(startId: number, jobId?: number) {
+  let tries = 0;
+  const check = () => {
+    const st = useStore.getState();
+    if (!st.startingJobs[startId]) return;
+    if ((jobId !== undefined && (st.transfers[jobId] || st.deletes[jobId])) || jobId === undefined || ++tries > 40) {
+      const next = { ...st.startingJobs };
+      delete next[startId];
+      useStore.setState({ startingJobs: next });
+    } else setTimeout(check, 25);
+  };
+  check();
+}
 /** What each waiting paste is, to turn away an identical one. */
 const queuedSignatures = new Map<number, string>();
 /** A job that has been asked for but has no id yet (waiting for a question, an access check or its turn). */
@@ -503,6 +521,7 @@ export const useStore = create<State>((set, get) => ({
   refreshedAt: 0,
   loadingDir: null,
   queuedJobs: {},
+  startingJobs: {},
   unqueue: (id) => {
     const q = { ...get().queuedJobs };
     delete q[id];
@@ -1042,14 +1061,16 @@ export const useStore = create<State>((set, get) => ({
     const fraction = steadyFraction(prev, p);
     const list = get().series[p.id] ?? [];
     let series = get().series;
-    if (p.phase === "running" && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.2) {
+    // With the speed graph switched off nothing is collected for it.
+    const graphOn = metricOn(get().settings, "graph");
+    if (graphOn && p.phase === "running" && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.2) {
       const next = [...list, { t: p.elapsedSecs, filesPerSec: p.filesPerSec, bytesPerSec: p.bytesPerSec }];
       // Keep the graph light on very long jobs: thin out every other sample.
       series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
     }
     // A job that was over before a second sample could be taken (an instant move, one small file)
     // still gets a graph: from nothing to its average speed.
-    if (p.phase === "done" && (series[p.id]?.length ?? 0) < 2) {
+    if (graphOn && p.phase === "done" && (series[p.id]?.length ?? 0) < 2) {
       const t = Math.max(p.elapsedSecs, 0.05);
       series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t, filesPerSec: p.avgFilesPerSec, bytesPerSec: p.avgBytesPerSec }] };
     }
@@ -1120,6 +1141,16 @@ export const useStore = create<State>((set, get) => ({
       if (p.phase === "done") setTimeout(() => get().dismissDelete(p.id), 4000);
       return;
     }
+    if (p.action === "rename-copy") {
+      const from = renameCopies.get(p.id);
+      if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") renameCopies.delete(p.id);
+      if (p.phase === "done" && p.result) {
+        if (from) get().pushUndo({ kind: "rename", from, to: p.result });
+        get().notify("rename", `Renamed "${p.firstName}"`, `to "${baseName(p.result)}"`, { facts: [["Action", "Rename (by copying)"], ["From", p.firstName], ["To", baseName(p.result)], ["Location", parentPath(p.result) ?? ""]] });
+      } else if (p.phase === "failed") get().notify("error", `Could not rename "${p.firstName}"`, p.errors[0]?.message ?? "");
+      else if (p.phase === "cancelled") get().notify("info", "Rename cancelled", "The original was kept");
+      return;
+    }
     if (p.action !== "delete") {
       if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
         if (p.action === "compress" || p.action === "extract") archiveFinished(p);
@@ -1155,6 +1186,15 @@ export const useStore = create<State>((set, get) => ({
   requestCancel: (kind, id) => {
     set({ cancelling: { ...get().cancelling, [id]: Date.now() } });
     void (kind === "delete" ? api.deleteControl(id, "cancel") : api.transferControl(id, "cancel")).catch((e) => get().showToast(String(e)));
+    // A copy that is waiting for a drive cannot hear the request. After a short wait it is let go of, as
+    // "Force stop" would do, so Cancel feels immediate. 0 turns this off and leaves the button.
+    const wait = adv<number>(get().settings, "transfer.cancelWaitMs");
+    if (wait > 0 && kind === "transfer") {
+      setTimeout(() => {
+        const j = get().transfers[id];
+        if (j && !["done", "cancelled", "failed"].includes(j.phase) && get().cancelling[id]) get().forceStop(kind, id);
+      }, wait);
+    }
   },
 
   forceStop: (kind, id) => {
@@ -1343,17 +1383,26 @@ export const useStore = create<State>((set, get) => ({
         }
         return;
       }
+      // Something shows the moment it is asked for, not when the first progress arrives.
+      const startId = ++queueSeq;
+      set({ startingJobs: { ...get().startingJobs, [startId]: { title: `${op === "move" ? "Moving" : "Copying"} ${describeItems(sources)} to ${baseName(destDir) || destDir}` } } });
+      const clearStarting = (id?: number) => stopStarting(startId, id);
       try {
         const job: Job = { kind: "transfer", spec };
         const mode = await guardAccess(job, `${op === "move" ? "Moving" : "Copying"} to ${baseName(destDir)}`);
-        if (mode === "cancel") return;
+        if (mode === "cancel") {
+          stopStarting(startId);
+          return;
+        }
         const id = mode === "elevated" ? await api.elevatedStart(job) : await api.transferStart(spec);
+        clearStarting(id);
         set({ specs: { ...get().specs, [id]: spec } });
         inFlight.set(`t${id}`, { removes: op === "move" ? sources : [], writes: { dir: destDir, names: sources.map(baseName) }, seq: mySeq });
         wake();
         const landed = sources.map((src) => ({ from: src, to: joinPath(destDir, baseName(src)) }));
         get().pushUndo(op === "move" ? { kind: "move", pairs: landed } : { kind: "copy", created: landed.map((l) => l.to) });
       } catch (e) {
+        stopStarting(startId);
         s.showToast(String(e));
       }
     } finally {
@@ -1573,6 +1622,7 @@ export function jobResult(id: number): Promise<JobFinished> {
  * elevated route, "cancel" means do nothing.
  */
 export async function guardAccess(job: Job, what: string): Promise<"normal" | "elevated" | "cancel"> {
+  if (!adv<boolean>(useStore.getState().settings, "ops.checkAccess")) return "normal";
   const check = await api.checkAccess(job).catch(() => ({ needsElevation: false, becomesPermanent: false }));
   if (!check.needsElevation) return "normal";
   const os = useStore.getState().info?.os;
@@ -1696,22 +1746,32 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
   // From now on a paste into these folders waits for this delete, even while the access check
   // below is still running and the delete has no id yet.
   const held = hold({ removes: paths });
+  // The card is there the moment it is asked for.
+  const startId = ++queueSeq;
+  useStore.setState({ startingJobs: { ...useStore.getState().startingJobs, [startId]: { title: `${permanent ? "Deleting" : "Moving to the bin:"} ${describeItems(paths)}` } } });
+  const clearStarting = (id: number) => stopStarting(startId, id);
   try {
     const job: Job = { kind: "delete", paths, permanent };
     const mode = await guardAccess(job, "Deleting these items");
-    if (mode === "cancel") return false;
+    if (mode === "cancel") {
+      stopStarting(startId);
+      return false;
+    }
     if (mode === "elevated") {
       const id = await api.elevatedStart(job);
+      clearStarting(id);
       deletedFrom.set(id, paths);
       inFlight.set(`d${id}`, { removes: paths, seq: seqOf(held) });
     } else {
       const id = await api.deleteStart(paths, permanent);
+      clearStarting(id);
       if (!permanent) trashedBy.set(id, paths);
       deletedFrom.set(id, paths);
       inFlight.set(`d${id}`, { removes: paths, seq: seqOf(held) });
     }
     return true;
   } catch (e) {
+    stopStarting(startId);
     s.showToast(String(e));
     return false;
   } finally {
@@ -1758,9 +1818,47 @@ export async function renamePath(path: string, newName: string): Promise<string 
     }
     return made;
   } catch (e) {
-    showToast(String(e));
+    const message = String(e);
+    if (message.startsWith("rename-refused:")) return renameByCopy(path, newName, message.slice("rename-refused:".length).trim());
+    showToast(message);
     return null;
   }
+}
+
+/** Where each "rename by copying" job started from, to be able to undo it. */
+const renameCopies = new Map<number, string>();
+
+/**
+ * The server would not rename a file it can read (seen on pooled shares that keep a file on another disk than
+ * its folder). Writing a copy under the new name and removing the original works where the rename does not.
+ * Asked first by default, since it moves the whole file; the setting can make it automatic or turn it off.
+ */
+async function renameByCopy(path: string, newName: string, reason: string): Promise<null> {
+  const { showToast } = useStore.getState();
+  const mode = adv<string>(useStore.getState().settings, "files.renameByCopy");
+  if (mode === "never") {
+    showToast(`The server would not rename this file: ${reason}. Settings > Advanced can turn on renaming it by copying.`);
+    return null;
+  }
+  if (mode !== "always") {
+    const answer = await ask({
+      title: "The server would not rename this file",
+      message: `${reason}\n\nThis happens on some combined or cached shares. I can rename it by copying it under the new name and then removing the original, which is what moving it out, renaming it and putting it back does. The whole file is copied, so a big file takes a while, and you can cancel it from the task list.`,
+      buttons: [
+        { id: "copy", label: "Rename by copying", primary: true },
+        { id: "always", label: "Always rename by copying" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (!answer || answer.button === "cancel") return null;
+    if (answer.button === "always") useStore.getState().updateSettings((x) => void (x.advanced["files.renameByCopy"] = "always"));
+  }
+  try {
+    renameCopies.set(await api.renameByCopy(path, newName), path);
+  } catch (e) {
+    showToast(String(e));
+  }
+  return null;
 }
 
 export async function createPath(dir: string, name: string, folder: boolean): Promise<string | null> {
@@ -1873,7 +1971,7 @@ export async function applyRenames(dir: string, plans: RenamePlan[], remember = 
         if (original) done.set(original, step.to);
       } catch (e) {
         failed++;
-        firstError ||= String(e instanceof Error ? e.message : e);
+        firstError ||= String(e instanceof Error ? e.message : e).replace(/^rename-refused:/, "The server would not rename it: ");
       }
     }
   }

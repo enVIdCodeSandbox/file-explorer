@@ -1440,7 +1440,7 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
     }
     let id = st.next_id.fetch_add(1, Ordering::Relaxed);
     let (mut budget, drive_list) = (st.budget.read().clone(), st.drives.read().clone());
-    let (remember, limit, explore) = {
+    let (remember, limit, explore, rules) = {
         let s = st.settings.read();
         // The progress rate follows the device (slower on laptops and weak
         // machines) unless it was set by hand.
@@ -1451,7 +1451,17 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
         spec.preserve_times = s.transfer.preserve_timestamps;
         spec.large_threshold = s.transfer.large_file_threshold_mb.max(1) * 1024 * 1024;
         spec.max_parallel = s.transfer.max_parallel;
-        (s.transfer.remember_device_speeds, s.transfer.history_limit, s.transfer.try_other_methods)
+        // The list of files being copied is only tracked when its line is switched on.
+        let shown = |id: &str| s.advanced.get(&format!("transfer.show.{id}")).and_then(|v| v.as_bool()).unwrap_or(true);
+        spec.speed_test = s.advanced.get("transfers.speedTest").and_then(|v| v.as_bool()).unwrap_or(false);
+        spec.active_files = if shown("activeFiles") { adv_num(&s, "transfer.activeFilesCount", 4).clamp(1, 16) as usize } else { 0 };
+        let rules = fast_core::transfer::method::Rules {
+            small: fast_core::transfer::method::MethodPref::from_setting(&adv_text(&s, "transfer.smallFilesMethod")),
+            large: fast_core::transfer::method::MethodPref::from_setting(&adv_text(&s, "transfer.largeFilesMethod")),
+            small_avg_bytes: adv_num(&s, "transfer.smallFileKb", 1024) * 1024,
+            small_min_files: adv_num(&s, "transfer.smallFileMinCount", 50),
+        };
+        (s.transfer.remember_device_speeds, s.transfer.history_limit, s.transfer.try_other_methods, rules)
     };
     // After the sources are scanned, the engine asks what similar past
     // transfers say about this one.
@@ -1461,10 +1471,23 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
     });
 
     // ...and which method (built-in, Robocopy, rsync) did best on jobs like it.
-    let choose: Option<fast_core::transfer::method::MethodChooser> = (remember && limit > 0).then(|| {
+    // A method the person chose for this kind of job wins; otherwise what earlier jobs showed; and with
+    // nothing to learn from yet, a rule by the shape of the job (many small files: a tool, big files: built-in).
+    let choose: Option<fast_core::transfer::method::MethodChooser> = Some({
         let st = st.clone();
         Box::new(move |q: &fast_core::history::Query, can: &[fast_core::transfer::method::Method]| {
-            st.history.lock().choose_method(q, can, explore, now_secs())
+            let by_rule = fast_core::transfer::method::rule_choice(q.files, q.bytes, q.is_move, can, &rules);
+            let small = q.files >= rules.small_min_files && q.bytes / q.files.max(1) < rules.small_avg_bytes;
+            let fixed = if small { rules.small } else { rules.large };
+            if fixed.method().is_some() {
+                return by_rule;
+            }
+            if remember && limit > 0 {
+                if let Some(m) = st.history.lock().learned_method(q, can, explore, now_secs()) {
+                    return m;
+                }
+            }
+            by_rule
         }) as fast_core::transfer::method::MethodChooser
     });
 
@@ -1583,7 +1606,7 @@ pub fn transfer_force_stop(state: State<'_, Shared>, id: u64) -> CmdResult<()> {
         return r;
     }
     if let Some(h) = state.transfers.lock().remove(&id) {
-        h.cancel();
+        h.abandon();
     }
     Ok(())
 }
@@ -1809,11 +1832,83 @@ pub async fn rename_item(app: AppHandle, state: State<'_, Shared>, path: String,
     blocking(move || {
         guard(&st, &path)?;
         let p = PathBuf::from(path);
-        let target = entry::rename(&p, &new_name).map_err(err)?;
+        let target = match entry::rename(&p, &new_name) {
+            Ok(t) => t,
+            // The server would not rename a file it can read (a pooled share, a file that moved behind it):
+            // the interface can offer to do it by copying.
+            Err(e) if entry::rename_could_copy(&p, &e) => return Err(format!("rename-refused:{e}")),
+            Err(e) => return Err(err(e)),
+        };
         fs_changed(&app, &st, ops::parents(&[p]));
         Ok(target.to_string_lossy().into_owned())
     })
     .await
+}
+
+/// Rename a file by copying it under the new name and removing the original, as a job with progress
+/// (see `entry::rename_by_copy`). The result arrives as `delete-progress` with action "rename-copy"; its
+/// `result` is the new path.
+#[tauri::command]
+pub fn rename_by_copy(app: AppHandle, state: State<'_, Shared>, path: String, new_name: String) -> CmdResult<u64> {
+    let st = state.inner().clone();
+    guard(&st, &path)?;
+    let id = st.next_id.fetch_add(1, Ordering::Relaxed);
+    let cancel = Arc::new(AtomicBool::new(false));
+    st.deletes.lock().insert(id, cancel.clone());
+    let name = Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let emit = {
+        let app = app.clone();
+        let name = name.clone();
+        let started = Instant::now();
+        move |phase: ops::DeletePhase, done: u64, total: u64, error: Option<&str>, result: &str| {
+            let _ = app.emit(
+                "delete-progress",
+                ops::DeleteProgress {
+                    id,
+                    phase,
+                    permanent: false,
+                    selected: 1,
+                    items_total: 1,
+                    items_done: u64::from(phase == ops::DeletePhase::Done),
+                    current: name.clone(),
+                    errors: error.map(|m| vec![transfer::engine::TransferError { path: name.clone(), message: m.to_string(), needs_elevation: false }]).unwrap_or_default(),
+                    error_count: u64::from(error.is_some()),
+                    elapsed_secs: started.elapsed().as_secs_f64(),
+                    first_name: name.clone(),
+                    action: "rename-copy".into(),
+                    result: result.to_string(),
+                    bytes_done: done,
+                    bytes_total: total,
+                    skipped: 0,
+                    conflict: None,
+                    stats: None,
+                    method: "Copy under the new name, then remove the original".into(),
+                },
+            );
+        }
+    };
+    emit(ops::DeletePhase::Scanning, 0, 0, None, "");
+    std::thread::Builder::new()
+        .name(format!("rename-copy-{id}"))
+        .spawn(move || {
+            let source = PathBuf::from(&path);
+            let mut last = Instant::now() - std::time::Duration::from_secs(1);
+            let r = entry::rename_by_copy(&source, &new_name, &cancel, &mut |done, total| {
+                if last.elapsed() >= std::time::Duration::from_millis(200) {
+                    last = Instant::now();
+                    emit(ops::DeletePhase::Running, done, total, None, "");
+                }
+            });
+            match r {
+                Ok(Some(target)) => emit(ops::DeletePhase::Done, 1, 1, None, &target.to_string_lossy()),
+                Ok(None) => emit(ops::DeletePhase::Cancelled, 0, 0, None, ""),
+                Err(e) => emit(ops::DeletePhase::Failed, 0, 0, Some(&err(e)), ""),
+            }
+            fs_changed(&app, &st, ops::parents(&[source]));
+            st.deletes.lock().remove(&id);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
 #[tauri::command]
@@ -3576,4 +3671,13 @@ pub async fn share_stop(state: State<'_, Shared>, id: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn share_list(state: State<'_, Shared>) -> CmdResult<Vec<fast_core::share::ShareInfo>> {
     Ok(state.shares.list())
+}
+
+/// An advanced text setting (a choice), or "auto".
+fn adv_text(s: &fast_core::settings::Settings, key: &str) -> String {
+    s.advanced.get(key).and_then(|v| v.as_str()).unwrap_or("auto").to_string()
+}
+
+fn adv_num(s: &fast_core::settings::Settings, key: &str, default: u64) -> u64 {
+    s.advanced.get(key).and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64))).unwrap_or(default)
 }

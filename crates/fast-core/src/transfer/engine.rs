@@ -85,6 +85,14 @@ struct Asker {
     asked: u64,
 }
 
+/// A file that is being copied at this moment.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveFile {
+    pub path: String,
+    pub size: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferSpec {
@@ -107,6 +115,14 @@ pub struct TransferSpec {
     /// it is kept as it is and skipped, whatever the conflict choice, and never asked about.
     #[serde(default = "yes")]
     pub skip_identical: bool,
+    /// How many of the files being copied are reported in `Progress::active_files` (0: none, and nothing is
+    /// tracked for it).
+    #[serde(default)]
+    pub active_files: usize,
+    /// Time the devices with a short test before a big copy, to start the estimate better informed. Off by
+    /// default: it delays the start, and what earlier transfers and the first seconds of the copy tell is nearly as good.
+    #[serde(default)]
+    pub speed_test: bool,
 }
 
 fn yes() -> bool {
@@ -189,6 +205,9 @@ pub struct Progress {
     pub timed_out: bool,
     /// While queued: how many transfers go first.
     pub queued_ahead: u32,
+    /// The files being copied right now, one per busy worker (as many as `TransferSpec::active_files` allows).
+    #[serde(default)]
+    pub active_files: Vec<ActiveFile>,
 }
 
 /// Asked once, after the sources are scanned, what similar past transfers say.
@@ -196,7 +215,7 @@ pub type Predictor = Box<dyn FnOnce(&Query) -> Option<Prediction> + Send>;
 
 /// Rough per-file and per-MB costs used only to weight the progress bar when
 /// nothing is known about the devices yet.
-fn default_costs(src: crate::drives::Media, dst: crate::drives::Media) -> EtaParams {
+pub(crate) fn default_costs(src: crate::drives::Media, dst: crate::drives::Media) -> EtaParams {
     use crate::drives::Media::*;
     match (src, dst) {
         (Network, _) | (_, Network) => EtaParams { per_file_secs: 0.010, per_mb_secs: 0.020 },
@@ -236,6 +255,12 @@ struct Shared {
     stop_on_timeout: AtomicBool,
     timed_out: AtomicBool,
     run_started: Mutex<Option<Instant>>,
+    /// Files found so far while the sources are being looked at.
+    scanned: AtomicU64,
+    /// This job's place in the queue has been given back (by finishing, or by being let go of while stuck).
+    gate_released: AtomicBool,
+    /// What each worker is copying now (empty text when idle). Only used when the spec asks for it.
+    slots: Mutex<Vec<Option<ActiveFile>>>,
 }
 
 thread_local! {
@@ -285,6 +310,14 @@ impl Shared {
             let _ = self.control.compare_exchange(ST_RUN, to, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
+    /// Note what a worker is copying (or that it is idle). Costs nothing when the spec did not ask for it.
+    fn set_slot(&self, slot: usize, item: Option<&Item>) {
+        let mut slots = self.slots.lock();
+        if let Some(entry) = slots.get_mut(slot) {
+            *entry = item.map(|i| ActiveFile { path: i.src.to_string_lossy().into_owned(), size: i.size });
+        }
+    }
+
     fn fill(&self, p: &mut Progress) {
         p.priority = self.priority.load(Ordering::Relaxed);
         p.limit_bps = self.limiter.rate();
@@ -382,6 +415,15 @@ impl TransferHandle {
     pub fn cancel(&self) {
         self.shared.control.store(ST_CANCEL, Ordering::Relaxed);
     }
+    /// Let go of a job that is stuck waiting for a drive: cancel it, and give its place in the queue to the
+    /// next one, so a job stuck on a dead share does not hold up every copy after it. The job itself ends
+    /// whenever the drive finally answers.
+    pub fn abandon(&self) {
+        self.cancel();
+        if self.shared.run_started.lock().is_some() && !self.shared.gate_released.swap(true, Ordering::SeqCst) {
+            throttle::gate().leave();
+        }
+    }
     /// Answer the conflict that `Progress::conflict` is showing. With `all`,
     /// the same answer is used for every later conflict in this job.
     pub fn resolve(&self, answer: Resolution, all: bool) {
@@ -467,6 +509,9 @@ pub fn start_with(
         stop_on_timeout: AtomicBool::new(true),
         timed_out: AtomicBool::new(false),
         run_started: Mutex::new(None),
+        scanned: AtomicU64::new(0),
+        gate_released: AtomicBool::new(false),
+        slots: Mutex::new(Vec::new()),
     });
     let done = Arc::new(AtomicBool::new(false));
     let handle = TransferHandle { id, shared: shared.clone(), done: done.clone() };
@@ -478,6 +523,85 @@ pub fn start_with(
         })
         .expect("spawn transfer thread");
     handle
+}
+
+/// What the first look at the sources found.
+struct Phase1 {
+    items: Vec<Item>,
+    dirs: Vec<PathBuf>,
+    /// Source directories to remove after a copy-based move, deepest last.
+    moved_dirs: Vec<PathBuf>,
+    renamed_all: bool,
+    /// What each top-level source becomes, for tools that copy whole folders.
+    tops: Vec<method::Top>,
+    /// Something with the same name is already at the destination (a folder merge, or a file to replace).
+    clash_possible: bool,
+}
+
+/// Look at every source: finish what a rename can finish, decide the top-level conflicts, and walk the folders.
+fn phase1(spec: &TransferSpec, shared: &Shared) -> Phase1 {
+    let mut items: Vec<Item> = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut moved_dirs: Vec<PathBuf> = Vec::new();
+    let mut renamed_all = spec.op == Op::Move;
+    let mut tops: Vec<method::Top> = Vec::new();
+    let mut clash_possible = false;
+    for src in &spec.sources {
+        if shared.cancelled() {
+            break;
+        }
+        let Some(name) = src.file_name() else {
+            shared.error(src, &io::Error::new(io::ErrorKind::InvalidInput, "cannot transfer a root"));
+            continue;
+        };
+        if spec.dest_dir.starts_with(src) {
+            shared.error(src, &io::Error::new(io::ErrorKind::InvalidInput, "destination is inside the source"));
+            continue;
+        }
+        let mut dst = spec.dest_dir.join(name);
+        if dst == *src {
+            // Copying into the same folder always makes a duplicate; moving is a no-op.
+            if spec.op == Op::Move {
+                continue;
+            }
+            dst = unique_name(&dst);
+        }
+        let meta = match fs::symlink_metadata(src) {
+            Ok(m) => m,
+            Err(e) => {
+                shared.error(src, &e);
+                continue;
+            }
+        };
+        // With "ask", files are decided one by one while the job runs (in `process`).
+        if dst.exists() {
+            clash_possible = true;
+        }
+        if dst.exists() && !(meta.is_dir() && dst.is_dir()) && spec.conflict != Conflict::Ask {
+            match spec.conflict {
+                Conflict::Ask => {}
+                Conflict::Skip => {
+                    shared.skipped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                Conflict::KeepBoth => dst = unique_name(&dst),
+                Conflict::Overwrite => {}
+            }
+        }
+        // A move within one volume is a rename: no data is copied at all.
+        if spec.op == Op::Move && !dst.exists() && fs::rename(src, &dst).is_ok() {
+            shared.files_done.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        renamed_all = false;
+        tops.push(method::Top { src: src.clone(), dst: dst.clone(), is_dir: meta.is_dir() });
+        if meta.is_dir() {
+            scan(src, &dst, &mut items, &mut dirs, &mut moved_dirs, shared);
+        } else {
+            items.push(Item { src: src.clone(), dst, size: meta.len() });
+        }
+    }
+    Phase1 { items, dirs, moved_dirs, renamed_all, tops, clash_possible }
 }
 
 fn run(
@@ -528,6 +652,7 @@ fn run(
         max_secs: 0,
         timed_out: false,
         queued_ahead: 0,
+        active_files: Vec::new(),
     };
     // Wait for a turn when too many transfers are already working.
     {
@@ -553,79 +678,67 @@ fn run(
         }
         progress.queued_ahead = 0;
     }
-    struct Turn;
+    struct Turn(Arc<Shared>);
     impl Drop for Turn {
         fn drop(&mut self) {
-            throttle::gate().leave();
+            if !self.0.gate_released.swap(true, Ordering::SeqCst) {
+                throttle::gate().leave();
+            }
         }
     }
-    let _turn = Turn;
+    let _turn = Turn(shared.clone());
     *shared.run_started.lock() = Some(Instant::now());
     shared.fill(&mut progress);
     on_progress(progress.clone());
 
     // ---- Phase 1: fast path for moves, then scan what is left ----------------
-    let mut items: Vec<Item> = Vec::new();
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    // Source directories to remove after a copy-based move, deepest last.
-    let mut moved_dirs: Vec<PathBuf> = Vec::new();
-    let mut renamed_all = spec.op == Op::Move;
+    // This touches the drives (a network share can take its time to answer), so it runs on its own thread
+    // while this one watches: it reports what has been found so far, and Cancel ends the job at once
+    // instead of waiting for the drive. A walk that is cancelled stops by itself at the next folder.
     let phase1_started = Instant::now();
-    // What each top-level source becomes, for tools that copy whole folders.
-    let mut tops: Vec<method::Top> = Vec::new();
-
-    for src in &spec.sources {
-        if shared.cancelled() {
-            break;
+    let Phase1 { items, dirs, moved_dirs, renamed_all, tops, clash_possible } = {
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let (spec, shared) = (spec.clone(), shared.clone());
+            let _ = std::thread::Builder::new().name(format!("prepare-{id}")).spawn(move || {
+                let _ = tx.send(phase1(&spec, &shared));
+            });
         }
-        let Some(name) = src.file_name() else {
-            shared.error(src, &io::Error::new(io::ErrorKind::InvalidInput, "cannot transfer a root"));
-            continue;
-        };
-        if spec.dest_dir.starts_with(src) {
-            shared.error(src, &io::Error::new(io::ErrorKind::InvalidInput, "destination is inside the source"));
-            continue;
-        }
-        let mut dst = spec.dest_dir.join(name);
-        if dst == *src {
-            // Copying into the same folder always makes a duplicate; moving is a no-op.
-            if spec.op == Op::Move {
-                continue;
-            }
-            dst = unique_name(&dst);
-        }
-        let meta = match fs::symlink_metadata(src) {
-            Ok(m) => m,
-            Err(e) => {
-                shared.error(src, &e);
-                continue;
-            }
-        };
-        // With "ask", files are decided one by one while the job runs (in `process`).
-        if dst.exists() && !(meta.is_dir() && dst.is_dir()) && spec.conflict != Conflict::Ask {
-            match spec.conflict {
-                Conflict::Ask => {}
-                Conflict::Skip => {
-                    shared.skipped.fetch_add(1, Ordering::Relaxed);
-                    continue;
+        let mut last = Instant::now() - Duration::from_secs(1);
+        loop {
+            match rx.recv_timeout(Duration::from_millis(25)) {
+                Ok(found) if !shared.cancelled() => break found,
+                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // Cancelled while preparing (or the preparation died): nothing was copied.
+                    shared.fill(&mut progress);
+                    progress.phase = Phase::Cancelled;
+                    progress.current.clear();
+                    progress.elapsed_secs = started.elapsed().as_secs_f64();
+                    on_progress(progress);
+                    return;
                 }
-                Conflict::KeepBoth => dst = unique_name(&dst),
-                Conflict::Overwrite => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if shared.cancelled() {
+                        shared.fill(&mut progress);
+                        progress.phase = Phase::Cancelled;
+                        progress.current.clear();
+                        progress.elapsed_secs = started.elapsed().as_secs_f64();
+                        on_progress(progress);
+                        return;
+                    }
+                    if last.elapsed() >= Duration::from_millis(250) {
+                        last = Instant::now();
+                        let n = shared.scanned.load(Ordering::Relaxed);
+                        shared.fill(&mut progress);
+                        progress.phase = Phase::Scanning;
+                        progress.current = if n > 0 { format!("Counting files… {n} so far") } else { "Reading the folders…".into() };
+                        progress.elapsed_secs = started.elapsed().as_secs_f64();
+                        on_progress(progress.clone());
+                    }
+                }
             }
         }
-        // A move within one volume is a rename: no data is copied at all.
-        if spec.op == Op::Move && !dst.exists() && fs::rename(src, &dst).is_ok() {
-            shared.files_done.fetch_add(1, Ordering::Relaxed);
-            continue;
-        }
-        renamed_all = false;
-        tops.push(method::Top { src: src.clone(), dst: dst.clone(), is_dir: meta.is_dir() });
-        if meta.is_dir() {
-            scan(src, &dst, &mut items, &mut dirs, &mut moved_dirs, shared);
-        } else {
-            items.push(Item { src: src.clone(), dst, size: meta.len() });
-        }
-    }
+    };
 
     let large_threshold =
         if spec.large_threshold > 0 { spec.large_threshold } else { strategy::DEFAULT_LARGE_THRESHOLD };
@@ -689,7 +802,8 @@ fn run(
     // exactly the same way are candidates; moves, renames, clones and copies
     // that keep both versions stay with the engine.
     let tool_ok = spec.op == Op::Copy
-        && !matches!(spec.conflict, Conflict::KeepBoth | Conflict::Ask)
+        // "Ask" needs the engine only when something could actually clash (tools cannot ask).
+        && (spec.conflict == Conflict::Ask && !clash_possible || !matches!(spec.conflict, Conflict::KeepBoth | Conflict::Ask))
         && plan.strategy != Strategy::Rename
         && !plan.try_clone
         && !tops.is_empty()
@@ -718,10 +832,11 @@ fn run(
     }
     // How much to trust the first estimate: earlier transfers on this very
     // route count for most; a quick speed test of the devices for a fair bit.
+    // Even one earlier transfer on this very route vouches for the estimate (every transfer measures what the
+    // route costs per file and per megabyte); more of them, and ones of a shape like this job's, vouch more.
     let mut head_start = match &prediction {
-        Some(p) if p.same_route && p.samples >= 3 => 0.8,
-        Some(p) if p.same_route => 0.55,
-        Some(_) => 0.3,
+        Some(p) if p.same_route => (0.7 + 0.05 * (p.samples.min(5) as f64 - 1.0)) * (0.65 + 0.35 * p.shape_match),
+        Some(p) => 0.3 * (0.65 + 0.35 * p.shape_match),
         None => 0.0,
     };
     // With little to go on, test the real devices for a moment. A job that
@@ -730,15 +845,15 @@ fn run(
     // skips the test and the estimate stays a rough guess.
     let guess = default_costs(profile.src, profile.dst);
     let guessed_secs = files_total as f64 * guess.per_file_secs + bytes_total as f64 / (1024.0 * 1024.0) * guess.per_mb_secs;
-    let worth_probing = files_total > 0 && (bytes_total >= 48 << 20 || files_total >= 300) && guessed_secs >= PROBE_WORTH_SECS;
-    let well_known = matches!(&prediction, Some(p) if p.same_route && p.samples >= 3);
+    let worth_probing = spec.speed_test && files_total > 0 && (bytes_total >= 48 << 20 || files_total >= 300) && guessed_secs >= PROBE_WORTH_SECS;
+    let well_known = matches!(&prediction, Some(p) if p.same_route);
     if worth_probing && !well_known && !shared.cancelled() && plan.strategy != Strategy::Rename {
         *shared.current.lock() = "Measuring speed…".into();
         progress.phase = Phase::Scanning;
         progress.current = "Measuring speed…".into();
         on_progress(progress.clone());
         let biggest = items.iter().max_by_key(|i| i.size).map(|i| i.src.clone());
-        if let Some(m) = probe::run(biggest.as_deref(), &spec.dest_dir) {
+        if let Some(m) = probe::run_bounded(biggest.as_deref(), &spec.dest_dir, Duration::from_millis(2500), || shared.cancelled()) {
             let shared_bw = matches!(profile.src, drives::Media::Network | drives::Media::Hdd | drives::Media::Removable)
                 || matches!(profile.dst, drives::Media::Network | drives::Media::Hdd | drives::Media::Removable);
             let streams = plan.small_workers + plan.large_workers;
@@ -786,6 +901,9 @@ fn run(
     // ---- Phase 2: create the directory skeleton, then copy -------------------
     if method == Method::Native {
         for d in &dirs {
+            if shared.cancelled() {
+                break;
+            }
             if let Err(e) = fs::create_dir_all(d) {
                 shared.error(d, &e);
             }
@@ -808,12 +926,16 @@ fn run(
     drop((small_tx, large_tx));
 
     let workers = Arc::new(AtomicUsize::new(0));
+    let next_slot = AtomicUsize::new(0);
+    *shared.slots.lock() = vec![None; spec.active_files.min(16)];
     std::thread::scope(|s| {
+        let next_slot = &next_slot;
         let spawn = |n: usize, primary: chan::Receiver<Item>, secondary: chan::Receiver<Item>| {
             for _ in 0..n {
                 let (primary, secondary, plan, spec, workers) =
                     (primary.clone(), secondary.clone(), &plan, &spec, workers.clone());
                 workers.fetch_add(1, Ordering::Relaxed);
+                let slot = next_slot.fetch_add(1, Ordering::Relaxed);
                 s.spawn(move || {
                     // Drain our own lane, then the secondary one (if any).
                     for item in primary.iter().chain(secondary.iter()) {
@@ -821,7 +943,9 @@ fn run(
                             break;
                         }
                         shared.active.fetch_add(1, Ordering::Relaxed);
+                        shared.set_slot(slot, Some(&item));
                         process(&item, plan, spec, shared);
+                        shared.set_slot(slot, None);
                         shared.active.fetch_sub(1, Ordering::Relaxed);
                     }
                     workers.fetch_sub(1, Ordering::Relaxed);
@@ -903,6 +1027,7 @@ fn run(
                 progress.overhead_share = e.overhead_share;
             }
             progress.current = shared.current.lock().clone();
+            progress.active_files = shared.slots.lock().iter().flatten().cloned().collect();
             progress.error_count = errors;
             progress.errors = shared.errors.lock().clone();
             progress.elapsed_secs = started.elapsed().as_secs_f64();
@@ -978,7 +1103,7 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
                 return;
             }
             // Already-finished items are left alone on a restart after a pause.
-            let mut cmd = method::command(method, top, spec.conflict, spec.preserve_times, workers);
+            let mut cmd = method::command(method, top, if spec.conflict == Conflict::Ask { Conflict::Skip } else { spec.conflict }, spec.preserve_times, workers);
             cmd.stdin(Stdio::null());
             if method.reports_on_stderr() {
                 cmd.stdout(Stdio::null()).stderr(Stdio::piped());
@@ -1156,7 +1281,9 @@ const SCAN_THREADS: usize = 8;
 /// subfolder in turn), which keeps files that sit together on disk together in the queue.
 fn scan(src: &Path, dst: &Path, items: &mut Vec<Item>, dirs: &mut Vec<PathBuf>, moved_dirs: &mut Vec<PathBuf>, shared: &Shared) {
     let walk = || scan_dir(src, dst, shared);
-    let found = match rayon::ThreadPoolBuilder::new().num_threads(SCAN_THREADS).thread_name(|i| format!("scan-{i}")).build() {
+    // Over a network the walk waits on the wire, not the disk: more folders are read at once.
+    let threads = if method::NetMap::read().kind(src).is_some() { SCAN_THREADS * 3 } else { SCAN_THREADS };
+    let found = match rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("scan-{i}")).build() {
         Ok(pool) => pool.install(walk),
         Err(_) => walk(),
     };
@@ -1188,6 +1315,7 @@ fn scan_dir(src: &Path, dst: &Path, shared: &Shared) -> Scanned {
             Ok(ft) if ft.is_dir() => subdirs.push((path, target)),
             Ok(_) => {
                 let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                shared.scanned.fetch_add(1, Ordering::Relaxed);
                 out.items.push(Item { src: path, dst: target, size });
             }
             Err(err) => shared.error(&path, &err),
@@ -1512,7 +1640,7 @@ mod tests {
     fn spec(sources: Vec<PathBuf>, dest: &Path, op: Op, conflict: Conflict) -> TransferSpec {
         TransferSpec {
             sources, dest_dir: dest.to_path_buf(), op, conflict,
-            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native, skip_identical: true,
+            preserve_times: true, large_threshold: 64 * 1024, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false,
         }
     }
 
@@ -1583,7 +1711,24 @@ mod tests {
             stop_on_timeout: AtomicBool::new(true),
             timed_out: AtomicBool::new(false),
             run_started: Mutex::new(None),
+            scanned: AtomicU64::new(0),
+            gate_released: AtomicBool::new(false),
+            slots: Mutex::new(Vec::new()),
         }
+    }
+
+    #[test]
+    fn workers_report_what_they_are_copying_only_when_asked() {
+        let s = test_shared();
+        let item = Item { src: PathBuf::from("/a/b.bin"), dst: PathBuf::from("/c/b.bin"), size: 5 };
+        s.set_slot(0, Some(&item));
+        assert!(s.slots.lock().is_empty(), "nothing is tracked unless the spec asked for it");
+        *s.slots.lock() = vec![None; 2];
+        s.set_slot(1, Some(&item));
+        s.set_slot(5, Some(&item));
+        assert_eq!(s.slots.lock().iter().flatten().cloned().collect::<Vec<_>>(), vec![ActiveFile { path: "/a/b.bin".into(), size: 5 }]);
+        s.set_slot(1, None);
+        assert!(s.slots.lock().iter().flatten().next().is_none());
     }
 
     #[test]
@@ -1595,7 +1740,7 @@ mod tests {
         let shared = test_shared();
         shared.limiter.set_rate(1_000_000);
         let plan = strategy::choose(&JobProfile { file_count: 1, total_bytes: 1_000_000, large_bytes: 0, large_count: 0, same_volume: false, is_move: false, src: crate::drives::Media::Ssd, dst: crate::drives::Media::Ssd }, &Budget::minimal(), 64 * 1024 * 1024, 0);
-        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 0, max_parallel: 0, method: MethodPref::Native, skip_identical: true };
+        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 0, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false };
         shared.clone_ok.store(false, Ordering::Relaxed);
         let t = Instant::now();
         assert!(copy_one(&a, &b, 1_000_000, &plan, &spec, &shared).unwrap());
@@ -1712,6 +1857,7 @@ mod tests {
                 typical_secs: 4.0,
                 samples: 3,
                 same_route: true,
+                shape_match: 1.0,
             })
         });
         let budget = Budget { io_threads: 4, ..Budget::minimal() };
@@ -2016,7 +2162,9 @@ mod tests {
     fn speed_test_before_a_big_copy_leaves_nothing_behind() {
         let (src, dst) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         fs::write(src.path().join("big.bin"), vec![3u8; 50 << 20]).unwrap();
-        let p = run_job(spec(vec![src.path().join("big.bin")], dst.path(), Op::Copy, Conflict::Overwrite));
+        let mut s = spec(vec![src.path().join("big.bin")], dst.path(), Op::Copy, Conflict::Overwrite);
+        s.speed_test = true;
+        let p = run_job(s);
         assert_eq!(p.phase, Phase::Done);
         let names: Vec<_> = fs::read_dir(dst.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["big.bin"]);

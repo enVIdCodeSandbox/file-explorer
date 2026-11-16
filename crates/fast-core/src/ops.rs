@@ -104,19 +104,25 @@ fn read_denied(path: &Path) -> bool {
     matches!(r, Err(e) if e.kind() == io::ErrorKind::PermissionDenied)
 }
 
-/// Probe whether `job` would be refused. Cheap: a handful of probes, no scanning.
+/// Probe whether `job` would be refused. Quick by design: it stops at the first answer, looks at only the
+/// first few items of a long selection (they share a folder, so share its permissions), and does not probe
+/// network folders at all: a probe there is a create and a delete over the wire for nothing it can learn
+/// (the share's own rules are applied when the work runs, and a refusal is then offered as a retry as
+/// administrator like any other).
 pub fn check_access(job: &Job) -> AccessCheck {
-    let any_write_denied = |dirs: &[PathBuf]| dirs.iter().any(|d| write_denied(d));
+    let net = transfer::method::NetMap::read();
+    let local = |p: &Path| net.kind(p).is_none();
+    let any_write_denied = |dirs: &[PathBuf]| dirs.iter().filter(|d| local(d)).take(3).any(|d| write_denied(d));
     let needs = match job {
         Job::Transfer { spec } => {
-            write_denied(&spec.dest_dir)
-                || spec.sources.iter().any(|s| read_denied(s))
+            (local(&spec.dest_dir) && write_denied(&spec.dest_dir))
+                || spec.sources.iter().filter(|s| local(s)).take(3).any(|s| read_denied(s))
                 // A move also removes the originals.
                 || (spec.op == transfer::Op::Move && any_write_denied(&parents(&spec.sources)))
         }
         Job::Delete { paths, .. } => any_write_denied(&parents(paths)),
         Job::Rename { path, .. } => any_write_denied(&parents(std::slice::from_ref(path))),
-        Job::Create { dir, .. } => write_denied(dir),
+        Job::Create { dir, .. } => local(dir) && write_denied(dir),
     };
     // Outside Windows an elevated process is root, whose Trash is not the
     // user's, so a Trash request would silently become a permanent delete.
@@ -822,6 +828,7 @@ mod tests {
             max_parallel: 0,
             method: Default::default(),
             skip_identical: true,
+            active_files: 0, speed_test: false,
         };
         let job = Job::Transfer { spec };
         let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&job).unwrap());
@@ -845,6 +852,7 @@ mod tests {
                 max_parallel: 0,
                 method: Default::default(),
                 skip_identical: true,
+            active_files: 0, speed_test: false,
             },
         };
         assert_eq!(job.touched_dirs(), vec![PathBuf::from("/x"), PathBuf::from("/y"), PathBuf::from("/z")]);

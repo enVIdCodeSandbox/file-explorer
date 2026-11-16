@@ -71,6 +71,33 @@ pub fn run(source_file: Option<&Path>, dest_dir: &Path) -> Option<Measured> {
     })
 }
 
+/// Like [`run`], but never waits longer than `limit` or past a cancel. A drive that is slow to answer (a
+/// network share, a disk that went to sleep) can hold any one of the test's calls for far longer than its
+/// time budget, and the copy must not wait for a test. The test carries on by itself on its own thread and
+/// removes its folder when the drive answers; its result is simply not used.
+pub fn run_bounded(source_file: Option<&Path>, dest_dir: &Path, limit: Duration, cancelled: impl Fn() -> bool) -> Option<Measured> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (source, dest) = (source_file.map(Path::to_path_buf), dest_dir.to_path_buf());
+    std::thread::Builder::new()
+        .name("speed-test".into())
+        .spawn(move || {
+            let _ = tx.send(run(source.as_deref(), &dest));
+        })
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match rx.recv_timeout(Duration::from_millis(25)) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if started.elapsed() >= limit || cancelled() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 fn rand_tag() -> u128 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
 }
@@ -143,6 +170,23 @@ mod tests {
         assert_eq!(fs::read_dir(dst.path()).unwrap().count(), 0);
         let p = m.params(4, true);
         assert!(p.per_mb_secs > m.params(4, false).per_mb_secs);
+    }
+
+    #[test]
+    fn a_bounded_test_gives_up_when_cancelled() {
+        let dst = tempfile::tempdir().unwrap();
+        let t = Instant::now();
+        assert!(run_bounded(None, dst.path(), Duration::from_secs(5), || true).is_none());
+        assert!(t.elapsed() < Duration::from_secs(1));
+        // It still cleans up after itself.
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(fs::read_dir(dst.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_bounded_test_returns_the_measurement_when_quick() {
+        let dst = tempfile::tempdir().unwrap();
+        assert!(run_bounded(None, dst.path(), Duration::from_secs(10), || false).is_some());
     }
 
     #[test]
