@@ -18,7 +18,7 @@ import { toggleTerminalPanel, useTerminal } from "./terminal/state";
 import { PickBar } from "./components/PickBar";
 import { latestLabel } from "./components/UpdatesPanel";
 import { Notices } from "./components/Notices";
-import { Transfers } from "./components/Transfers";
+import { DetachedTransfers, Transfers } from "./components/Transfers";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandFor } from "./settings/keys";
 import { startLiveTracker } from "./util/liveFiles";
@@ -49,7 +49,6 @@ const AnalyzerView = lazy(() => import("./components/Analyzer").then((m) => ({ d
 const TrashView = lazy(() => import("./components/Trash").then((m) => ({ default: m.TrashView })));
 const SmartClearView = lazy(() => import("./components/SmartClear").then((m) => ({ default: m.SmartClearView })));
 const MobileApp = lazy(() => import("./components/Mobile").then((m) => ({ default: m.MobileApp })));
-const DetachedTransfers = lazy(() => import("./components/Transfers").then((m) => ({ default: m.DetachedTransfers })));
 
 function AppInner() {
   // Follows files that are being written, so their size and speed stay current.

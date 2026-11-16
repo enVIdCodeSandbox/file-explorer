@@ -85,11 +85,11 @@ fn newest_first(items: &mut [BinItem]) {
     items.sort_by(|a, b| b.deleted.cmp(&a.deleted).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
 }
 
-/// More than this many items are listed without sizes: asking the system for each one takes too long.
-const SIZE_LIMIT: usize = 3000;
-
 #[cfg(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 mod imp {
+    /// More than this many items are listed without sizes: asking the system for each one takes too long.
+    const SIZE_LIMIT: usize = 3000;
+
     use super::*;
     use std::collections::HashSet;
     use trash::os_limited;

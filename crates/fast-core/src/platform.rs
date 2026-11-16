@@ -30,13 +30,18 @@ pub fn os_name() -> &'static str {
 
 /// The Windows build number (22621 for Windows 11 22H2), or 0 anywhere else or when unknown.
 pub fn windows_build() -> u32 {
-    if !cfg!(windows) {
-        return 0;
+    #[cfg(windows)]
+    {
+        parse_build(&sysinfo::System::kernel_version().unwrap_or_default())
     }
-    parse_build(&sysinfo::System::kernel_version().unwrap_or_default())
+    #[cfg(not(windows))]
+    {
+        0
+    }
 }
 
 /// The build number from text like "22621" or "10.0.22621".
+#[cfg(any(windows, test))]
 fn parse_build(text: &str) -> u32 {
     text.split('.').filter_map(|p| p.trim().parse::<u32>().ok()).filter(|n| *n >= 1000).last().unwrap_or(0)
 }
