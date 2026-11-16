@@ -716,7 +716,12 @@ async function saveReport(j: Job) {
 }
 
 function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; past?: boolean }) {
-  const [picked, setPicked] = useState<string | null>(past ? useStore.getState().finishedPick : null);
+  const pick = useStore((s) => s.finishedPick);
+  const [picked, setPicked] = useState<string | null>(past ? pick : null);
+  // Asked to show another finished job (a different notification's button) while this is already open.
+  useEffect(() => {
+    if (past && pick) setPicked(pick);
+  }, [past, pick]);
   const spec = useStore((s) => s.specs);
   const { dismissTransfer, dismissDelete, forgetFinished } = useStore.getState();
   const keyOf = (j: Job) => `${j.kind}-${j.p.id}`;
@@ -893,27 +898,24 @@ export function Transfers() {
   const waiting = useStore((s) => Object.keys(s.queuedJobs).length + Object.keys(s.startingJobs).length > 0);
   const jobs = useJobs();
   const past = useFinished();
-  const pastOpen = useStore((s) => s.finishedOpen);
-  if (detached) return null;
-  // Nothing running: just a small way back to what finished, until the app is closed.
-  if (!jobs.length && !waiting) {
-    if (!past.length) return null;
-    return (
-      <div className="transfers" data-open={pastOpen || undefined}>
-        {pastOpen ? (
-          <Window jobs={past} past />
-        ) : (
+  const pastOpen = useStore((s) => s.finishedOpen) && past.length > 0;
+  if (detached && !pastOpen) return null;
+  const running = jobs.length > 0 || waiting;
+  if (!running && !past.length) return null;
+  return (
+    <div className="transfers" data-open={open || pastOpen || undefined} aria-live="polite">
+      {!detached && waiting && <Waiting />}
+      {!detached && jobs.length > 0 && (open && !pastOpen ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />))}
+      {/* What finished: the list when asked for (even while other jobs run), otherwise a small way back to it. */}
+      {pastOpen ? (
+        <Window jobs={past} past />
+      ) : (
+        !running && (
           <button className="transfer-recent" onClick={() => useStore.setState({ finishedOpen: true })} title="Look again at the graphs and details of what finished">
             <Icon name="clock" size={12} /> Finished ({past.length})
           </button>
-        )}
-      </div>
-    );
-  }
-  return (
-    <div className="transfers" data-open={open || undefined} aria-live="polite">
-      {waiting && <Waiting />}
-      {!jobs.length ? null : open ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />)}
+        )
+      )}
     </div>
   );
 }

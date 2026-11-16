@@ -50,6 +50,17 @@ const TrashView = lazy(() => import("./components/Trash").then((m) => ({ default
 const SmartClearView = lazy(() => import("./components/SmartClear").then((m) => ({ default: m.SmartClearView })));
 const MobileApp = lazy(() => import("./components/Mobile").then((m) => ({ default: m.MobileApp })));
 
+/**
+ * Parts that load their code on demand. Each has its own boundary, so the window never waits for them: without it
+ * the first screen stays blank until every one of these files has been read. `later` holds back the ones that
+ * draw nothing until opened, so their files are read after the first screen is up.
+ */
+function Part({ children, later }: { children: React.ReactNode; later?: boolean }) {
+  const [on, setOn] = useState(!later);
+  useEffect(() => (later ? whenIdle(() => setOn(true), 300) : undefined), [later]);
+  return on ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
+
 function AppInner() {
   // Follows files that are being written, so their size and speed stay current.
   useEffect(() => {
@@ -368,7 +379,7 @@ function AppInner() {
 
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers") return <DetachedTransfers />;
 
-  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <SettingsView detached />;
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <Part><SettingsView detached /></Part>;
 
   // Phones and tablets: the same pages and dialogs in a one-column touch layout.
   if (mobile)
@@ -380,18 +391,18 @@ function AppInner() {
             <PickBar />
             <Transfers />
             <Notices />
-            {settings && !settings.setupDone && <Setup />}
-            {settingsOpen && <SettingsView />}
+            {settings && !settings.setupDone && <Part><Setup /></Part>}
+            {settingsOpen && <Part><SettingsView /></Part>}
             <PropertiesDialog />
             <OpenWithDialog />
             <LockDialog />
             <ChooseDetails />
-            <Viewer />
-            <Tools />
-            <TodoDialog />
-            <ShareDialog />
-            <BatchRename />
-            <ConnectServer />
+            <Part later><Viewer /></Part>
+            <Part later><Tools /></Part>
+            <Part later><TodoDialog /></Part>
+            <Part later><ShareDialog /></Part>
+            <Part later><BatchRename /></Part>
+            <Part later><ConnectServer /></Part>
             <Dialog />
             <Toast />
           </>
@@ -426,7 +437,7 @@ function AppInner() {
       case "details":
         return showDetails && loc.kind === "folder" ? <DetailsPane /> : null;
       case "terminal":
-        return terminalOpen && !isMobileOs(info?.os) ? <TerminalPanel dock={dock} /> : null;
+        return terminalOpen && !isMobileOs(info?.os) ? <Part><TerminalPanel dock={dock} /></Part> : null;
     }
   };
 
@@ -440,10 +451,10 @@ function AppInner() {
           <div className="content-inner" key={activeTab}>
             {loc.kind === "home" && <HomeView />}
             {loc.kind === "thispc" && <DrivesView />}
-            {loc.kind === "trash" && <Suspense fallback={null}><TrashView /></Suspense>}
+            {loc.kind === "trash" && <Part><TrashView /></Part>}
             {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
-            {loc.kind === "analyze" && <AnalyzerView path={loc.path} />}
-            {loc.kind === "clear" && <SmartClearView drive={loc.drive} />}
+            {loc.kind === "analyze" && <Part><AnalyzerView path={loc.path} /></Part>}
+            {loc.kind === "clear" && <Part><SmartClearView drive={loc.drive} /></Part>}
             {loc.kind === "folder" && <ButtonBar />}
             {loc.kind === "folder" && (
               <div className="pane-row">
@@ -459,20 +470,20 @@ function AppInner() {
       />
       <Transfers />
       <Notices />
-      {settings && !settings.setupDone && <Setup />}
+      {settings && !settings.setupDone && <Part><Setup /></Part>}
       {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
-      {settingsOpen && <SettingsView />}
-      {tasksOpen && <TasksView />}
+      {settingsOpen && <Part><SettingsView /></Part>}
+      {tasksOpen && <Part><TasksView /></Part>}
       <PropertiesDialog />
       <OpenWithDialog />
       <LockDialog />
-            <ChooseDetails />
-            <Viewer />
-            <Tools />
-            <TodoDialog />
-      <ShareDialog />
-      <BatchRename />
-      <ConnectServer />
+      <ChooseDetails />
+      <Part later><Viewer /></Part>
+      <Part later><Tools /></Part>
+      <Part later><TodoDialog /></Part>
+      <Part later><ShareDialog /></Part>
+      <Part later><BatchRename /></Part>
+      <Part later><ConnectServer /></Part>
       <DragOverlay />
       <Tooltips />
       <Dialog />

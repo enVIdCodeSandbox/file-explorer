@@ -1128,8 +1128,7 @@ export const useStore = create<State>((set, get) => ({
         });
       } else get().notify("info", `Finished ${p.filesDone} item${p.filesDone === 1 ? "" : "s"}`, undefined, { actions: [{ label: "Graph and details", run: () => get().showFinished(`transfer-${p.id}`) }] });
     }
-    if (p.phase === "running" && !prev) set({ finishedOpen: false });
-    if (p.phase === "running" && !prev && adv<boolean>(get().settings, "transfers.openWindow")) set({ transfersOpen: true });
+    if (p.phase === "running" && !prev && adv<boolean>(get().settings, "transfers.openWindow")) set({ transfersOpen: true, finishedOpen: false });
   },
 
   onDeleteProgress: (p) => {
@@ -1258,10 +1257,11 @@ export const useStore = create<State>((set, get) => ({
     else get().dismissTransfer(p.id);
     // Nothing left to show: the window closes now, not after a delay.
     const s = get();
-    if (!Object.keys(s.transfers).length && !Object.keys(s.deletes).length) set({ transfersOpen: false, finishedOpen: false });
+    if (!Object.keys(s.transfers).length && !Object.keys(s.deletes).length) set({ transfersOpen: false });
   },
 
-  showFinished: (key) => set({ finishedPick: key, finishedOpen: true }),
+  // Opens on that job, whatever else is on screen; the running jobs' own window makes room.
+  showFinished: (key) => set({ finishedPick: key, finishedOpen: true, transfersOpen: false }),
 
   forgetFinished: (key) => {
     if (!key) return set({ finished: {}, finishedOpen: false });

@@ -254,6 +254,10 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   },
   archive_stage: (a) => a.sources,
   run_program: (a) => { ((window as unknown as { __ran?: unknown[] }).__ran ??= []).push(a); return null; },
+  // Like the real thing: remembered sizes go out the moment they are asked for.
+  folder_sizes_start: (a) => {
+    (a.names as string[]).forEach((name, i) => void emit("folder-size", { dir: a.dir, name, bytes: (i + 1) * 1_000_000, files: i + 1, complete: true, cached: true }));
+  },
   save_text_file: () => null,
   term_info: () => ({ appElevated: false, os, windowsBuild: os === "windows" ? 22621 : 0, defaultShell: os === "windows" ? "pwsh" : "bash" }),
   term_list: () => [...fakeSessions.values()],

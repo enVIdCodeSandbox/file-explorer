@@ -184,6 +184,19 @@ export function FileView({ path }: { path: string }) {
   const sizedPath = useRef("");
   // Sizes seen this session, so a folder revisited shows them before anything is asked.
   const remember = adv<boolean>(settings, "files.sizeCache");
+  // The sizes the app remembers are sent the instant they are asked for. The ear for them must be open first,
+  // or a size sent in that gap is lost and the folder shows "…" until it is next measured.
+  const listening = useRef<Promise<unknown>>(Promise.resolve());
+  useEffect(() => {
+    if (!wantSizes) return;
+    const off = on("folder-size", (m) => {
+      if (m.dir !== path) return;
+      if (remember) rememberSize(m);
+      setFolderSizes((prev) => ({ ...prev, [m.name]: m }));
+    });
+    listening.current = off;
+    return () => void off.then((f) => f());
+  }, [path, wantSizes, remember]);
   useEffect(() => {
     if (!current || loading || !wantSizes || isRemote(current.path) || isArchiveLoc(current.path)) return;
     const same = sizedPath.current === current.path;
@@ -196,18 +209,9 @@ export function FileView({ path }: { path: string }) {
         freshSecs: adv<number>(settings, "files.sizeCacheFreshMin") * 60,
         maxEntries: adv<number>(settings, "files.sizeCacheMax"),
       };
-      void api.folderSizesStart(current.path, names, same, policy).catch(() => {});
+      void listening.current.catch(() => {}).then(() => api.folderSizesStart(current.path, names, same, policy)).catch(() => {});
     }
   }, [current, wantSizes, loading]);
-  useEffect(() => {
-    if (!wantSizes) return;
-    const off = on("folder-size", (m) => {
-      if (m.dir !== path) return;
-      if (remember) rememberSize(m);
-      setFolderSizes((prev) => ({ ...prev, [m.name]: m }));
-    });
-    return () => void off.then((f) => f());
-  }, [path, wantSizes, remember]);
 
   const sized = useMemo(
     () =>

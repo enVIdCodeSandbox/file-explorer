@@ -34,11 +34,15 @@ function NoticeRow({ n, popup }: { n: Notice; popup?: boolean }) {
             <Icon name={open ? "expand" : "chevron"} size={11} />
           </button>
         )}
-        {popup && (
-          <button className="icon-button" aria-label="Hide" title="Hide" onClick={() => dismissNotice(n.id)}>
-            <Icon name="close" size={11} />
-          </button>
-        )}
+        {/* Every notice has its X: a pop-up is hidden (it stays in the list), one in the list is removed. */}
+        <button
+          className="icon-button"
+          aria-label={popup ? "Hide" : "Remove"}
+          title={popup ? "Hide" : "Remove from the list"}
+          onClick={() => dismissNotice(n.id, !popup)}
+        >
+          <Icon name="close" size={11} />
+        </button>
       </div>
       {!!n.actions?.length && (
         <div className="notice-actions">

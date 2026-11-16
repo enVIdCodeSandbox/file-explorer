@@ -66,4 +66,21 @@ describe("a finished job", () => {
     expect(useStore.getState().transfers[10]).toBeDefined();
     expect(useStore.getState().finished["transfer-10"]).toBeUndefined();
   });
+
+  it("opens on the job a notification points at, even over the running jobs' window, and again later", () => {
+    const st = useStore.getState();
+    st.finishJob("transfer", job(1));
+    useStore.setState({ transfersOpen: true });
+    st.showFinished("transfer-1");
+    expect(useStore.getState()).toMatchObject({ finishedOpen: true, finishedPick: "transfer-1", transfersOpen: false });
+    // Still open when another job ends; its notification points at it.
+    st.finishJob("transfer", job(2));
+    expect(useStore.getState().finishedOpen).toBe(true);
+    st.showFinished("transfer-2");
+    expect(useStore.getState().finishedPick).toBe("transfer-2");
+    // Closed and asked again.
+    useStore.setState({ finishedOpen: false });
+    st.showFinished("transfer-1");
+    expect(useStore.getState()).toMatchObject({ finishedOpen: true, finishedPick: "transfer-1" });
+  });
 });
