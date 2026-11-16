@@ -172,3 +172,6 @@ Sent from the shell to the interface (`listen()` in `src/api.ts` / `App.tsx`).
 | `view_find(id, path, needle, start, backward, ascii_ci)` | Offset of the next or previous match of the bytes in `needle`, or null. |
 | `preview_external(path, engine)` | Starts QuickLook, Seer or the system preview; false when it is not installed. |
 | `run_program(program, args, cwd)` | Starts a program directly (user commands). |
+
+| `folder_fill` | `paths` | `Fill[]` (`empty`/`onlyFolders`/`files`) for up to 96 folders |
+| `thumbs_prewarm` | `paths`, `size` | Makes video/document thumbnails in the background |

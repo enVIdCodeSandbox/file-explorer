@@ -15,25 +15,46 @@ import { isArchiveLoc, isRemote } from "../util/path";
 import { isDevicePath, useThriftyBattery } from "../util/battery";
 import { networkThumbs } from "../util/network";
 import { FileIcon } from "./Icons";
+import { askFill, cachedFill, looksFull, type Fill } from "../util/folderFill";
 
-const MAX_CACHED = 600;
+let maxCached = 600;
 const MAX_FAILED = 2000;
+/** A failed thumbnail is tried again after this long (a busy moment is not a verdict). */
+const RETRY_MS = 20_000;
 const cache = new Map<string, string>();
-const failed = new Set<string>();
+const failed = new Map<string, number>();
+/** Pictures on screen right now: never thrown out of the cache, or the tile would go blank. */
+const showing = new Map<string, number>();
+
+/** How many pictures to keep: more on a powerful machine. */
+export function setThumbCacheSize(n: number) {
+  maxCached = Math.max(300, Math.min(6000, n));
+}
 
 function remember(key: string, url: string) {
   cache.set(key, url);
-  if (cache.size > MAX_CACHED) {
-    const oldest = cache.keys().next().value as string;
-    URL.revokeObjectURL(cache.get(oldest)!);
-    cache.delete(oldest);
+  if (cache.size > maxCached) {
+    for (const k of cache.keys()) {
+      if (k === key || showing.has(k)) continue;
+      URL.revokeObjectURL(cache.get(k)!);
+      cache.delete(k);
+      if (cache.size <= maxCached) break;
+    }
   }
 }
 
 function giveUp(key: string) {
-  failed.add(key);
-  if (failed.size > MAX_FAILED) failed.delete(failed.values().next().value as string);
+  failed.set(key, Date.now());
+  if (failed.size > MAX_FAILED) failed.delete(failed.keys().next().value as string);
 }
+
+const hasFailed = (key: string) => {
+  const at = failed.get(key);
+  if (at === undefined) return false;
+  if (Date.now() - at < RETRY_MS) return true;
+  failed.delete(key);
+  return false;
+};
 
 /**
  * Thumbnail scheduler. Requests wait here instead of going straight to the
@@ -147,8 +168,13 @@ export function Thumb({
   const ext = extensionOf(name);
   const kind = thumbKind(ext);
   const device = isDevicePath(path);
+  // On a powerful computer (the Full or Manual performance level) the medium, large and extra large views always show
+  // thumbnails, whatever the per-view switches say; otherwise those switches decide.
+  const strong = useStore((s) => s.budget?.tier === "full" || s.budget?.tier === "manual");
+  const always = strong && adv<boolean>(settings, "thumbs.highPerfAlways") && (view === "medium" || view === "large" || view === "xl");
+  setThumbCacheSize(strong ? 3000 : 600);
   const wanted =
-    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && adv<boolean>(settings, VIEW_SETTING[view]) && (device || networkThumbs(settings, link) || !onNetwork(path, drives));
+    !!kind && adv<boolean>(settings, `thumbs.${kind}`) && (always || adv<boolean>(settings, VIEW_SETTING[view])) && (device || networkThumbs(settings, link) || !onNetwork(path, drives));
   // A phone or camera on a cable follows the same thumbnail settings as any folder, except
   // when its own switch is off or the computer is running low on battery.
   const thrifty = useThriftyBattery(device && adv<boolean>(settings, "thumbs.deviceSaveBattery"));
@@ -160,9 +186,19 @@ export function Thumb({
   const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));
   const key = `${path}|${modified}|${px}|${adv<number>(settings, "thumbs.videoPercent")}`;
   const [url, setUrl] = useState<string | undefined>(() => cache.get(key));
+  // While this tile shows a picture it cannot be thrown out of the cache.
+  useEffect(() => {
+    if (!url) return;
+    showing.set(key, (showing.get(key) ?? 0) + 1);
+    return () => {
+      const n = (showing.get(key) ?? 1) - 1;
+      if (n <= 0) showing.delete(key);
+      else showing.set(key, n);
+    };
+  }, [key, url]);
 
   useEffect(() => {
-    if (!supported || failed.has(key)) return;
+    if (!supported || hasFailed(key)) return;
     const hit = cache.get(key);
     if (hit) {
       // Refresh LRU position.
@@ -200,5 +236,20 @@ export function Thumb({
   if (supported && url) {
     return <img className="thumb" src={url} width={size} height={size} alt="" draggable={false} decoding="async" loading="lazy" />;
   }
-  return <FileIcon kind={kindOf(name, isDir)} name={name} size={iconSize ?? size} />;
+  return <FolderOrFile path={path} name={name} isDir={isDir} size={iconSize ?? size} />;
+}
+
+/** The type icon; a folder shows papers when it has files in it (Settings > Advanced > Files and lists). */
+function FolderOrFile({ path, name, isDir, size }: { path: string; name: string; isDir: boolean; size: number }) {
+  const mode = useStore((s) => adv<string>(s.settings, "files.folderFill"));
+  const watch = isDir && mode !== "off" && !isRemote(path) && !isArchiveLoc(path) && !isDevicePath(path);
+  const [fill, setFill] = useState<Fill | undefined>(() => (watch ? cachedFill(path) : undefined));
+  useEffect(() => {
+    if (!watch) return setFill(undefined);
+    const hit = cachedFill(path);
+    if (hit) return setFill(hit);
+    setFill(undefined);
+    return askFill(path, setFill);
+  }, [path, watch]);
+  return <FileIcon kind={kindOf(name, isDir)} name={name} size={size} full={watch && looksFull(fill, mode)} />;
 }

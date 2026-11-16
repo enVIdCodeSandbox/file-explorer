@@ -40,6 +40,7 @@ import { panelsAt, type PanelId } from "./util/layout";
 import { MobileApp } from "./components/Mobile";
 import { TasksView } from "./components/Tasks";
 import { useMobile } from "./util/device";
+import { crumb, installTrail } from "./util/crashTrail";
 
 export default function App() {
   useT(); // keeps the page language (and every label) in step with the language setting
@@ -52,6 +53,38 @@ export default function App() {
   const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
   const terminalOpen = useTerminal((s) => s.open);
   const info = useStore((s) => s.info);
+  // The crash log's trail: clicks, keys, commands, and a one-line picture of the window.
+  useEffect(() => {
+    const stop = installTrail(
+      () => {
+        const s = useStore.getState();
+        const tab = s.tabs.find((t) => t.id === s.activeTab);
+        const where = tab?.location ?? "";
+        const kind = /^[a-z][a-z0-9+.-]+:\/\//i.test(where) ? where.split("://")[0] : where.startsWith("\\\\") ? "network share (UNC)" : "local";
+        return [
+          `window ${window.innerWidth}x${window.innerHeight} @${window.devicePixelRatio}x`,
+          `tabs ${s.tabs.length}, active folder: ${where} (${kind})`,
+          `selected items ${s.selection.length}`,
+          `performance tier ${s.budget?.tier ?? "?"}`,
+          `transfers running ${Object.keys(s.transfers).length}`,
+          `second pane ${s.settings?.advanced["pane.second"] ? "on" : "off"}`,
+        ].join("\n");
+      },
+      (kind, message) => void api.crashReport(kind, message).catch(() => {}),
+      () => useStore.getState().settings?.advanced["crash.trail"] !== false,
+    );
+    return stop;
+  }, []);
+  // Tell the person when the last run stopped unexpectedly, and where the report is.
+  useEffect(() => {
+    if (!ready) return;
+    void api.crashPrevious().then((name) => {
+      if (!name) return;
+      crumb("startup: the previous run ended unexpectedly");
+      useStore.getState().notify("error", "The app closed unexpectedly last time", "A crash report was saved. Find it in Settings > Storage > Crash logs, where you can copy it.");
+    }).catch(() => {});
+  }, [ready]);
+
   // "Start with the computer" is an operating-system setting: keep it in step with the choice made in Settings.
   const startWithComputer = useStore((s) => (s.unsaved ? null : s.settings?.advanced["tasks.startWithComputer"] === true));
   useEffect(() => {

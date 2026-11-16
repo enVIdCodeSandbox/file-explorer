@@ -595,6 +595,30 @@ pub fn compare_dirs(left: &Path, right: &Path, o: &DirOpts, cancel: &AtomicBool,
     Ok(DirCompare { entries, same, truncated })
 }
 
+/// Unpack an archive into `into` so it can be compared like a folder. For zip files every file gets the date stored
+/// in the archive; the other kinds do not keep dates, so the answer says so (`false`) and the caller compares contents.
+pub fn stage_archive(archive: &Path, into: &Path, cancel: &AtomicBool, progress: Progress) -> Res<bool> {
+    let _ = fs::remove_dir_all(into);
+    crate::archive::extract_with(archive, into, cancel, &mut |done, total, note| progress(done, total, note)).map_err(|e| e.to_string())?;
+    if crate::archive::format_of(archive) != Some(crate::archive::Format::Zip) {
+        return Ok(false);
+    }
+    use chrono::TimeZone;
+    let mut zip = zip::ZipArchive::new(BufReader::new(File::open(archive).map_err(|e| e.to_string())?)).map_err(|e| e.to_string())?;
+    for i in 0..zip.len() {
+        stopped(cancel)?;
+        let Ok(entry) = zip.by_index(i) else { continue };
+        if entry.is_dir() || entry.is_symlink() {
+            continue;
+        }
+        let (Some(rel), Some(t)) = (crate::archive::safe_relative(entry.name()), entry.last_modified()) else { continue };
+        let naive = chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32).and_then(|d| d.and_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32));
+        let Some(local) = naive.and_then(|n| chrono::Local.from_local_datetime(&n).earliest()) else { continue };
+        let _ = filetime::set_file_mtime(into.join(rel), filetime::FileTime::from_unix_time(local.timestamp(), 0));
+    }
+    Ok(true)
+}
+
 // ---- Duplicates ----------------------------------------------------------------------------
 
 #[derive(Deserialize, Debug, Clone)]
@@ -1062,6 +1086,40 @@ pub fn view_find(path: &Path, needle: &[u8], start: u64, backward: bool, ascii_c
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_zip_is_compared_like_a_folder_with_the_dates_it_holds() {
+        use std::io::Write;
+        let base = std::env::temp_dir().join(format!("fast-zipcmp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let left = base.join("left");
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("same.txt"), "same").unwrap();
+        fs::write(left.join("only-left.txt"), "x").unwrap();
+        // The zip: same.txt (identical, dated 2001), only-zip.txt.
+        let zip_path = base.join("a.zip");
+        {
+            let mut z = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            let o = zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::from_date_and_time(2001, 2, 3, 4, 5, 6).unwrap());
+            z.start_file("same.txt", o).unwrap();
+            z.write_all(b"same").unwrap();
+            z.start_file("sub/only-zip.txt", o).unwrap();
+            z.write_all(b"zip").unwrap();
+            z.finish().unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let staged = base.join("staged");
+        assert!(stage_archive(&zip_path, &staged, &cancel, &|_, _, _| {}).unwrap());
+        let age = fs::metadata(staged.join("same.txt")).unwrap().modified().unwrap();
+        let year: chrono::DateTime<chrono::Local> = age.into();
+        assert_eq!(chrono::Datelike::year(&year), 2001);
+        let r = compare_dirs(&left, &staged, &DirOpts { recursive: true, by_content: true, include_hidden: false }, &cancel, &|_, _, _| {}).unwrap();
+        let rels: Vec<(&str, &str)> = r.entries.iter().map(|e| (e.rel.as_str(), e.status.as_str())).collect();
+        assert!(rels.contains(&("only-left.txt", "leftOnly")), "{rels:?}");
+        assert!(rels.contains(&("sub/only-zip.txt", "rightOnly")) || rels.contains(&("sub\\only-zip.txt", "rightOnly")), "{rels:?}");
+        assert!(!rels.iter().any(|(n, _)| *n == "same.txt"), "identical content is the same: {rels:?}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
     use super::*;
 
     fn no() -> AtomicBool {

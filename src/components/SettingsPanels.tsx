@@ -3,7 +3,7 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type UserCommand, type HistoryInfo } from "../api";
+import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type UserCommand, type HistoryInfo, type CrashLog } from "../api";
 import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
@@ -416,6 +416,28 @@ export function StoragePanel() {
     reload();
   };
 
+  const [crashes, setCrashes] = useState<CrashLog[]>([]);
+  useEffect(() => {
+    void api.crashLogs().then(setCrashes).catch(() => {});
+  }, [rows]);
+  const copyLog = async (name: string) => {
+    const text = await api.crashLogRead(name).catch((e) => {
+      showToast(String(e));
+      return "";
+    });
+    if (text) await navigator.clipboard.writeText(text).then(() => showToast("Crash report copied. Paste it where you need it."));
+  };
+  const saveLog = async (name: string) => {
+    const text = await api.crashLogRead(name).catch(() => "");
+    if (!text) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  const sendLog = (name: string) => void api.crashSend(name).then((m) => { showToast(m); reload(); }).catch((e) => showToast(String(e)));
+
   if (!rows) return <p className="muted">Measuring…</p>;
   const disk = rows.reduce((s, r) => s + r.diskBytes, 0);
   const memory = rows.reduce((s, r) => s + r.memoryBytes, 0);
@@ -467,6 +489,33 @@ export function StoragePanel() {
         <p className="muted">
           Transfer history: {formatCount(history.records)} {history.records === 1 ? "transfer" : "transfers"} across {formatCount(history.routes)} {history.routes === 1 ? "route" : "routes"} in {formatSize(history.bytes)}.
         </p>
+      )}
+      {crashes.length > 0 && (
+        <div className="crash-logs" data-testid="crash-logs">
+          <h4>Crash logs</h4>
+          <p className="muted">Each one lists the computer, what the app was doing and the last things you did. Copy one and paste it where it can be looked at. Clear them with the Clear button on the Crash logs row above.</p>
+          <ul>
+            {crashes.map((c) => (
+              <li key={c.name}>
+                <span>
+                  {new Date(c.modified * 1000).toLocaleString()} · {formatSize(c.bytes)}
+                  {c.sent ? " · sent" : ""}
+                </span>
+                <button className="secondary" onClick={() => void copyLog(c.name)}>
+                  Copy
+                </button>
+                <button className="secondary" onClick={() => void saveLog(c.name)}>
+                  Save as text file
+                </button>
+                {!c.sent && (
+                  <button className="secondary" onClick={() => sendLog(c.name)}>
+                    Send to GitHub issues
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <div className="button-row">
         <button className="secondary" onClick={reload}>

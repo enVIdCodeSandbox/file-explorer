@@ -11,6 +11,7 @@ pub mod update;
 pub mod cachepolicy;
 pub mod columns;
 pub mod columns_extra;
+pub mod fill;
 pub mod filetools;
 pub mod browse;
 pub mod edit;
@@ -49,6 +50,7 @@ pub mod terminal;
 pub mod thumbs;
 pub mod transfer;
 pub mod treemap;
+pub mod crashlog;
 pub mod usage;
 pub mod watch;
 

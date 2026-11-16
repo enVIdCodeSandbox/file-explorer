@@ -339,7 +339,7 @@ Settings > Advanced > **User commands** defines commands for a button bar above 
 The **…** menu and the right-click menu have a **File tools** entry (Alt+F7 opens the search):
 
 - **Compare files**: side-by-side lines with changes, additions and removals marked; options to ignore white space and case; binary files report the first byte that differs.
-- **Compare / synchronize folders**: lists what is only on one side, newer on one side or different (optionally by contents) and copies the ticked items left to right, right to left or both ways. Copying uses the normal transfers (conflicts and the queue work as usual).
+- **Compare / synchronize folders**: either side can be a zip (or 7z, rar, tar…) file: it is unpacked to a temporary folder and compared like a folder (zip files keep the dates stored inside; other archive kinds compare by contents). Select a folder and an archive, or an archive alone, and open the tool. Synchronizing out of an archive copies the unpacked files; synchronizing into one adds them to the archive. It lists what is only on one side, newer on one side or different (optionally by contents) and copies the ticked items left to right, right to left or both ways. Copying uses the normal transfers (conflicts and the queue work as usual).
 - **Duplicates**: by content (checked by size, then the first 64 KB, then a SHA-256 of the whole file), by name and size, or by size; tick all but the newest, oldest or first and delete the rest (the Recycle Bin settings apply).
 - **Split / combine**: parts named `name.001`, `name.002`… plus `name.crc`, which checks them when combining.
 - **Encode / decode**: UUE, XXE and MIME (base64). Decoding finds the encoded files inside mail text.
@@ -415,3 +415,17 @@ If the drive-health card cannot read a drive because smartmontools is missing, i
 ## Thumbnails on phones and cameras
 
 Photos and videos on a phone or camera connected by cable show the preview picture the device keeps for them, and follow the same Thumbnails settings as any folder (per kind, per view, size, sharpness). Two things pause them: the switch "Thumbnails for phones and cameras on a cable" (Settings > Thumbnails) and, by default, low battery (computer on battery below 20%, switchable). Where the system does not report battery state, previews keep loading. Files for which the device has no preview keep their plain icon.
+
+## Folder icons, thumbnails and speed (0.9.0)
+
+- **Full folders look full.** A folder with files in it (looked for a few levels down) shows papers sticking out, like Windows; an empty one keeps the plain icon. Settings → Advanced → "Show which folders have files in them" chooses: only real files (default), a folder holding just another folder counts as full, or off.
+- **Thumbnails in high performance.** With the resource budget on Full (or Manual), medium, large and extra-large views always show thumbnails, whatever the per-view switches say ("Always show thumbnails in high performance"). Tiles that are on screen are no longer dropped from memory, and a thumbnail that failed is retried after a short while.
+- **Video and document thumbnails** are made once at a few fixed sizes, saved in the thumbnail cache (needs "Keep thumbnails on disk"), and made in their own lane so they do not hold up pictures. "Prepare video and document thumbnails ahead" (Auto = on for Full/Manual, On, Off) makes the ones in the open folder in the background.
+- **Opening files** asks the registry directly for the program that opens them instead of starting helper programs, so it is immediate.
+- **Dragging out of a network share** hands the other program a local copy (files or folders, up to 1 GB and 5000 items); bigger ones tell you to copy first. Before any drag, Windows is asked whether it can describe the item; if it cannot (a share that is slow or gone) the drag is refused with a message. A failure to start the drag is now reported instead of closing the app.
+
+## Crash logs (0.10.0)
+
+If the app stops unexpectedly, it writes a plain text report: the computer (system, processor, memory, WebView version), what the window looked like (tabs, folder, view, selection, running transfers), commands that were still running, and a trail of the last ~250 events (button clicks by name, shortcut keys, every command that ran and how long it took, drags). A panic also records the error, where it happened and a backtrace. A crash the app cannot catch itself (a driver or system library failing, the program being killed) is found at the next start, because the "running" marker was not removed, and the report is made from the saved trail. Your user name and e-mail addresses are removed; the computer's name is never written.
+
+Find them in Settings > Storage > Crash logs: Copy, Save as text file, or Send to GitHub issues. The Clear button on the Crash logs row deletes them (Clear all leaves them alone). Settings > Advanced > Crash logs: send reports automatically at the next start (off by default), and keep the trail of clicks and keys (on). Files are in the `crash-logs` folder next to settings.json.

@@ -184,6 +184,13 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     return { name, path, parent: path.slice(0, Math.max(0, path.length - name.length - 1)), kind: isDir ? "folder" : "file", size: isDir ? 0 : 88_000, sizeOnDisk: isDir ? null : 90_112, created: now - 40 * day, modified: now - 2 * day, accessed: now - day, readonly: false, hidden: false, extension: isDir ? null : name.split(".").pop() ?? null, mime: isDir ? null : "application/octet-stream", symlinkTarget: null, unix: null, attributes: ["Archive"], image: null, itemCount: isDir ? 12 : null, volume: { name: "Local Disk", mount: "C:\\", fs: "NTFS", total: 512e9, available: 190e9, media: "ssd", removable: false, readOnly: false, online: true }, media: [] };
   },
   folder_stats: () => ({ files: 403, folders: 97, totalBytes: 9.66e9, maxDepth: 6, largest: [], byType: [{ extension: "zip", count: 79, bytes: 5.16e9 }, { extension: "mp4", count: 8, bytes: 2.15e9 }], newest: null, oldest: null, emptyFolders: 3, complete: true }),
+  thumbs_prewarm: () => null,
+  crash_logs: () => [{ name: "crash-2026-11-15-19-40-00-1.txt", bytes: 5120, modified: 1763235600, sent: false }],
+  crash_log_read: () => "=== FAST File Explorer crash report ===\n(preview)",
+  crash_previous: () => null,
+  crash_note: () => null,
+  crash_context: () => null,
+  folder_fill: (a) => (a.paths as string[]).map((_, i) => (i % 3 === 2 ? "empty" : "files")),
   tool_cancel: () => null,
   tool_run: async (a) => {
     const spec = a.spec as { kind: string };

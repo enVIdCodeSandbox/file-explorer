@@ -271,6 +271,20 @@ export function FileView({ path }: { path: string }) {
     [sorted, filter, filterNeedsDisk ? extra : null],
   );
 
+  // Videos and documents are slow to picture: in the background, make the ones in this folder ahead of the scrolling.
+  const prewarmMode = adv<string>(settings, "thumbs.videoPrewarm");
+  const strongBudget = useStore((st) => st.budget?.tier === "full" || st.budget?.tier === "manual");
+  const prewarmOn = prewarmMode === "on" || (prewarmMode === "auto" && strongBudget);
+  useEffect(() => {
+    if (!prewarmOn || isRemote(path) || isArchiveLoc(path) || !current?.entries.length) return;
+    const timer = setTimeout(() => {
+      const slow = current.entries.filter((e) => !e.isDir && /\.(mp4|m4v|mov|mkv|avi|webm|wmv|flv|mpg|mpeg|3gp|mts|m2ts|pdf|docx?|xlsx?|pptx?)$/i.test(e.name)).map((e) => fullPath(e.name));
+      if (slow.length) void api.thumbsPrewarm(slow, 256).catch(() => {});
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prewarmOn, path, current]);
+
   // The filter menu offers what is actually in this folder.
   useEffect(() => {
     if (current) useStore.setState({ facets: facetsOf(current.entries) });

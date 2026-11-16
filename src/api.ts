@@ -1,7 +1,7 @@
 // Typed bridge to the Rust backend. Every function here maps 1:1 to a
 // command in src-tauri/src/commands.rs; the types mirror the Rust structs.
 
-import { invoke } from "@tauri-apps/api/core";
+import { tracedInvoke as invoke } from "./util/crashTrail";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface FileEntry {
@@ -596,6 +596,13 @@ export interface CustomAction {
   allAtOnce: boolean;
 }
 
+export interface CrashLog {
+  name: string;
+  bytes: number;
+  modified: number;
+  sent: boolean;
+}
+
 export interface Tab {
   id: string;
   location: string;
@@ -796,6 +803,11 @@ export const api = {
   clipboardStageVirtual: () => invoke<string[]>("clipboard_stage_virtual"),
   /** Start the system drag with these files, to drop them into another program. */
   dragOut: (paths: string[]) => invoke<void>("drag_out", { paths }),
+  crashReport: (kind: string, message: string) => invoke<void>("crash_report", { kind, message }),
+  crashLogs: () => invoke<CrashLog[]>("crash_logs"),
+  crashLogRead: (name: string) => invoke<string>("crash_log_read", { name }),
+  crashSend: (name: string) => invoke<string>("crash_send", { name }),
+  crashPrevious: () => invoke<string | null>("crash_previous"),
   transferResolve: (id: number, answer: "skip" | "replace" | "keepBoth", all: boolean) =>
     invoke<void>("transfer_resolve", { id, answer, all }),
   transferForceStop: (id: number) => invoke<void>("transfer_force_stop", { id }),
@@ -870,6 +882,8 @@ export const api = {
   listAssets: (kind: AssetKind) => invoke<Asset[]>("list_assets", { kind }),
   readAsset: (kind: AssetKind, name: string) => invoke<ArrayBuffer>("read_asset", { kind, name }),
   deleteAsset: (kind: AssetKind, name: string) => invoke<void>("delete_asset", { kind, name }),
+  folderFill: (paths: string[]) => invoke<("empty" | "onlyFolders" | "files")[]>("folder_fill", { paths }),
+  thumbsPrewarm: (paths: string[], size: number) => invoke<void>("thumbs_prewarm", { paths, size }),
   runProgram: (program: string, args: string[], cwd: string | null) => invoke<void>("run_program", { program, args, cwd }),
   runCustomAction: (id: string, paths: string[]) => invoke<void>("run_custom_action", { id, paths }),
   configFolder: () => invoke<string | null>("config_folder"),
@@ -988,7 +1002,8 @@ export type FileCompare =
   | { result: "text"; rows: DiffRow[]; changed: number; added: number; removed: number; truncated: boolean };
 export interface DirSide { size: number; modified: number; isDir: boolean }
 export interface DirDiff { rel: string; status: "leftOnly" | "rightOnly" | "leftNewer" | "rightNewer" | "different" | "typeMismatch"; left: DirSide | null; right: DirSide | null }
-export interface DirCompare { entries: DirDiff[]; same: number; truncated: boolean }
+/** `leftRoot` / `rightRoot` are the folders really compared (a temporary one when that side is an archive, named in `leftArchive` / `rightArchive`). */
+export interface DirCompare { entries: DirDiff[]; same: number; truncated: boolean; leftRoot?: string; rightRoot?: string; leftArchive?: string | null; rightArchive?: string | null }
 export interface DupGroup { size: number; files: { path: string; modified: number }[] }
 export interface GrepOpts { pattern: string; regex: boolean; caseSensitive: boolean; wholeWord: boolean; masks: string; includeArchives: boolean; includeHidden: boolean; includeBinary: boolean; maxFileSize: number; maxHits: number }
 export interface GrepHit { path: string; entry: string | null; line: number; text: string }

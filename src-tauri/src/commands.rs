@@ -459,8 +459,10 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
         .await?;
         return Ok(tauri::ipc::Response::new(bytes));
     }
-    // Bounded concurrency: decoding is CPU-heavy and must not starve listing.
-    let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
+    // Bounded concurrency: decoding is CPU-heavy and must not starve listing. Videos and documents wait in their own
+    // lane, so a slow one never holds up the pictures behind it.
+    let slow = thumbs::kind_of(Path::new(&path)).is_some_and(|k| k != thumbs::Kind::Image);
+    let _permit = if slow { st.slow_thumb_permits.clone() } else { st.thumb_permits.clone() }.acquire_owned().await.map_err(err)?;
     let bytes = blocking(move || {
         let keep = advanced_bool(&st, "cache.thumbnails", true) && !cache_off(&st, Path::new(&path));
         // Each kind of file can be switched off on its own (Settings > Thumbnails).
@@ -489,6 +491,63 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// For each folder: nothing in it, only (empty) folders, or files. Used to draw empty folders differently. Local folders only.
+#[tauri::command]
+pub async fn folder_fill(state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<Vec<fast_core::fill::Fill>> {
+    let st = state.inner().clone();
+    blocking(move || {
+        use rayon::prelude::*;
+        Ok(paths
+            .par_iter()
+            .take(96)
+            .map(|p| {
+                if fast_core::remote::is_remote(p) || fast_core::browse::is_loc(p) || guard(&st, p).is_err() || on_network(&st, Path::new(p)) {
+                    return fast_core::fill::Fill::Files;
+                }
+                fast_core::fill::probe(Path::new(p), 8, 2000)
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Prepare the pictures of the videos and documents in a folder in the background (kept in the thumbnail cache), so they
+/// are there when the tiles come into view. A newer call replaces an older one. Only files on this computer.
+#[tauri::command]
+pub async fn thumbs_prewarm(state: State<'_, Shared>, paths: Vec<String>, size: u32) -> CmdResult<()> {
+    let st = state.inner().clone();
+    let generation = st.prewarm_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if !st.budget.read().thumbnails || !advanced_bool(&st, "cache.thumbnails", true) {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn(async move {
+        for path in paths.into_iter().take(300) {
+            if st.prewarm_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            if fast_core::remote::is_remote(&path) || fast_core::remote::is_device(&path) || guard(&st, &path).is_err() || cache_off(&st, Path::new(&path)) || on_network(&st, Path::new(&path)) {
+                continue;
+            }
+            let allowed = match thumbs::kind_of(Path::new(&path)) {
+                Some(thumbs::Kind::Video) => advanced_bool(&st, "thumbs.videos", true),
+                Some(thumbs::Kind::Document) => advanced_bool(&st, "thumbs.documents", true),
+                _ => false,
+            };
+            if !allowed {
+                continue;
+            }
+            let Ok(permit) = st.slow_thumb_permits.clone().acquire_owned().await else { return };
+            let st2 = st.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _permit = permit;
+                let opts = thumbs::Options { max_image_bytes: 0, video_percent: advanced_u64(&st2, "thumbs.videoPercent", 10).min(95) as u8 };
+                let _ = thumbs::thumbnail_with(Path::new(&path), size, Some(st2.paths.thumbs.as_path()), &opts);
+            });
+        }
+    });
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2530,6 +2589,7 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
         let (history_bytes, _) = disk_footprint(&st.paths.history);
         let (predict_bytes, _) = disk_footprint(&st.paths.predictor);
         let (scratch_bytes, scratch_items) = disk_footprint(&st.paths.scratch);
+        let crash_logs = fast_core::crashlog::list(&st.paths.crash);
         let idx = st.index.read().clone();
         let history = st.history.lock().info(&st.paths.history);
         let (size_items, size_mem) = {
@@ -2566,6 +2626,15 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
                 disk_bytes: 0,
                 memory_bytes: listing_mem,
                 items: listing_items,
+                rebuildable: true,
+            },
+            CacheEntry {
+                id: "crashlogs",
+                label: "Crash logs",
+                description: "Reports written when the app stopped unexpectedly: what it was doing, and basic computer information. Not removed by \"Clear every cache\".",
+                disk_bytes: crash_logs.iter().map(|l| l.bytes).sum(),
+                memory_bytes: 0,
+                items: crash_logs.len() as u64,
                 rebuildable: true,
             },
             CacheEntry {
@@ -2727,6 +2796,9 @@ pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -
         }
         if wants("hardware") {
             let _ = std::fs::remove_file(&st.paths.hardware);
+        }
+        if id == "crashlogs" {
+            fast_core::crashlog::clear(&st.paths.crash);
         }
         if wants("scratch") && st.elevated.lock().is_empty() {
             remove_path(&st.paths.scratch);

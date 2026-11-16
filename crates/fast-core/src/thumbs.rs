@@ -137,9 +137,18 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
         Kind::Image => 1000,
         Kind::Document => 0,
     };
-    let cached = cache_dir.map(|d| cache_file(d, path, meta.len(), mtime, px, variant));
+    // Videos and documents are slow to render and cheap to shrink: one picture is made at a standard size and kept,
+    // and every view (small, medium, large) gets it scaled down, instead of rendering again for each size.
+    let render_px = if kind == Kind::Image { px } else { bucket(px) };
+    let cached = cache_dir.map(|d| cache_file(d, path, meta.len(), mtime, render_px, variant));
+    let fit_to = |bytes: Vec<u8>| if render_px == px { Ok(bytes) } else { fit(&bytes, px) };
     if let Some(Ok(bytes)) = cached.as_ref().map(fs::read) {
-        return Ok(bytes);
+        return fit_to(bytes);
+    }
+    // Two requests for the same slow file (a tile on screen and the background warm-up) make it once.
+    let _once = (kind != Kind::Image).then(|| cached.as_ref().map(|f| LockGuard::take(f))).flatten();
+    if let Some(Ok(bytes)) = cached.as_ref().map(fs::read) {
+        return fit_to(bytes);
     }
 
     let bytes = match kind {
@@ -158,7 +167,7 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
             // Shrink first (cheap), then turn the small picture the way up the camera meant it.
             encode(upright(img.thumbnail(px, px), orientation(path)))?
         }
-        Kind::Document | Kind::Video => fit(&render::render(path, px, kind, opts)?, px)?,
+        Kind::Document | Kind::Video => fit(&render::render(path, render_px, kind, opts)?, render_px)?,
     };
 
     // Best effort: a failed cache write only costs a re-render next time.
@@ -167,10 +176,50 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
             note(dir, &file, path);
         }
     }
-    Ok(bytes)
+    fit_to(bytes)
 }
 
-/// The EXIF orientation of a picture (1 to 8; 1 when there is none or it cannot be read).
+/// The standard sizes videos and documents are rendered at.
+fn bucket(px: u32) -> u32 {
+    match px {
+        0..=128 => 128,
+        129..=256 => 256,
+        _ => 512,
+    }
+}
+
+/// Held while one thing renders a file, so a second request for it waits and then finds the picture in the cache.
+struct LockGuard {
+    key: PathBuf,
+    _held: std::sync::MutexGuard<'static, ()>,
+}
+static RENDERING: std::sync::Mutex<Vec<(PathBuf, &'static std::sync::Mutex<()>)>> = std::sync::Mutex::new(Vec::new());
+impl LockGuard {
+    fn take(key: &Path) -> LockGuard {
+        // One leaked mutex per distinct file being rendered at the same time: tiny, and it is reused for the same file.
+        let m: &'static std::sync::Mutex<()> = {
+            let mut all = RENDERING.lock().unwrap_or_else(|e| e.into_inner());
+            match all.iter().find(|(k, _)| k == key) {
+                Some((_, m)) => m,
+                None => {
+                    let m: &'static std::sync::Mutex<()> = Box::leak(Box::new(std::sync::Mutex::new(())));
+                    all.push((key.to_path_buf(), m));
+                    m
+                }
+            }
+        };
+        LockGuard { key: key.to_path_buf(), _held: m.lock().unwrap_or_else(|e| e.into_inner()) }
+    }
+}
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        // Forget the entry once nobody else is waiting for the same file (its mutex stays leaked; the list does not grow).
+        if let Ok(mut all) = RENDERING.lock() {
+            all.retain(|(k, _)| *k != self.key);
+        }
+    }
+}
+
 fn orientation(path: &Path) -> u32 {
     let Ok(file) = fs::File::open(path) else { return 1 };
     let Ok(exif) = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)) else { return 1 };

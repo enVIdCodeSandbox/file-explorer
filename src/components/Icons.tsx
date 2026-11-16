@@ -153,7 +153,7 @@ const PLACE_MARKS: Record<string, { color: string; mark: ReactNode }> = {
   desktop: { color: "#3b82d6", mark: <path d="M5.4 6.2h5.2v3.4H5.4zM7 11h2" /> },
 };
 
-export function FileIcon({ kind, size = 16, name }: { kind: string; size?: number; name?: string }) {
+export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?: number; name?: string; /** A folder with something in it: papers show above its front. */ full?: boolean }) {
   if (kind === "folder" && name && PLACE_MARKS[name.toLowerCase()]) {
     const { color, mark } = PLACE_MARKS[name.toLowerCase()];
     return (
@@ -169,7 +169,15 @@ export function FileIcon({ kind, size = 16, name }: { kind: string; size?: numbe
     return (
       <svg className="file-icon" data-kind="folder" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
         <path d="M1.5 4.2c0-.7.5-1.2 1.2-1.2h3.1l1.4 1.4h6.1c.7 0 1.2.5 1.2 1.2v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill={color} />
-        <path d="M1.5 6.2h13v5.6c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill="rgba(255,255,255,.22)" />
+        {full && (
+          <>
+            <path d="M3.6 5.3 11.8 4.6a.5.5 0 0 1 .55.45L12.5 7H3.7z" fill="#fff" opacity=".7" />
+            <path d="M3.2 6.1h9.4a.5.5 0 0 1 .5.5v.6H2.7v-.6a.5.5 0 0 1 .5-.5z" fill="#fff" opacity=".95" />
+          </>
+        )}
+        <path d="M1.5 6.9h13v4.9c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill={full ? color : "transparent"} />
+        <path d="M1.5 6.9h13v4.9c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill="rgba(255,255,255,.22)" />
+        {!full && <path d="M1.5 6.2h13v.7h-13z" fill="rgba(255,255,255,.22)" />}
       </svg>
     );
   }

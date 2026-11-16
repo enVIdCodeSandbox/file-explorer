@@ -62,3 +62,7 @@ The script rewrites `Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json`, `
 The app updates itself from the builds this repository's `build.yml` workflow publishes as Actions artifacts (see *Updates* in the user guide). The artifact names (`fast-file-explorer-build-<platform>`) are what the app looks for, so renaming them in the workflow breaks updating. The workflow's `GITHUB_SHA` is compiled into each build; that is how a build knows which commit it came from.
 
 These builds are **not signed**, so the app checks only the SHA-256 GitHub reports for the download. For signed, verified updates use the Tauri updater plugin instead: it needs a signing key pair (`tauri signer generate`) and somewhere to host the update manifest (GitHub Releases works). Do that after the installers are signed.
+
+## Crash reports to GitHub issues
+
+Builds can post crash reports as issues (only for people who turn on Settings > Advanced > Crash logs > "Send crash reports to the project's GitHub issues", or press "Send to GitHub issues" on one report). The key is read at build time from the repository secret `FAST_CRASH_TOKEN`. Make it a fine-grained personal access token limited to this one repository with only **Issues: read and write**, and create a label named `crash`. The token is inside the built app, so anyone can extract it; it can only open issues. Without the secret, the app opens a pre-filled "new issue" page in the browser instead.

@@ -515,15 +515,38 @@ mod platform {
         })
     }
 
+    /// A text value from the registry, read directly (no `reg.exe` process: that took a noticeable fraction of a second each time).
+    fn reg_str(root: windows_sys::Win32::System::Registry::HKEY, sub: &str, name: &str) -> Option<String> {
+        use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
+        let wsub: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+        let wname: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+        let mut bytes: u32 = 0;
+        // SAFETY: both strings are NUL-terminated and outlive the calls; the buffer is as long as the size asked for.
+        unsafe {
+            if RegGetValueW(root, wsub.as_ptr(), wname.as_ptr(), flags, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 || bytes < 2 {
+                return None;
+            }
+            let mut buf = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+            let mut cap = (buf.len() * 2) as u32;
+            if RegGetValueW(root, wsub.as_ptr(), wname.as_ptr(), flags, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut cap) != 0 {
+                return None;
+            }
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let text = String::from_utf16_lossy(&buf[..n]);
+            (!text.trim().is_empty()).then_some(text)
+        }
+    }
+
     fn prog_id(ext: &str) -> Option<String> {
-        let user = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice");
-        reg(&["query", &user, "/v", "ProgId"])
-            .and_then(|o| value_of(&o, "ProgId"))
-            .or_else(|| reg(&["query", &format!(r"HKCR\{ext}"), "/ve"]).and_then(|o| value_of(&o, "")))
+        use windows_sys::Win32::System::Registry::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER};
+        let user = format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice");
+        reg_str(HKEY_CURRENT_USER, &user, "ProgId").or_else(|| reg_str(HKEY_CLASSES_ROOT, ext, ""))
     }
 
     fn open_command(prog: &str) -> Option<String> {
-        reg(&["query", &format!(r"HKCR\{prog}\shell\open\command"), "/ve"]).and_then(|o| value_of(&o, ""))
+        use windows_sys::Win32::System::Registry::HKEY_CLASSES_ROOT;
+        reg_str(HKEY_CLASSES_ROOT, &format!(r"{prog}\shell\open\command"), "")
     }
 
     fn expand_env(s: &str) -> String {

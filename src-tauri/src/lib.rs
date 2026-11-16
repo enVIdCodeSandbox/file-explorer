@@ -1,6 +1,7 @@
 //! Tauri shell: wires the UI-agnostic `fast-core` engine to the webview.
 
 mod commands;
+mod crash;
 mod launch;
 mod native_dnd;
 mod remote;
@@ -44,6 +45,11 @@ pub fn run() {
             let config = app.path().app_config_dir()?;
             let cache = app.path().app_cache_dir()?;
             let paths = Paths::new(&config, &cache);
+            // Crash logging first, so even a failure while starting is written down.
+            let webview = tauri::webview_version().unwrap_or_default();
+            fast_core::crashlog::install_panic_hook();
+            let earlier = fast_core::crashlog::init(&paths.crash, env!("CARGO_PKG_VERSION"), &webview);
+            fast_core::crashlog::start_flusher();
             // Nothing can be reading staged files yet, so leftovers from the last run go.
             for prefix in ["paste-", "clip-", "stage-"] {
                 remote::sweep_staging(&paths.remote_tmp, prefix, None);
@@ -61,6 +67,8 @@ pub fn run() {
                 #[cfg(desktop)]
                 terminal: Default::default(),
                 thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
+                slow_thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.clamp(2, 6))),
+                prewarm_generation: Default::default(),
                 drives: RwLock::new(session.drives.clone()),
                 devices: RwLock::new(Vec::new()),
                 shares: Default::default(),
@@ -99,6 +107,8 @@ pub fn run() {
                 paths,
             });
             app.manage(state.clone());
+            crash::remember_previous(earlier);
+            crash::send_pending(&state);
 
             #[cfg(desktop)]
             launch::start(app.handle());
@@ -167,6 +177,8 @@ pub fn run() {
             tools::view_info,
             tools::view_read,
             tools::view_find,
+            commands::thumbs_prewarm,
+            commands::folder_fill,
             commands::run_program,
             tools::preview_external,
             tasks::tasks_list,
@@ -330,6 +342,13 @@ pub fn run() {
             commands::disk_smart_admin,
             commands::clear_cache,
             commands::clear_cache_for,
+            crash::crash_previous,
+            crash::crash_note,
+            crash::crash_context,
+            crash::crash_report,
+            crash::crash_logs,
+            crash::crash_log_read,
+            crash::crash_send,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FAST File Explorer")
@@ -340,6 +359,8 @@ pub fn run() {
                 tasks::shutdown(app);
             }
             if let tauri::RunEvent::Exit = event {
+                fast_core::crashlog::note("app closing");
+                fast_core::crashlog::clean_exit();
                 tasks::shutdown(app);
                 #[cfg(desktop)]
                 terminal::on_exit(app);

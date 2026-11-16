@@ -56,6 +56,8 @@ pub struct Paths {
     pub update_state: PathBuf,
     /// The terminal host's address file, and what each terminal printed before the app closed.
     pub terminal: PathBuf,
+    /// Crash reports (plain text) and the running trail.
+    pub crash: PathBuf,
 }
 
 impl Paths {
@@ -81,6 +83,7 @@ impl Paths {
             update_dir: cache.join("updates"),
             update_state: config.join("update-state.json"),
             terminal: config.join("terminal"),
+            crash: config.join("crash-logs"),
         }
     }
 }
@@ -233,6 +236,10 @@ pub struct AppState {
     /// The folders each window has open, by window label.
     pub watch_sets: Mutex<HashMap<String, Vec<PathBuf>>>,
     pub thumb_permits: Arc<tokio::sync::Semaphore>,
+    /// Videos and documents render slowly, so they have their own lane and never hold up the pictures.
+    pub slow_thumb_permits: Arc<tokio::sync::Semaphore>,
+    /// Bumped each time a folder asks for its videos to be prepared; older runs stop.
+    pub prewarm_generation: std::sync::atomic::AtomicU64,
     pub started: std::time::Instant,
     #[cfg(desktop)]
     pub terminal: crate::terminal::Bridge,

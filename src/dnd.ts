@@ -12,6 +12,7 @@
 //    heading: pin it there. Dragging a pin reorders the pins.
 //  * a section heading onto another: reorder the sections.
 
+import { crumb, flushTrail } from "./util/crashTrail";
 import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
@@ -253,6 +254,8 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
         const real = pending ? await pending : paths;
         if (!real) return;
         noteOwnDrag(real);
+        crumb(`drag out of the window: ${real.length} item(s)`);
+        flushTrail();
         await api.dragOut(real).catch((err) => useStore.getState().showToast(String(err)));
       })();
       return;

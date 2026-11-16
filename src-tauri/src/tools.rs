@@ -69,7 +69,7 @@ fn pb(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn run(app: &AppHandle, id: u64, spec: ToolSpec, cancel: &AtomicBool) -> Result<serde_json::Value, String> {
+fn run(app: &AppHandle, id: u64, spec: ToolSpec, cancel: &AtomicBool, stage_root: &Path) -> Result<serde_json::Value, String> {
     use serde_json::to_value;
     let emitter = app.clone();
     let progress = move |done: u64, total: u64, note: &str| {
@@ -87,7 +87,31 @@ fn run(app: &AppHandle, id: u64, spec: ToolSpec, cancel: &AtomicBool) -> Result<
         ToolSpec::Encode { src, dest_dir, encoding } => to_value(ft::encode_file(&pb(&src), &pb(&dest_dir), &encoding)?.to_string_lossy()),
         ToolSpec::Decode { src, dest_dir } => to_value(ft::decode_file(&pb(&src), &pb(&dest_dir))?.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>()),
         ToolSpec::CompareFiles { a, b, opts } => to_value(ft::compare_files(&pb(&a), &pb(&b), &opts, cancel)?),
-        ToolSpec::CompareDirs { left, right, opts } => to_value(ft::compare_dirs(&pb(&left), &pb(&right), &opts, cancel, &progress)?),
+        ToolSpec::CompareDirs { left, right, mut opts } => {
+            // An archive on either side is unpacked to a temporary folder (with the dates it holds, for zip) and compared as one.
+            let mut stage = |side: &str, p: &str| -> Result<(PathBuf, Option<String>), String> {
+                let path = pb(p);
+                if path.is_file() && (fast_core::archive::format_of(&path).is_some() || fast_core::browse::kind_of(&path).is_some()) {
+                    let dir = stage_root.join(format!("cmp-{id}-{side}"));
+                    progress(0, 0, &format!("Unpacking {}…", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+                    if !ft::stage_archive(&path, &dir, cancel, &progress)? {
+                        opts.by_content = true; // this kind of archive keeps no dates
+                    }
+                    Ok((dir, Some(p.to_string())))
+                } else {
+                    Ok((path, None))
+                }
+            };
+            let (l, la) = stage("left", &left)?;
+            let (r, ra) = stage("right", &right)?;
+            let result = ft::compare_dirs(&l, &r, &opts, cancel, &progress)?;
+            let mut v = to_value(result).map_err(|e| e.to_string())?;
+            v["leftRoot"] = l.to_string_lossy().into();
+            v["rightRoot"] = r.to_string_lossy().into();
+            v["leftArchive"] = la.into();
+            v["rightArchive"] = ra.into();
+            Ok(v)
+        }
         ToolSpec::Duplicates { roots, opts } => to_value(ft::find_duplicates(&roots.iter().map(|r| pb(r)).collect::<Vec<_>>(), &opts, cancel, &progress)?),
         ToolSpec::Grep { roots, opts } => {
             let hits_app = app.clone();
@@ -112,8 +136,10 @@ pub async fn tool_run(app: AppHandle, state: State<'_, Shared>, id: u64, spec: T
     }
     let cancel = Arc::new(AtomicBool::new(false));
     RUNNING.lock().insert(id, cancel.clone());
+    let stage_root = state.paths.remote_tmp.clone();
+    crate::remote::sweep_staging(&stage_root, "cmp-", Some(std::time::Duration::from_secs(6 * 3600)));
     let out = tauri::async_runtime::spawn_blocking(move || {
-        let r = run(&app, id, spec, &cancel);
+        let r = run(&app, id, spec, &cancel, &stage_root);
         RUNNING.lock().remove(&id);
         r
     })

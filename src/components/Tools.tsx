@@ -6,6 +6,7 @@ import { type ConvertResult, type DirCompare, type DirDiff, type DupGroup, type 
 import { activeLocation, deletePaths, useStore } from "../store";
 import { runTool, wasCancelled } from "../tools/run";
 import { joinPath } from "../util/userCommands";
+import { archiveUrl } from "../util/path";
 import { parseSize } from "../util/selectGroup";
 import { Icon } from "./Icons";
 
@@ -160,9 +161,10 @@ function CompareFiles({ folder, paths, go, busy }: Ctx) {
 const STATUS: Record<DirDiff["status"], string> = { leftOnly: "Only on the left", rightOnly: "Only on the right", leftNewer: "Left is newer", rightNewer: "Right is newer", different: "Different (same date)", typeMismatch: "File on one side, folder on the other" };
 
 function CompareDirs({ folder, paths, go, busy, setError }: Ctx) {
-  const dirs = paths.filter((p) => p !== folder);
-  const [left, setLeft] = useState(folder);
-  const [right, setRight] = useState(dirs[0] && dirs[0] !== folder ? dirs[0] : "");
+  // Two things selected (folders or archives): those; one: it against the folder being viewed.
+  const picked = paths.filter((p) => p !== folder);
+  const [left, setLeft] = useState(picked.length >= 2 ? picked[0] : folder);
+  const [right, setRight] = useState(picked.length >= 2 ? picked[1] : (picked[0] ?? ""));
   const [recursive, setRecursive] = useState(true);
   const [content, setContent] = useState(false);
   const [hidden, setHidden] = useState(false);
@@ -181,19 +183,24 @@ function CompareDirs({ folder, paths, go, busy, setError }: Ctx) {
   const sync = async (dir: "right" | "left" | "both") => {
     if (!out) return;
     try {
-      const batches = new Map<string, { from: string; to: string; rel: string }[]>();
+      const batches = new Map<string, string[]>();
+      // The folders really compared: an archive on a side was unpacked to a temporary folder. Copying out of it
+      // uses the unpacked files; copying into it goes in as "add to the archive".
+      const roots = { left: out.leftRoot ?? left, right: out.rightRoot ?? right };
+      const archives = { left: out.leftArchive ?? null, right: out.rightArchive ?? null };
       for (const e of out.entries) {
         if (!ticked.has(e.rel)) continue;
         const toRight = e.status === "leftOnly" || e.status === "leftNewer";
         const toLeft = e.status === "rightOnly" || e.status === "rightNewer";
         if ((toRight && dir !== "left") || (toLeft && dir !== "right")) {
-          const src = toRight ? left : right;
-          const dst = toRight ? right : left;
+          const [from, to] = toRight ? (["left", "right"] as const) : (["right", "left"] as const);
+          const src = roots[from];
           const s = sepOf(src);
           const rel = e.rel.replace(/[\\/]/g, s);
-          const destFolder = dst + (rel.includes(s) ? s + rel.slice(0, rel.lastIndexOf(s)) : "");
+          const relDir = rel.includes(s) ? rel.slice(0, rel.lastIndexOf(s)) : "";
+          const destFolder = archives[to] ? archiveUrl(archives[to]!, relDir.replace(/[\\/]/g, "/")) : roots[to] + (relDir ? sepOf(roots[to]) + relDir.replace(/[\\/]/g, sepOf(roots[to])) : "");
           const list = batches.get(destFolder) ?? [];
-          list.push({ from: src.replace(/[\\/]$/, "") + s + rel, to: destFolder, rel });
+          list.push(src.replace(/[\\/]$/, "") + s + rel);
           batches.set(destFolder, list);
         }
       }
@@ -201,7 +208,7 @@ function CompareDirs({ folder, paths, go, busy, setError }: Ctx) {
         useStore.getState().showToast("Nothing ticked needs copying in that direction.");
         return;
       }
-      for (const [dest, items] of batches) await useStore.getState().startTransfer(items.map((i) => i.from), dest, "copy");
+      for (const [dest, items] of batches) await useStore.getState().startTransfer(items, dest, "copy");
       useStore.getState().showToast("Copying started. Compare again when it is done.");
     } catch (e) {
       setError(String(e));
@@ -211,8 +218,8 @@ function CompareDirs({ folder, paths, go, busy, setError }: Ctx) {
   return (
     <>
       <div className="tools-grid">
-        <Field label="Left folder" value={left} onChange={setLeft} wide />
-        <Field label="Right folder" value={right} onChange={setRight} wide />
+        <Field label="Left folder or archive (zip, 7z…)" value={left} onChange={setLeft} wide />
+        <Field label="Right folder or archive" value={right} onChange={setRight} wide />
       </div>
       <div className="tools-row">
         <Check label="Include subfolders" value={recursive} onChange={setRecursive} />
