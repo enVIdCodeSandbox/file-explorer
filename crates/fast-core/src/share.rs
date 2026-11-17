@@ -495,7 +495,20 @@ mod tests {
         let info = shares.start(&p, ShareOptions { max_downloads: 1, ..LOCAL }).unwrap();
         assert_eq!(get(&format!("{}one.bin", info.url)).0, 200);
         std::thread::sleep(Duration::from_millis(300));
-        assert!(shares.list().iter().all(|i| i.id != info.id) || get(&format!("{}one.bin", info.url)).0 != 200);
+        // Over the limit the link is gone: the request is refused, cut off, or never connects.
+        assert!(shares.list().iter().all(|i| i.id != info.id) || try_status(&format!("{}one.bin", info.url)) != Some(200));
+    }
+
+    /// The status of a request, or None when the connection could not be made, written to or read (a closing share).
+    fn try_status(url: &str) -> Option<u16> {
+        let rest = url.strip_prefix("http://")?;
+        let (host, path) = rest.split_once('/')?;
+        let mut s = TcpStream::connect(host).ok()?;
+        s.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+        write!(s, "GET /{path} HTTP/1.1\r\nHost: x\r\n\r\n").ok()?;
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).split(' ').nth(1)?.parse().ok()
     }
 
     #[test]
