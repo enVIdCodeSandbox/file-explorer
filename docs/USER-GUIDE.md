@@ -46,7 +46,7 @@ Drag items out of the window onto another program to hand it the files, as if yo
 
 ## Clipboard
 
-Copy and Cut put the files on the system clipboard, so you can paste into other programs, and files copied in other programs paste here. Cut shows the items dimmed until pasted. A cut that is pasted into another program arrives as a copy; that is an operating-system limit. **Pasting what another program copied:** ordinary files (Explorer, Finder, Nautilus, Dolphin, Files and so on) paste as a copy, and if the other program used *Cut* they are moved, as in any file manager. On Windows, files that Explorer copies from *inside* a zip, from a phone or from a cloud folder (they have no place on disk yet) are first saved to a temporary place and then pasted; a note says so while it happens. Paths copied as text (such as Explorer's *Copy as path*) paste too, when every line is a real file or folder.
+Copy and Cut put the files on the system clipboard, so you can paste into other programs, and files copied in other programs paste here. Cut shows the items dimmed until pasted. A cut that is pasted into another program arrives as a copy; that is an operating-system limit. **Pasting what another program copied:** ordinary files (Explorer, Finder, Nautilus, Dolphin, Files and so on) paste as a copy, and if the other program used *Cut* they are moved, as in any file manager. On Windows, files that Explorer copies from *inside* a zip, from a phone or from a cloud folder (they have no place on disk yet) are first saved to a temporary place and then pasted; a note says so while it happens. Paths copied as text (such as Explorer's *Copy as path*) paste too, when every line is a real file or folder. **Anything can be copied for other programs:** files and folders on this computer go on the clipboard at once; items inside an archive are unpacked first; and items on a server or a phone are fetched in the background (a job in the transfers list that you can stop), then put on the clipboard, with a note when they are ready. Until then pasting inside this app already works. The fetching can be turned off in Settings → Advanced (*Make copied server and phone files pasteable in other programs*). **Websites:** whether a page accepts a pasted file is up to the page. Many upload boxes (mail attachments, chat, forms) take files pasted from the clipboard; Google Drive on the web may only take its own files that way, and for it, dragging the files in or using Drive for desktop's folder (paste into that folder here) works everywhere.
 
 ## Transfers
 
@@ -401,9 +401,18 @@ The **…** menu and the right-click menu have a **File tools** entry (Alt+F7 op
 
 These work on files on this computer, not on servers.
 
-## Second pane, Miller columns, to-do lists
+## Split view, Miller columns, to-do lists
 
-In the View menu: **Second pane** shows another folder beside the file list (F5 copies and F6 moves the selection of the pane you are in to the other pane's folder, Tab switches panes, F3 views), and **Miller columns** shows one column per folder level with a preview of the selected file at the end (arrow keys move, Enter goes there). Both are off by default and the normal file list is unchanged. **To-do for this folder** in the **…** menu keeps a checklist and notes for a folder on this computer. The "already exists" question now shows both files with a picture, size and date and says which is newer or larger.
+**Split view** puts up to eight folder panes in the window. The first pane is the normal file list with the window's tab bar above it. Every other pane has a small tab bar of its own at its top, an address bar with back, forward and up, and Copy/Move buttons. There are two ways to split:
+
+- **Drag a tab down into the window.** The panes shrink to make room and a dashed box shows where the tab will end up: drop near the left, right, top or bottom of a pane to put a new pane on that side of it, or in the middle of a pane (or on its tab bar) to add the tab to that pane. At the bottom of the window the ready-made layouts for one pane more are shown (for example three panes when there are two); drop the tab on one to use it. Tabs can also be dragged between panes, onto another pane's edge to make a new pane there, or onto the window's tab bar to open them in the main file list. If the window has only one tab, the new pane gets a copy.
+- **View menu:** *Split into two panes* or *Add a pane (N panes)* list the ready-made layouts for one more pane (side by side, stacked, one large with the rest on a side, grids), and *Arrange the N panes* changes the layout of the panes you have. *Even out the sizes* and *Close all extra panes* are there too. Only layouts for the panes you have and for one more are shown.
+
+The tab keys (Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab) act on the pane that has the focus, which is the one you last clicked; clicking the toolbar, sidebar or tab bar of the window focuses the main file list again. In a pane, F5 copies and F6 moves its selection to the folder of the pane you used before it, Tab switches panes, Alt+Left/Right goes back and forward, F3 views, and middle-click or × closes a tab (the last tab of a pane closes the pane, and the others take its room). Drag a divider to resize; it stops when a pane would be smaller than the share set in **Settings → Interface → Split view: smallest a pane can be made** (15% by default, never under 120 pixels). Arrow keys move a focused divider (Shift for bigger steps) and double-click or Home evens the panes out. The layout, sizes and the tabs of the extra panes are remembered. Split view is not shown in server, phone or archive folders.
+
+The extra panes are lighter than the main file list (no thumbnails view, grouping or details pane), which keeps eight of them fast.
+
+In the View menu, **Miller columns** shows one column per folder level with a preview of the selected file at the end (arrow keys move, Enter goes there). Miller columns are off by default and the normal file list is unchanged. **To-do for this folder** in the **…** menu keeps a checklist and notes for a folder on this computer. The "already exists" question now shows both files with a picture, size and date and says which is newer or larger.
 
 ## Servers through a proxy, and resuming FTP downloads
 
@@ -421,7 +430,7 @@ Opening a file goes in this order: the app set for that kind of file, then whate
 
 ## Settings
 
-**Fonts.** Settings → Themes → Font picks the app's font from the built-in choices, the fonts you import, or any font installed on the computer. *Fonts for each part* gives the file list, the navigation pane, the tabs, address bar and toolbar, paths and code, and the terminal a font of their own (type to search the installed fonts; leave a part empty to follow the app). Paths, code and the terminal list only fixed-width fonts.
+**Fonts.** Settings → Themes → Font picks the app's font from the built-in choices, the fonts you import, or any font installed on the computer. *Fonts for each part* gives the file list, the navigation pane, the tabs, address bar and toolbar, paths and code, and the terminal a font of their own (a drop-down of the installed and imported fonts; leave a part on the first entry to follow the app). Paths, code and the terminal list only fixed-width fonts.
 
 Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once, unless you turn that off (Advanced > Interface > "Save changes automatically"): then a **Save** bar appears at the bottom with Save and Discard, so a set of changes can be made and applied together. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
 
@@ -502,3 +511,22 @@ When a copy, move, delete or other job ends cleanly, its card and the operations
 
 The last state of every finished job is kept in memory until you close the app, nothing is written to disk. Reopen it from the small **Finished (n)** button where the cards appear, or from **Graph and details** on the notification: you get the final graph and every detail row, as they stood at the end. **Save…** writes a job to a file you choose: a web page with the graph, a text report, or data (JSON). The newest 30 are kept. The old setting "Hide a finished transfer after" is gone, since they now close immediately.
 
+
+
+## Zooming the folder view
+
+Ctrl + scroll, Ctrl + and Ctrl - make the **Details** and **List** views bigger or smaller a step at a time (70% to 175%, rows and text together). Only when a view is as big as it goes does the next step switch to the next kind of view: Details, then List, then the icon sizes; zooming out goes back the same way. Ctrl + 0 puts the view in use back to 100%. Each of the two views remembers its own size (Settings → Interface → Details view size, List view size).
+
+## Open with
+
+**Open with…** (and the question when a file has no app) shows a window of its own: drag its title bar to move it, and use the × (or Esc) to close it. It lists the app set for the file, the apps the system suggests for it, and **Editors and terminals** that can open almost anything: Visual Studio Code, Notepad++, Sublime Text, Notepad, Windows Terminal, PowerShell, Command Prompt (and the usual editors and terminals on Mac and Linux), with readable names instead of file names. Choosing a command prompt or PowerShell for a file opens a new console in its folder and runs the file there; for a folder it just opens there. **All apps on this computer…** lists every installed app (on Windows, the programs in the Start menu) with a search box; helper programs such as installers, updaters and agents are left out.
+
+## More icons
+
+Changing an icon (right-click it, or Settings → Interface → Icons) also offers **More icons**: thirteen collections (Lucide, Feather, Tabler, Heroicons, Bootstrap Icons, Material Design, Font Awesome 6 Solid and Regular, Remix, Ionicons, Codicons, Phosphor and Carbon; tens of thousands of icons). **They are not part of the app**, so it stays small. Pick a collection in the icon window and you see a **preview from the internet** (the first icons, and what you type in the search box is searched in the whole collection); you can already use a previewed icon. The window says how much **installing** downloads (for example about 674 KB for Lucide, about 3 MB for Material Design); **Install** keeps the collection in the app's cache folder, after which all its icons can be browsed and searched with no network. The same list, with the space each installed collection uses and Install / Remove buttons, is in Settings → Interface → Icons → *Icon collections*, and in Settings → Storage as *Icon collections*.
+
+**Removing them:** *Remove* in the icon window frees one collection, and **Clear icon cache** removes every installed collection (and appears wherever collections are listed). Icons you already chose keep working, because each is saved as a small piece of plain SVG that follows your theme's text color; only the browsing of that collection goes away until you install it again. With no network the preview cannot load and says so; installed collections are unaffected. "Clear every cache" in Storage leaves installed collections alone.
+
+## Progress on the taskbar icon
+
+While files are being copied, moved, deleted, packed or unpacked, or an automated task runs, the app's icon in the taskbar (Windows), dock (macOS) or launcher (Linux desktops that show it) fills with progress: green while it runs, yellow when paused, red for a few seconds if a copy failed, and moving back and forth while the size is still being counted.

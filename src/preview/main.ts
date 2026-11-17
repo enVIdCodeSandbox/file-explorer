@@ -114,6 +114,28 @@ const info: AppInfo = {
 
 let fm = { supported: true, active: false, previous: null as string | null, detail: "Folders opened from other apps go to File Explorer.", limits: ["\"Show in folder\" in browsers and many apps asks File Explorer directly and still opens there."] };
 
+
+const installedPacks = new Set<string>();
+const PACK_CATALOG = [
+  ["lucide", "Lucide", "clean outlines", 674000],
+  ["feather", "Feather", "simple outlines, small", 72000],
+  ["mdi", "Material Design", "Google's icons, very many", 3100000],
+];
+function fakePacks() {
+  const packs = PACK_CATALOG.map(([id, label, about, download]) => ({ id, label, about, download, installed: installedPacks.has(String(id)), disk: installedPacks.has(String(id)) ? Number(download) : 0 }));
+  return { packs, disk: packs.reduce((n, p) => n + p.disk, 0) };
+}
+function fakePackJson(query: string) {
+  const all: Record<string, string> = {
+    home: '<path fill="none" stroke="currentColor" stroke-width="2" d="M3 11l9-8l9 8v10H3z"/>',
+    heart: '<path fill="none" stroke="currentColor" stroke-width="2" d="M12 21C5 15 3 11 3 8a4.5 4.5 0 0 1 9-1a4.5 4.5 0 0 1 9 1c0 3-2 7-9 13z"/>',
+    "hard-drive": '<path fill="none" stroke="currentColor" stroke-width="2" d="M3 14h18v6H3zM5 14l3-9h8l3 9"/>',
+    star: '<path fill="none" stroke="currentColor" stroke-width="2" d="M12 3l3 6l6 1l-4.500 4.500l1 6.500L12 18l-5.500 3l1-6.500L3 10l6-1z"/>',
+  };
+  const icons = Object.fromEntries(Object.entries(all).filter(([n]) => !query || n.includes(query)));
+  return JSON.stringify({ w: 24, h: 24, icons });
+}
+
 const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   get_settings: () => settings,
   set_settings: (a) => void (settings = a.settings as Settings),
@@ -164,6 +186,22 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     { name: "Consolas", fixedWidth: true },
     { name: "DejaVu Serif", fixedWidth: false },
   ],
+  open_choices: (a) => ({
+    extension: String(a.path).includes(".") ? "." + String(a.path).split(".").pop() : "",
+    default: null,
+    suggested: [],
+    others: [],
+    general: [
+      { id: "C:\\Code.exe", name: "Visual Studio Code", iconUrl: null },
+      { id: "C:\\notepad++.exe", name: "Notepad++", iconUrl: null },
+      { id: "C:\\notepad.exe", name: "Notepad", iconUrl: null },
+      { id: "C:\\wt.exe", name: "Windows Terminal", iconUrl: null },
+      { id: "C:\\powershell.exe", name: "Windows PowerShell", iconUrl: null },
+      { id: "C:\\cmd.exe", name: "Command Prompt", iconUrl: null },
+    ],
+  }),
+  installed_apps: () => ["Adobe Acrobat", "Command Prompt", "Google Chrome", "HandBrake", "Microsoft Edge", "Notepad", "VLC media player", "Visual Studio Code", "Windows PowerShell"].map((name) => ({ id: `C:\\${name}.exe`, name, iconUrl: null })),
+  open_with_app: () => null,
   trash_restore: () => 1,
   trash_purge: () => 1,
   trash_empty: () => 3,
@@ -285,6 +323,36 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   term_do: (a) => { if (a.action === "remove") fakeSessions.delete(String(a.sid)); if (a.action === "clear") fakeOutput.set(String(a.sid), ""); return null; },
   term_transcript: () => null,
   term_sweep_transcripts: () => null,
+  // Icon collections: nothing is installed to begin with; a preview and an install work on a few made-up icons.
+  icon_packs_list: () => fakePacks(),
+  icon_pack_read: (a) => {
+    if (!installedPacks.has(String(a.id))) throw new Error("That icon collection is not installed.");
+    return fakePackJson("");
+  },
+  icon_pack_preview: (a) => {
+    const q = String(a.query ?? "").trim().toLowerCase();
+    const json = fakePackJson(q);
+    return { pack: json, total: Object.keys(JSON.parse(json).icons).length };
+  },
+  icon_pack_install: async (a) => {
+    await new Promise((r) => setTimeout(r, 400));
+    installedPacks.add(String(a.id));
+    return fakePacks();
+  },
+  icon_pack_remove: (a) => {
+    installedPacks.delete(String(a.id));
+    return fakePacks();
+  },
+  icon_packs_clear: () => {
+    installedPacks.clear();
+    return fakePacks();
+  },
+  clipboard_set_files: (a) => { ((window as unknown as { __clip?: unknown[] }).__clip ??= []).push(a.paths); return null; },
+  clipboard_clear: () => { ((window as unknown as { __clip?: unknown[] }).__clip ??= []).push("cleared"); return null; },
+  remote_stage_start: () => {
+    setTimeout(() => void emit("delete-progress", { id: 900, phase: "done", permanent: false, selected: 1, itemsTotal: 1, itemsDone: 1, current: "", errors: [], errorCount: 0, elapsedSecs: 1, firstName: "a.txt", action: "stage", result: "/tmp/clip-1/0/a.txt", bytesDone: 1, bytesTotal: 1 }), 50);
+    return 900;
+  },
   clipboard_get: () => ({ paths: [], cut: false, virtualFiles: false }),
   check_conflicts: () => [],
   resource_usage: () => ({ cpuPercent: 3, memoryMb: 120, cores: system.cpus, totalRamMb: system.totalRamMb }),

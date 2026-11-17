@@ -11,6 +11,7 @@ export type AdvControl =
   | { type: "select"; options: { value: string; label: string }[] }
   | { type: "color" }
   | { type: "text"; placeholder?: string }
+  | { type: "fontFamily"; fixedWidth?: boolean }
   | { type: "methods" };
 
 export interface AdvDef {
@@ -50,7 +51,14 @@ export const ADVANCED: AdvDef[] = [
   text("", "terminal.shell", "Terminal panel", "Shell to run", "Default: PowerShell or Command Prompt on Windows, your login shell on Mac and Linux", "For example pwsh, wsl.exe, or \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i. Leave empty for the default."),
   sel("folder", "terminal.startIn", "Terminal panel", "New terminals start in", [["folder", "The folder being viewed"], ["home", "Your home folder"]]),
   sel("external", "address.shellWords", "Terminal panel", "Typing cmd, powershell… in the address bar", [["external", "Open the real program (Command Prompt, PowerShell, Terminal) in this folder"], ["builtin", "Open a tab in the built-in terminal in this folder"], ["off", "Do nothing special (treat it as a path)"]], "As in Windows Explorer, typing the name of a shell (cmd, powershell, pwsh, wt, wsl; terminal, bash or zsh elsewhere) and pressing Enter opens it in the folder being viewed. The real program is the one chosen in Settings → Terminal."),
-  text("", "terminal.fontFamily", "Terminal panel", "Font", "Default: Cascadia Mono, Consolas…", "The name of a fixed-width font installed on this computer, for example Cascadia Code or JetBrains Mono. Use a fixed-width font: the terminal draws every letter in a cell of the same size, so other fonts look uneven. If the font is not installed, the built-in fixed-width fonts are used. Leave empty for the default."),
+  {
+    key: "terminal.fontFamily",
+    group: "Terminal panel",
+    label: "Font",
+    description: "The terminal draws every letter in a cell of the same size, so it lists only fixed-width fonts. Default: Cascadia Mono, then Consolas and the system's own.",
+    control: { type: "fontFamily", fixedWidth: true },
+    default: "",
+  },
   num(13, "terminal.fontSize", "Terminal panel", "Text size", 8, 32, "px"),
   num(5000, "terminal.scrollback", "Terminal panel", "Lines kept to scroll back through", 500, 100000, "lines", "In each terminal, on top of what the terminal host keeps for reconnecting (about 2 MB of output each)."),
   sel("block", "terminal.cursor", "Terminal panel", "Cursor", [["block", "Block"], ["bar", "Bar"], ["underline", "Underline"]]),
@@ -100,7 +108,9 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "ui.autoSave", "Interface", "Save changes automatically", "Changes to the layout, themes and other settings are applied and saved the moment you make them. Turn off to try changes first: they still show at once, but stay unsaved until you press Save at the bottom of Settings (or Discard to go back)."),
   sel("tree", "search.defaultMode", "Search", "Typing in the search box searches", [["level", "Only the folder you are in"], ["tree", "The folder and everything under it"], ["global", "Everywhere"]], "Used when you click the search box and type. Ctrl+F always searches the folder's own level, Ctrl+Shift+F everywhere, and Ctrl+R then F the folder with all its subfolders. The shortcuts for the first two can be changed under Keyboard shortcuts."),
   yn(true, "search.chord", "Search", "Ctrl+R, then F searches the folder and its subfolders", "Press Ctrl+R, then F within a second and a half. Turn off to leave Ctrl+R alone."),
-  yn(false, "view.dualPane", "Interface", "Show a second pane beside the file list", "A second folder view on the right (Total Commander style). F5 copies and F6 moves the selection of the pane you are in to the folder of the other one; Tab switches panes. The normal file list stays as it is. Also in the View menu."),
+  num(100, "view.zoomDetails", "Interface", "Details view size", 70, 175, "%", "How big the rows and text of the Details view are. Ctrl + scroll or Ctrl + / Ctrl - changes it a step at a time; when it is as big as it goes, the next step switches to the List view. Ctrl + 0 puts it back to 100%."),
+  num(100, "view.zoomList", "Interface", "List view size", 70, 175, "%", "How big the items of the List view are. Zooming goes on to the icon views after the largest size, and back to Details after the smallest."),
+  num(15, "split.minPercent", "Interface", "Split view: smallest a pane can be made", 5, 40, "%", "The least space a pane keeps when you drag a divider (at least 120 pixels as well). With many panes the limit is lower if they could not all fit. Split view is in the View menu, or drag a tab down into the window."),
   yn(false, "view.miller", "Interface", "Show folders as columns (Miller columns)", "One column for every folder level with a preview of the selected file at the end (OneCommander and Finder style). Click a folder to open it in the next column; double-click or Enter to go there. Also in the View menu."),
   yn(false, "ui.commandLine", "Interface", "Show the command line under the file list", "Type a command and press Enter: it runs in a new tab of the built-in terminal, started in the folder you are viewing. Ctrl+Enter adds the name of the selected item, Ctrl+Shift+Enter its full path. Up and down recall earlier commands."),
   yn(true, "ui.buttonBar", "Interface", "Show the button bar", "Shows the commands you defined (Settings > User commands) as buttons above the file list, and the Commands menu. Hidden when there is nothing to show."),
@@ -188,6 +198,7 @@ export const ADVANCED: AdvDef[] = [
 
   // ---- Transfers ----
   { key: "transfers.methods", group: "Transfers", label: "Transfer methods in use", description: "How every kind of job is being carried out right now: copies and moves (the built-in engine, Robocopy, rsync, rclone), deletes, compressing and unpacking, copies into archives, servers and phones (SFTP over SSH, FTP, WebDAV, MTP) and update downloads. Also what this computer can use and how each has done. The copy method itself is chosen under File transfers > Copy method.", control: { type: "methods" }, default: false },
+  yn(true, "clipboard.stageRemote", "Transfers", "Make copied server and phone files pasteable in other programs", "When you copy files from a server (FTP, SFTP, WebDAV) or a phone, the app fetches them in the background so they can also be pasted into other programs (a browser upload, a mail window, Google Drive's folder). It shows as a job you can stop. Turn off to fetch nothing until you paste inside this app; this matters on slow or metered connections or with very large files."),
   yn(true, "transfers.skipIdentical", "Transfers", "Skip files that are already there", "A file at the destination with the same name, size and modified time (and, for files up to 8 MB, the same contents) is the same file: it is kept as it is and skipped, without asking, whatever \"When a file already exists\" says. Turn off to treat it like any other clash."),
   yn(false, "transfers.openWindow", "Transfers", "Open the larger transfer window automatically"),
 

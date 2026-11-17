@@ -43,6 +43,7 @@ function titleOf(j: Job): string {
     }
     if (p.action === "pack") return p.phase === "done" ? `Put ${what} in the archive` : p.phase === "cancelled" ? "Changing the archive cancelled" : p.phase === "failed" ? `Could not put ${what} in the archive` : p.phase === "scanning" ? `Preparing ${what} for the archive…` : `Putting ${what} in the archive`;
     if (p.action === "unpack") return p.phase === "done" ? `Copied ${what} out of the archive` : p.phase === "cancelled" ? "Copying out cancelled" : p.phase === "failed" ? `Could not copy ${what} out of the archive` : p.phase === "scanning" ? `Preparing to copy ${what} out of the archive…` : `Copying ${what} out of the archive`;
+    if (p.action === "stage") return p.phase === "done" ? `${what} ready to paste in other programs` : p.phase === "cancelled" ? "Preparing to paste cancelled" : p.phase === "failed" ? `Could not get ${what} ready to paste` : p.phase === "scanning" ? `Preparing ${what} to paste elsewhere…` : `Fetching ${what} so it can be pasted elsewhere`;
     if (p.action === "open") return p.phase === "failed" ? `Could not open ${what}` : p.phase === "cancelled" ? "Opening cancelled" : p.phase === "done" ? `Opened ${what}` : `Fetching ${what} to open it`;
     if (p.action === "remote-delete") return p.phase === "done" ? `Deleted ${what} from the server` : p.phase === "cancelled" ? "Delete cancelled" : p.phase === "failed" ? `Could not delete ${what}` : `Deleting ${what} from the server`;
     if (p.phase === "scanning") return `Preparing to delete ${what}…`;

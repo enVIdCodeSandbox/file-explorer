@@ -48,8 +48,8 @@ import { Icon } from "./Icons";
 import { shareOutside, useMobile } from "../util/device";
 
 /** How each icon level lays out its items. */
-function layoutFor(level: string, thumbPx: number) {
-  if (level === "list") return { mode: "inline" as const, w: 230, h: 24, icon: 16 };
+function layoutFor(level: string, thumbPx: number, scale = 1) {
+  if (level === "list") return { mode: "inline" as const, w: Math.round(230 * scale), h: Math.round(24 * scale), icon: Math.round(16 * scale) };
   if (level === "small") return { mode: "inline" as const, w: 270, h: 44, icon: 32 };
   return { mode: "tile" as const, w: thumbPx + 28, h: thumbPx + 50, icon: thumbPx };
 }
@@ -84,7 +84,11 @@ export function FileView({ path }: { path: string }) {
   const folderView = useStore((s) => s.folderView);
   const level = VIEW_LEVELS[Math.max(0, Math.min(VIEW_LEVELS.length - 1, viewLevelOf(settings, folderView)))];
   const thumbPx = ICON_PX[level] ?? settings.performance.thumbnailSize;
-  const tileLayout = layoutFor(level, thumbPx);
+  // Details and List have sizes of their own (zooming changes them before it changes the view).
+  const sizePct = adv<number>(settings, level === "details" ? "view.zoomDetails" : "view.zoomList");
+  const phoneLayout = useMobile();
+  const zoom = (level === "details" || level === "list") && !phoneLayout ? Math.max(0.5, Math.min(2, sizePct / 100)) : 1;
+  const tileLayout = layoutFor(level, thumbPx, zoom);
   // The phone layout has two shapes: a list of two-line rows, and a grid of icons.
   const mobile = useMobile();
   const details = level === "details" || (mobile && (level === "list" || level === "small"));
@@ -434,13 +438,12 @@ export function FileView({ path }: { path: string }) {
       const r = wheelSteps(wheelDelta.current, e.deltaY);
       wheelDelta.current = r.carry;
       if (r.steps) {
-        const st = useStore.getState();
-        setViewLevel(viewLevelOf(st.settings, st.folderView) + r.steps);
+        useStore.getState().zoomView(r.steps);
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [setViewLevel]);
+  }, []);
 
   // ---- Virtualization -----------------------------------------------------
   const compact = settings.appearance.density === "compact";
@@ -450,7 +453,7 @@ export function FileView({ path }: { path: string }) {
   // A phone row is tall enough for a finger: an icon, the name, and a line of date and size.
   // A phone shows two lines of the name under an icon, so its tiles are a little taller.
   const tileH = tileLayout.h + (mobile ? 20 : 0);
-  const rowHeight = details ? (mobile ? Math.max(56, customRow) : customRow > 0 ? customRow : compact ? 26 : 34) : tileH;
+  const rowHeight = details ? (mobile ? Math.max(56, customRow) : Math.round((customRow > 0 ? customRow : compact ? 26 : 34) * zoom)) : tileH;
   const headerHeight = details && !mobile ? 28 : 0;
   // On a phone the icons spread to fill the row instead of leaving a gap on the right.
   const tileW = mobile && !details ? Math.floor((width - 16) / columnsPerRow) : tileLayout.w;
@@ -1311,6 +1314,8 @@ export function FileView({ path }: { path: string }) {
       <div
         ref={scroller}
         className="file-scroller"
+        data-zoomed={zoom !== 1 || undefined}
+        style={zoom !== 1 ? ({ fontSize: `calc(var(--font-size) * ${zoom})`, "--view-zoom": zoom } as React.CSSProperties) : undefined}
         data-refreshing={refreshing || undefined}
         data-drop="folder"
         data-drop-path={path}
@@ -1421,7 +1426,7 @@ export function FileView({ path }: { path: string }) {
                         d.id === "name" ? (
                           <div className="cell cell-name" key="name" style={{ width: nameWidth }}>
                             {checks && rowCheck(e, row.index)}
-                            <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={18} iconSize={16} view="details" />
+                            <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={Math.round(18 * zoom)} iconSize={Math.round(16 * zoom)} view="details" />
                             {nameCell(e)}
                           </div>
                         ) : (

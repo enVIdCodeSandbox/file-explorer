@@ -52,6 +52,8 @@ import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { usePathMenu, type MenuTarget } from "./pathMenu";
 import { iconMenuItems } from "./IconPicker";
+import { splitMenuItems } from "./Split";
+import { dropOnPanes, endHover, hoverPanes } from "../split/state";
 import { driveSlot } from "../util/customIcons";
 import { deviceSlot, deviceTarget, driveTarget, iconTarget, serverSlot, serverTarget } from "../util/iconTarget";
 import { SETTING as LAYOUT_KEY, isDefault as layoutIsDefault, moveNav, parseLayout, placed, serializeLayout, zoneOf, type NavId, type Zone } from "../util/sideLayout";
@@ -193,7 +195,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
 
   // ---- Dragging a tab: reorder inside the bar, or drop outside for a new window
   const { moveTab, moveGroup, detachTab } = useStore.getState();
-  const [drag, setDrag] = useState<{ id: string; group?: string; x: number; y: number; w: number; index: number; inside: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ id: string; group?: string; x: number; y: number; w: number; index: number; inside: boolean; split?: boolean } | null>(null);
   const suppressChipClick = useRef(false);
   const startDrag = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest(".tab-close")) return;
@@ -217,13 +219,18 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
     };
     let lastHover = 0;
     let hovering = false;
+    // Over the folder view of this window: the panes make room and show where the tab would go (split view).
+    let splitting = false;
+    const label = tabTitle(useStore.getState().tabs.find((t) => t.id === id)?.location ?? "");
     const move = (ev: PointerEvent) => {
       if (!started && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
       started = true;
       const at = where(ev);
-      setDrag({ id, x: ev.clientX, y: ev.clientY, w, ...at });
+      splitting = !at.inside && hoverPanes(ev.clientX, ev.clientY, { slot: 0, tabId: id }, label);
+      if (at.inside) endHover();
+      setDrag({ id, x: ev.clientX, y: ev.clientY, w, ...at, split: splitting });
       // Outside this window's tab strip: let the window underneath show where it would land.
-      if (!at.inside) {
+      if (!at.inside && !splitting) {
         const t = performance.now();
         if (t - lastHover > 40) {
           lastHover = t;
@@ -241,10 +248,17 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       window.removeEventListener("keydown", key, true);
       setDrag(null);
       if (hovering) void api.tabHover(0, 0, w, false).catch(() => {});
-      if (!started || !commit || !ev) return;
+      if (!started || !commit || !ev) return endHover();
       const at = where(ev);
-      if (at.inside) moveTab(id, at.index);
-      else void detachTab(id, ev.screenX, ev.screenY);
+      if (at.inside) {
+        endHover();
+        moveTab(id, at.index);
+      } else if (splitting) {
+        dropOnPanes({ slot: 0, tabId: id });
+      } else {
+        endHover();
+        void detachTab(id, ev.screenX, ev.screenY);
+      }
     };
     const up = (ev: PointerEvent) => finish(true, ev);
     const key = (ev: KeyboardEvent) => ev.key === "Escape" && finish(false);
@@ -407,10 +421,10 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
        </div>
      )}
      {drag && dragged && (
-       <div className="tab tab-ghost" data-detach={!drag.inside || undefined} style={{ left: drag.x - drag.w / 2, top: drag.y - 17, width: drag.w }}>
+       <div className="tab tab-ghost" data-detach={(!drag.inside && !drag.split) || undefined} style={{ left: drag.x - drag.w / 2, top: drag.y - 17, width: drag.w }}>
          <FileIcon kind={isAppLocation(dragged.location) ? "file" : "folder"} size={14} />
-         <span className="tab-title">{tabs.length < 2 && !drag.inside ? "The only tab stays here" : tabTitle(dragged.location)}</span>
-         {!drag.inside && tabs.length > 1 && <span className="tab-ghost-hint">New window</span>}
+         <span className="tab-title">{tabs.length < 2 && !drag.inside && !drag.split ? "The only tab stays here" : tabTitle(dragged.location)}</span>
+         {drag.split ? <span className="tab-ghost-hint">{tabs.length < 2 ? "Opens a copy" : "Split here"}</span> : !drag.inside && tabs.length > 1 && <span className="tab-ghost-hint">New window</span>}
        </div>
      )}
      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
@@ -897,7 +911,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
         checked: VIEW_LEVELS[level] === name,
         run: () => setViewLevel(VIEW_LEVELS.indexOf(name)),
       })),
-      { id: "dual-pane", label: "Second pane", checked: adv<boolean>(settings, "view.dualPane"), separatorBefore: true, run: () => updateSettings((s) => void (s.advanced["view.dualPane"] = !adv<boolean>(s, "view.dualPane"))) },
+      ...splitMenuItems(),
       { id: "miller", label: "Miller columns", checked: adv<boolean>(settings, "view.miller"), run: () => updateSettings((s) => void (s.advanced["view.miller"] = !adv<boolean>(s, "view.miller"))) },
       { id: "choose-details", label: "Choose details…", run: () => useStore.setState({ chooseDetailsOpen: true }) },
       {

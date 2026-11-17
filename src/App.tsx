@@ -12,7 +12,10 @@ import { LockDialog } from "./components/Locks";
 import { IconContextMenu, IconPickerDialog } from "./components/IconPicker";
 import { ChooseDetails } from "./components/ChooseDetails";
 import { openTools } from "./components/toolsOpen";
-import { MillerColumns, SecondPane } from "./components/Panes";
+import { MillerColumns } from "./components/Panes";
+import { SplitArea } from "./components/Split";
+import { paneCommand, plainFolder } from "./split/state";
+import { startTaskbarProgress } from "./util/taskbarWire";
 import { ButtonBar, CommandLine } from "./components/UserCommands";
 import { isMobileOs } from "./util/native";
 import { toggleTerminalPanel, useTerminal } from "./terminal/state";
@@ -32,7 +35,6 @@ import { panelsAt, type PanelId } from "./util/layout";
 import { useMobile } from "./util/device";
 import { crumb, installTrail } from "./util/crashTrail";
 import { whenIdle } from "./util/idle";
-import { viewLevelOf } from "./util/viewLevel";
 import { zoomStep } from "./util/zoomKeys";
 
 // Parts that most sessions never open are loaded when first needed, so the first screen has less to read.
@@ -64,6 +66,9 @@ function Part({ children, later }: { children: React.ReactNode; later?: boolean 
 
 function AppInner() {
   // Follows files that are being written, so their size and speed stay current.
+  // Progress on the icon in the taskbar while something is copying, deleting or running.
+  useEffect(() => startTaskbarProgress(), []);
+
   useEffect(() => {
     let stop: (() => void) | undefined;
     const cancel = whenIdle(() => (stop = startLiveTracker()), 1000);
@@ -321,15 +326,20 @@ function AppInner() {
       // Ctrl + and Ctrl - resize the folder view, as Ctrl + scroll does. (The built-in terminal sizes its own text.)
       const zoom = zoomStep(e);
       const place = s.tabs.find((t) => t.id === s.activeTab)?.location ?? "";
-      if (zoom && !typing && !isAppLocation(place) && !(e.target as HTMLElement | null)?.closest?.(".term-body, .xterm") && adv<boolean>(s.settings, "files.wheelZoom")) {
+      if (zoom !== null && !typing && !isAppLocation(place) && !(e.target as HTMLElement | null)?.closest?.(".term-body, .xterm") && adv<boolean>(s.settings, "files.wheelZoom")) {
         e.preventDefault();
-        s.setViewLevel(viewLevelOf(s.settings, s.folderView) + zoom);
+        s.zoomView(zoom);
         return;
       }
       const command = commandFor(s.settings, e);
       if (!command) return;
       // In the built-in terminal these are the shell's own keys (Ctrl+R searches its history, Ctrl+Y pastes what was cut).
       if (["undo", "redo", "redoAlt", "refresh", "refreshAlt"].includes(command) && (e.target as HTMLElement | null)?.closest?.(".term-body, .xterm")) return;
+      // With an extra pane of the split view in focus, the tab keys act on its tabs.
+      if (!typing && paneCommand(command)) {
+        e.preventDefault();
+        return;
+      }
       const i = s.tabs.findIndex((t) => t.id === s.activeTab);
       const n = s.tabs.length;
       switch (command) {
@@ -452,19 +462,22 @@ function AppInner() {
         render={render}
         content={
           <div className="content-inner" key={activeTab}>
-            {loc.kind === "home" && <HomeView />}
-            {loc.kind === "thispc" && <DrivesView />}
-            {loc.kind === "trash" && <Part><TrashView /></Part>}
-            {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
-            {loc.kind === "analyze" && <Part><AnalyzerView path={loc.path} /></Part>}
-            {loc.kind === "clear" && <Part><SmartClearView drive={loc.drive} /></Part>}
             {loc.kind === "folder" && <ButtonBar />}
-            {loc.kind === "folder" && (
-              <div className="pane-row">
-                {adv<boolean>(settings, "view.miller") ? <MillerColumns path={loc.path} /> : <FileView path={loc.path} />}
-                {adv<boolean>(settings, "view.dualPane") && !isRemote(loc.path) && !isArchiveLoc(loc.path) && <SecondPane leftFolder={loc.path} />}
-              </div>
-            )}
+            <SplitArea
+              folder={loc.kind === "folder" ? loc.path : plainFolder(location)}
+              allowed={loc.kind !== "folder" || (!isRemote(loc.path) && !isArchiveLoc(loc.path))}
+              main={
+                <>
+                  {loc.kind === "home" && <HomeView />}
+                  {loc.kind === "thispc" && <DrivesView />}
+                  {loc.kind === "trash" && <Part><TrashView /></Part>}
+                  {loc.kind === "search" && <SearchView query={loc.query} scope={loc.scope} mode={loc.mode} />}
+                  {loc.kind === "analyze" && <Part><AnalyzerView path={loc.path} /></Part>}
+                  {loc.kind === "clear" && <Part><SmartClearView drive={loc.drive} /></Part>}
+                  {loc.kind === "folder" && (adv<boolean>(settings, "view.miller") ? <MillerColumns path={loc.path} /> : <FileView path={loc.path} />)}
+                </>
+              }
+            />
             {loc.kind === "folder" && <CommandLine />}
             {/* Finder shows the path of the folder along the bottom, under the item count. */}
             {chrome === "macos" && loc.kind === "folder" && <Toolbar parts={["address"]} />}

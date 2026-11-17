@@ -3,9 +3,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
-import { ICONS_KEY, MAX_PICTURE, iconMap, prettyName, withIcon, type IconChoice } from "../util/customIcons";
+import { ICONS_KEY, MAX_PICTURE, iconMap, prettyName, safeSvg, withIcon, type IconChoice } from "../util/customIcons";
 import type { IconTarget } from "../util/iconTarget";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
+import { PackManager, PackPicker, usePacks } from "./IconCollections";
 import { FileIcon, Icon, iconNames } from "./Icons";
 
 /** Set (or with null, reset) the choice for a slot. */
@@ -64,6 +65,13 @@ function Picker({ target }: { target: IconTarget }) {
   const [filter, setFilter] = useState("");
   const file = useRef<HTMLInputElement>(null);
   const names = useMemo(() => iconNames().filter((n) => !filter || n.toLowerCase().includes(filter.toLowerCase()) || prettyName(n).toLowerCase().includes(filter.toLowerCase())), [filter]);
+  // More icons, from collections that are installed on request (previewed over the network first).
+  const packs = usePacks();
+  const usePackIcon = (svg: string) => {
+    const clean = safeSvg(svg);
+    if (clean) apply({ svg: clean });
+    else setError("That icon cannot be used.");
+  };
   const slot = all && target.group ? target.group.slot : target.slot;
   const apply = (choice: IconChoice | null) => {
     // Changing them all replaces this one's own choice too.
@@ -111,6 +119,7 @@ function Picker({ target }: { target: IconTarget }) {
           ))}
           {names.length === 0 && <div className="side-empty">No icon matches.</div>}
         </div>
+        <PackPicker filter={filter} packs={packs} onPick={usePackIcon} />
         <div className="dialog-buttons">
           <button className="secondary" onClick={() => apply(null)}>Use the default</button>
           <button className="primary" onClick={close}>Cancel</button>
@@ -215,6 +224,10 @@ export function IconsPanel() {
         </button>
       </div>
       <p className="muted">You can also right-click a drive, a navigation item or any icon and choose Change icon.</p>
+      <details open={!!q && "icon collections".includes(q)}>
+        <summary>Icon collections (install more icons)</summary>
+        <PackManager />
+      </details>
       {groups.map((g) => {
         const rows = [...g.rows, ...(g.title.startsWith("Navigation") ? drives.map((slot) => ({ slot, label: slotLabel(slot), preview: <span className="icon-custom-preview"><Icon name={slot.startsWith("device:") ? "phone" : slot.startsWith("server:") ? "network" : "drive"} slot={slot} size={22} /></span> })) : [])].filter((r) => !q || r.label.toLowerCase().includes(q) || r.slot.includes(q));
         if (!rows.length) return null;

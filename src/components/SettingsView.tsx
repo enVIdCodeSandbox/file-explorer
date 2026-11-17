@@ -17,7 +17,7 @@ import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
-import { CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontAreasPanel, FontPicker, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
+import { CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontAreasPanel, FontPicker, FontSelect, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
   const t = useT();
@@ -138,6 +138,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <IconsPanel />;
     case "fontAreas":
       return <FontAreasPanel />;
+    case "fontFamily":
+      return <FontSelect label={def.label} value={String(value ?? "")} onChange={set} fixedWidth={c.fixedWidth} defaultLabel={c.fixedWidth ? "Default fixed-width font" : "Same as the app"} />;
     case "methods":
       return <TransferMethodsPanel />;
     case "menuItems": {

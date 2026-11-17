@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { driveSlot, iconMap, parseIcons, pick, prettyName, withIcon } from "./customIcons";
+import { driveSlot, iconMap, parseIcons, pick, prettyName, withIcon, safeSvg } from "./customIcons";
 
 describe("custom icons", () => {
   it("keeps an app icon or a picture per kind of icon and resets one at a time", () => {
@@ -40,5 +40,33 @@ describe("custom icons", () => {
   it("makes readable names", () => {
     expect(prettyName("folderOpen")).toBe("Folder open");
     expect(prettyName("pc")).toBe("Pc");
+  });
+});
+
+describe("safeSvg", () => {
+  const good = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 24 24" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h24v24H0z" fill="none"></path><circle cx="1" cy="1" r="1"/></svg>';
+  it("keeps drawing shapes with plain attributes", () => {
+    expect(safeSvg(good)).toBe(good);
+  });
+  it("refuses scripts, event handlers, links, styles, images, text and trailing content", () => {
+    expect(safeSvg('<svg><script>alert(1)</script></svg>')).toBeNull();
+    expect(safeSvg('<svg onload="x()"></svg>')).toBeNull();
+    expect(safeSvg('<svg><path d="M0 0" onclick="x()"></path></svg>')).toBeNull();
+    expect(safeSvg('<svg><a href="javascript:x()"><path d="M0 0"></path></a></svg>')).toBeNull();
+    expect(safeSvg('<svg><path style="x" d="M0 0"></path></svg>')).toBeNull();
+    expect(safeSvg('<svg><foreignObject></foreignObject></svg>')).toBeNull();
+    expect(safeSvg('<svg><image href="x"></image></svg>')).toBeNull();
+    expect(safeSvg('<svg><path fill="url(#a)" d="M0 0"></path></svg>')).toBeNull();
+    expect(safeSvg('<svg><text>hi</text></svg>')).toBeNull();
+    expect(safeSvg('<svg></svg><svg></svg>')).toBeNull();
+    expect(safeSvg('<svg></svg><script></script>')).toBeNull();
+    expect(safeSvg('<svg><path d="M0 0">hello</path></svg>')).toBeNull();
+    expect(safeSvg('<div></div>')).toBeNull();
+    expect(safeSvg(42)).toBeNull();
+    expect(safeSvg('<svg>' + "a".repeat(30_000))).toBeNull();
+  });
+  it("is what the saved setting accepts", () => {
+    expect(parseIcons(JSON.stringify({ "kind:folder": { svg: good } }))).toEqual({ "kind:folder": { svg: good } });
+    expect(parseIcons(JSON.stringify({ "kind:folder": { svg: "<svg><script></script></svg>" } }))).toEqual({});
   });
 });

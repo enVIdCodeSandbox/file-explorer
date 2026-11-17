@@ -28,6 +28,7 @@ export type Control =
   | { type: "updates" }
   | { type: "icons" }
   | { type: "fontAreas" }
+  | { type: "fontFamily"; fixedWidth?: boolean }
   | { type: "methods" };
 
 export interface SettingDef {

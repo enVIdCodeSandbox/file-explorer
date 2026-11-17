@@ -474,8 +474,13 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .sidebar[data-scrollbar="hover"]:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 40%, transparent); }
 
 /* ---- Open with… chooser ---- */
-.openwith-dialog { width: clamp(520px, 58vw, 860px); max-width: calc(100vw - 32px); padding: 24px 0 0; display: flex; flex-direction: column; }
-.openwith-dialog h3 { margin: 0 32px 8px; font-size: 20px; font-weight: 600; }
+.openwith-dialog { width: clamp(520px, 58vw, 860px); max-width: calc(100vw - 32px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.openwith-titlebar { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 16px; flex: none; cursor: grab; user-select: none; touch-action: none; background: color-mix(in srgb, var(--text) 5%, var(--surface)); border-bottom: 1px solid var(--border); font-size: var(--font-size-small); color: var(--text-muted); }
+.openwith-titlebar:active { cursor: grabbing; }
+.openwith-titlebar-text { flex: 1; }
+.openwith-search { margin: 0 32px 10px; }
+.openwith-search .text-input { width: 100%; }
+.openwith-dialog h3 { margin: 18px 32px 8px; font-size: 20px; font-weight: 600; }
 .openwith-why { margin: 0 32px 14px; color: var(--text-muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; }
 .openwith-why strong { color: var(--text); font-weight: 600; }
 .openwith-list { height: min(60vh, 600px); min-height: 220px; overflow-y: auto; padding: 0 20px 10px; }
@@ -485,7 +490,7 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .openwith-row:hover { background: var(--surface-hover); }
 .openwith-row[data-picked] { background: var(--surface-active); }
 .openwith-row[data-picked]::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 2px; background: var(--accent); }
-.openwith-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: var(--surface-hover); color: var(--text-muted); flex: none; }
+.openwith-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--accent) 22%, var(--surface-hover)); color: var(--text); font-weight: 600; font-size: 17px; flex: none; }
 .openwith-row img { width: 40px; height: 40px; flex: none; }
 .openwith-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .openwith-error { margin: 0 32px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
@@ -1007,3 +1012,30 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .font-areas { display: grid; gap: 10px; }
 .font-area { display: grid; grid-template-columns: 200px 1fr auto; gap: 6px 8px; align-items: center; }
 .font-area .font-sample { grid-column: 2 / -1; padding: 4px 8px; border: 1px dashed var(--border); border-radius: var(--radius-small); color: var(--text-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* The terminal screen draws its cursor with a style sheet it adds while running. These rules draw the same cursor from
+   the app's own sheet, so it is still there if the injected one is ever blocked (the injected one wins when it loads). */
+.term .xterm-rows .xterm-cursor.xterm-cursor-block { background-color: var(--accent); color: var(--bg); }
+.term .xterm-rows .xterm-cursor.xterm-cursor-bar { box-shadow: 1px 0 0 0 var(--accent) inset; }
+.term .xterm-rows .xterm-cursor.xterm-cursor-underline { border-bottom: 1px solid var(--accent); height: calc(100% - 1px); }
+.term .xterm-rows .xterm-cursor.xterm-cursor-outline { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* Icons from the icon packs, in the icon picker */
+.icon-packs { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.icon-packs-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.icon-packs-bar select { flex: 1; min-width: 0; }
+.icon-grid-pack { max-height: 220px; overflow-y: auto; }
+.icon-cell svg { width: 22px; height: 22px; }
+.icon-more { grid-column: 1 / -1; justify-self: center; }
+
+/* Installing icon collections */
+.icon-packs-note { margin: 4px 0 0; }
+.icon-packs-install { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.icon-packs-install > span { flex: 1; min-width: 0; font-size: 12px; }
+.icon-packs-install button { flex: none; }
+.icon-packs-count { margin: 4px 0; font-size: 12px; }
+.icon-packs-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.pack-svg { display: inline-flex; width: 22px; height: 22px; }
+.pack-svg svg { width: 22px; height: 22px; }
+.pack-size { white-space: nowrap; font-size: 12px; }
+.pack-manager .icons-row { grid-template-columns: 1fr auto auto; }

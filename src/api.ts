@@ -3,6 +3,7 @@
 
 import { tracedInvoke as invoke } from "./util/crashTrail";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { PackList } from "./util/iconPacks";
 
 export interface FileEntry {
   name: string;
@@ -143,6 +144,8 @@ export interface OpenChoices {
   default: OpenApp | null;
   suggested: OpenApp[];
   others: OpenApp[];
+  /** Editors and terminals that can open nearly anything. */
+  general: OpenApp[];
 }
 
 export interface Hit {
@@ -352,7 +355,7 @@ export interface DeleteProgress {
   /** Name of the first selected item. */
   firstName: string;
   /** "delete", or "compress" / "extract" for an archive job shown on the same card. */
-  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete" | "update" | "rename-copy";
+  action: "delete" | "compress" | "extract" | "upload" | "download" | "open" | "unpack" | "pack" | "remote-delete" | "update" | "rename-copy" | "stage";
   /** For a finished archive or server job: what was made (for "open": the downloaded file). */
   result: string;
   /** Server jobs: bytes moved so far and expected in total. */
@@ -792,6 +795,8 @@ export const api = {
   archiveCreate: (dir: string, name: string, folder: boolean) => invoke<string>("archive_create", { dir, name, folder }),
   /** Unpack items to a staging folder so real files can go on the system clipboard. */
   archiveStage: (sources: string[]) => invoke<string[]>("archive_stage", { sources }),
+  /** Fetch server or phone items into real files; the finished job lists them (one per line) in its result. */
+  remoteStageStart: (sources: string[]) => invoke<number>("remote_stage_start", { sources }),
   remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => invoke<number>("remote_copy_start", { sources, dest, mv, open }),
   remoteRemoveStart: (paths: string[]) => invoke<number>("remote_remove_start", { paths }),
   serversList: () => invoke<SavedServer[]>("servers_list"),
@@ -841,6 +846,13 @@ export const api = {
   clipboardGet: () => invoke<{ paths: string[]; cut: boolean; virtualFiles: boolean }>("clipboard_get"),
   clipboardClear: () => invoke<void>("clipboard_clear"),
   clipboardStageVirtual: () => invoke<string[]>("clipboard_stage_virtual"),
+  /** Icon collections: what can be installed (with sizes), an installed one's icons, a look over the network, and removing. */
+  iconPacksList: () => invoke<PackList>("icon_packs_list"),
+  iconPackRead: (id: string) => invoke<string>("icon_pack_read", { id }),
+  iconPackPreview: (id: string, query: string, count: number) => invoke<{ pack: string; total: number }>("icon_pack_preview", { id, query, count }),
+  iconPackInstall: (id: string) => invoke<PackList>("icon_pack_install", { id }),
+  iconPackRemove: (id: string) => invoke<PackList>("icon_pack_remove", { id }),
+  iconPacksClear: () => invoke<PackList>("icon_packs_clear"),
   /** Start the system drag with these files, to drop them into another program. */
   dragOut: (paths: string[]) => invoke<void>("drag_out", { paths }),
   crashReport: (kind: string, message: string) => invoke<void>("crash_report", { kind, message }),
@@ -907,6 +919,7 @@ export const api = {
   /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */
   openItem: (path: string) => invoke<string | null>("open_item", { path }),
   openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
+  installedApps: (path: string) => invoke<OpenApp[]>("installed_apps", { path }),
   openWithApp: (path: string, app: string, always: boolean) => invoke<void>("open_with_app", { path, app, always }),
   openSystemChooser: (path: string) => invoke<void>("open_system_chooser", { path }),
   openTerminal: (path: string, mode: TerminalMode, shell?: string, loginShell?: string) => invoke<void>("open_terminal", { path, mode, shell: shell ?? null, loginShell: loginShell ?? null }),

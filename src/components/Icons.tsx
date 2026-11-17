@@ -5,7 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useStore } from "../store";
 import { fileTypeOf } from "../util/fileTypes";
 import { FLUENT } from "./fluentIcons";
-import { ICONS_KEY, iconMap, pick, type IconChoice } from "../util/customIcons";
+import { ICONS_KEY, iconMap, pick, safeSvg, type IconChoice } from "../util/customIcons";
 
 /** The names of the app's own icons, for choosing one in place of another. */
 export const iconNames = (): string[] => Object.keys(PATHS);
@@ -79,6 +79,13 @@ const PATHS: Record<string, string> = {
   usb: "M8 14V3M8 3 6.5 4.5M8 3l1.5 1.5M8 9.5 5 8V6.5M8 11.5l3-1.5V8.5M4 5h2v1.5H4zM10 7h2v1.5h-2z",
 };
 
+/** An icon from an icon pack, drawn in the text color. Only SVG that passed `safeSvg` is ever kept, and it is checked again here. */
+function InlineSvg({ svg, size, className, slot, kind, style }: { svg: string; size: number; className: string; slot?: string; kind?: string; style?: CSSProperties }) {
+  const clean = safeSvg(svg);
+  if (!clean) return null;
+  return <span className={className} data-custom data-icon-slot={slot} data-kind={kind} aria-hidden="true" style={{ display: "inline-flex", width: size, height: size, fontSize: size, flex: "none", lineHeight: 0, ...style }} dangerouslySetInnerHTML={{ __html: clean }} />;
+}
+
 /**
  * `slot` is the icon's own place for a change of icon (a drive has one each); without it the icon is changed along with
  * every other use of the same name. `plain` ignores any change, for showing what the choices look like.
@@ -90,6 +97,7 @@ export function Icon({ name, size = 16, style, slot, plain }: { name: string; si
   if (choice && "img" in choice) {
     return <img className="icon" data-custom data-icon-slot={mark} src={choice.img} width={size} height={size} style={{ objectFit: "contain", ...style }} alt="" draggable={false} />;
   }
+  if (choice && "svg" in choice) return <InlineSvg svg={choice.svg} size={size} className="icon" slot={mark} style={style} />;
   return <Glyph name={choice ? choice.app : name} size={size} style={style} mark={mark} />;
 }
 
@@ -183,6 +191,7 @@ export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?:
   const slot = place ? `place:${place}` : `kind:${kind}`;
   const choice = useIconChoice(slot);
   if (choice) {
+    if ("svg" in choice) return <InlineSvg svg={choice.svg} size={size} className="file-icon" slot={slot} kind={kind} />;
     return "img" in choice ? (
       <img className="file-icon" data-custom data-icon-slot={slot} data-kind={kind} src={choice.img} width={size} height={size} style={{ objectFit: "contain" }} alt="" draggable={false} />
     ) : (

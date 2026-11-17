@@ -2031,6 +2031,12 @@ pub async fn open_choices(path: String) -> CmdResult<fast_core::openwith::Choice
     blocking(move || Ok(fast_core::openwith::choices(Path::new(&path)))).await
 }
 
+/// Every program on this computer that could be chosen to open a file, by name.
+#[tauri::command]
+pub async fn installed_apps(path: String) -> CmdResult<Vec<fast_core::openwith::App>> {
+    blocking(move || Ok(fast_core::openwith::installed_apps(Path::new(&path)))).await
+}
+
 /// Open a file with a chosen program; `always` makes it the default where the system allows.
 #[tauri::command]
 pub async fn open_with_app(state: State<'_, Shared>, path: String, app: String, always: bool) -> CmdResult<()> {
@@ -2781,6 +2787,7 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
         let (history_bytes, _) = disk_footprint(&st.paths.history);
         let (predict_bytes, _) = disk_footprint(&st.paths.predictor);
         let (scratch_bytes, scratch_items) = disk_footprint(&st.paths.scratch);
+        let (icon_bytes, icon_files) = fast_core::iconpacks::footprint(&st.paths.icon_packs);
         let crash_logs = fast_core::crashlog::list(&st.paths.crash);
         let idx = st.index.read().clone();
         let history = st.history.lock().info(&st.paths.history);
@@ -2818,6 +2825,15 @@ pub async fn cache_usage(state: State<'_, Shared>) -> CmdResult<Vec<CacheEntry>>
                 disk_bytes: 0,
                 memory_bytes: listing_mem,
                 items: listing_items,
+                rebuildable: true,
+            },
+            CacheEntry {
+                id: "iconpacks",
+                label: "Icon collections",
+                description: "Extra icon sets you installed for the icon picker. Icons already chosen keep working; a collection can be downloaded again. Not removed by \"Clear every cache\".",
+                disk_bytes: icon_bytes,
+                memory_bytes: 0,
+                items: icon_files,
                 rebuildable: true,
             },
             CacheEntry {
@@ -2988,6 +3004,9 @@ pub async fn clear_cache(app: AppHandle, state: State<'_, Shared>, id: String) -
         }
         if wants("hardware") {
             let _ = std::fs::remove_file(&st.paths.hardware);
+        }
+        if id == "iconpacks" {
+            fast_core::iconpacks::clear(&st.paths.icon_packs);
         }
         if id == "crashlogs" {
             fast_core::crashlog::clear(&st.paths.crash);

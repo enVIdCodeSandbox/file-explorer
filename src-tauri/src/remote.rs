@@ -1064,3 +1064,52 @@ pub async fn archive_stage(state: State<'_, Shared>, sources: Vec<String>) -> Cm
     })
     .await
 }
+
+/// Fetch items from a server or phone into real files, so they can go on the system clipboard and be pasted in other
+/// programs. Each item gets its own folder (like `archive_stage`), and the job's result lists the files, one per line.
+#[tauri::command]
+pub async fn remote_stage_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>) -> CmdResult<u64> {
+    let st = state.inner().clone();
+    if sources.is_empty() || sources.iter().any(|s| !remote::is_remote(s)) {
+        return Err("Only items on a server or phone can be fetched this way.".into());
+    }
+    let first = base_name(&sources[0]);
+    let n = sources.len() as u64;
+    let method = fast_core::meter::server_method(&[sources[0].as_str(), ""]);
+    let st2 = st.clone();
+    spawn_job(app, st, "stage", method, n, first, move |rep| {
+        let st = st2;
+        let root = st.paths.remote_tmp.clone();
+        sweep_staging(&root, "clip-", Some(std::time::Duration::from_secs(6 * 3600)));
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let stage = root.join(format!("clip-{stamp}-{}", rep.id));
+        let done = AtomicU64::new(0);
+        let total = AtomicU64::new(0);
+        let current = parking_lot::Mutex::new(String::new());
+        let on_bytes = |n: u64| {
+            let d = done.fetch_add(n, Ordering::Relaxed) + n;
+            rep.running((0, 0), (d, total.load(Ordering::Relaxed)), &current.lock());
+        };
+        let ctl = Control { cancel: &rep.cancel, on_bytes: &on_bytes };
+        let mut out = Outcome::default();
+        let mut tally = Tally::default();
+        let mut files: Vec<String> = Vec::new();
+        for (i, s) in sources.iter().enumerate() {
+            let into = stage.join(i.to_string());
+            std::fs::create_dir_all(&into).map_err(err)?;
+            download_all(&st, rep, std::slice::from_ref(s), &into, false, &ctl, &total, &current, &mut tally, &mut out)?;
+            let path = into.join(remote::safe_name(&base_name(s)));
+            if path.exists() {
+                files.push(path.to_string_lossy().into_owned());
+            }
+        }
+        if files.is_empty() && tally.failed.is_empty() && !rep.cancelled() {
+            return Err("Nothing could be fetched.".into());
+        }
+        out.result = files.join("\n");
+        out.items = tally.files;
+        out.bytes = done.load(Ordering::Relaxed);
+        out.failed = tally.failed;
+        Ok(out)
+    })
+}

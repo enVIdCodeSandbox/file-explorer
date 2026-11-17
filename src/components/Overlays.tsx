@@ -166,11 +166,19 @@ export function OpenWithDialog() {
   const info = useStore((st) => st.info);
   const path = request?.path;
   const picking = useStore((st) => !!st.picker);
+  const [view, setView] = useState<"main" | "all">("main");
+  const [all, setAll] = useState<OpenApp[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     setChoices(null);
     setPicked(null);
     setError(null);
+    setView("main");
+    setAll(null);
+    setQuery("");
+    setOffset({ x: 0, y: 0 });
     if (!path) return;
     let alive = true;
     api.openChoices(path).then((c) => {
@@ -180,6 +188,14 @@ export function OpenWithDialog() {
     }).catch((e) => alive && setError(String(e)));
     return () => { alive = false; };
   }, [path]);
+
+  // The list of every installed app is looked up when it is first asked for.
+  useEffect(() => {
+    if (view !== "all" || all || !path) return;
+    let alive = true;
+    api.installedApps(path).then((l) => alive && setAll(l)).catch((e) => alive && (setError(String(e)), setAll([])));
+    return () => { alive = false; };
+  }, [view, all, path]);
 
   // While a program is being chosen in the file view, the dialog steps aside.
   if (!request || !path || picking) return null;
@@ -209,8 +225,8 @@ export function OpenWithDialog() {
   };
 
   const row = (a: OpenApp) => (
-    <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(false)}>
-      {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon"><Icon name="newItem" size={22} /></span>}
+    <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(false)} title={a.id}>
+      {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon" aria-hidden="true">{(a.name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase()}</span>}
       <span className="openwith-name">{a.name}</span>
     </button>
   );
@@ -220,28 +236,62 @@ export function OpenWithDialog() {
       {list.map(row)}
     </section>
   );
+  const shown = (all ?? []).filter((a) => !query.trim() || a.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const nothing = choices && !choices.default && !choices.suggested.length && !choices.general.length;
+
+  // The window is moved by its title bar, like any other, and has a close button of its own.
+  const startMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const [sx, sy, ox, oy] = [e.clientX, e.clientY, offset.x, offset.y];
+    const box = el.parentElement!.getBoundingClientRect();
+    // Keep the whole window on the screen.
+    const limitX = Math.max(0, (window.innerWidth - box.width) / 2);
+    const limitY = Math.max(0, (window.innerHeight - box.height) / 2);
+    const move = (ev: PointerEvent) => setOffset({ x: Math.max(-limitX, Math.min(limitX, ox + ev.clientX - sx)), y: Math.max(-limitY, Math.min(limitY, oy + ev.clientY - sy)) });
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  };
 
   return (
-    <div className="modal-backdrop" onMouseDown={close}>
-      <div className="dialog openwith-dialog" role="dialog" aria-modal="true" aria-label="Open with" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => (e.key === "Escape" && close(), e.stopPropagation())}>
-        <h3>Choose an app to open this {label}</h3>
+    <div className="modal-backdrop">
+      <div className="dialog openwith-dialog" role="dialog" aria-modal="true" aria-label="Open with" style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }} onKeyDown={(e) => (e.key === "Escape" && close(), e.stopPropagation())}>
+        <div className="openwith-titlebar" onPointerDown={startMove} onDoubleClick={() => setOffset({ x: 0, y: 0 })} title="Drag to move">
+          <span className="openwith-titlebar-text">Open with</span>
+          <button className="icon-button" aria-label="Close" title="Close (Esc)" onClick={close}><Icon name="close" size={14} /></button>
+        </div>
+        <h3>{view === "all" ? "All apps on this computer" : `Choose an app to open this ${label}`}</h3>
         <p className="openwith-why">
           <strong title={path}>{name}</strong>
           {request.reason ? ` — ${request.reason}` : ""}
         </p>
+        {view === "all" && (
+          <div className="openwith-search">
+            <input className="text-input" autoFocus placeholder="Search apps" aria-label="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} />
+          </div>
+        )}
         <div className="openwith-list">
-          {!choices && !error && <div className="muted" style={{ padding: 12 }}>Looking for apps…</div>}
-          {choices && (
+          {view === "main" && !choices && !error && <div className="muted" style={{ padding: 12 }}>Looking for apps…</div>}
+          {view === "main" && choices && (
             <>
               {group("Default app", choices.default ? [choices.default] : [])}
-              {group("Suggested apps", choices.suggested)}
-              {group("More options", choices.others)}
-              {!choices.default && !choices.suggested.length && !choices.others.length && <div className="muted" style={{ padding: 12 }}>No apps were found on this computer.</div>}
+              {group("Suggested for this file", choices.suggested)}
+              {group("Editors and terminals", choices.general)}
+              {nothing && <div className="muted" style={{ padding: 12 }}>No apps were found for this file. Use “All apps on this computer” or “Find a program”.</div>}
             </>
           )}
+          {view === "all" && !all && !error && <div className="muted" style={{ padding: 12 }}>Looking through the installed apps…</div>}
+          {view === "all" && all && (shown.length ? <section>{shown.map(row)}</section> : <div className="muted" style={{ padding: 12 }}>{query ? "No app has that name." : "No apps were found."}</div>)}
         </div>
         {error && <div className="openwith-error" role="alert">{error}</div>}
         <div className="openwith-footer">
+          {view === "main" ? <button className="secondary" onClick={() => setView("all")} disabled={busy}>All apps on this computer…</button> : <button className="secondary" onClick={() => setView("main")} disabled={busy}>Back</button>}
           <button className="secondary" onClick={() => void browse()} disabled={busy}>Find a program…</button>
           <span className="grow" />
           <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>

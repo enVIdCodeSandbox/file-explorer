@@ -35,6 +35,8 @@ pub struct Choices {
     pub default: Option<App>,
     pub suggested: Vec<App>,
     pub others: Vec<App>,
+    /// Editors and terminals that can open nearly anything (Visual Studio Code, Notepad, PowerShell...), best first.
+    pub general: Vec<App>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -420,7 +422,7 @@ mod platform {
             let app = app_of(&e, fits || suggested.len() + others.len() < 60);
             if fits { suggested.push(app) } else { others.push(app) }
         }
-        Choices { extension: extension_of(path), default: default_entry.map(|e| app_of(&e, true)), suggested, others }
+        Choices { extension: extension_of(path), default: default_entry.map(|e| app_of(&e, true)), suggested, others, general: vec![] }
     }
 
     /// Expand a desktop entry's Exec line for one file.
@@ -627,7 +629,7 @@ mod platform {
         }
         others.sort_by_key(|a| a.name.to_lowercase());
         let default = prog_id(&ext).and_then(|p| open_command(&p)).and_then(|c| split_command(&expand_env(&c)).into_iter().next()).filter(|e| Path::new(e).is_file()).map(|e| app_from_exe(&e, None));
-        Choices { extension: ext, default, suggested, others }
+        Choices { extension: ext, default, suggested, others, general: vec![] }
     }
 
     /// Programs that say they can open `ext`: each entry under RegisteredApplications points
@@ -665,7 +667,46 @@ mod platform {
             .filter(|p| Path::new(p).is_file())
     }
 
+    /// A command prompt, PowerShell or Windows Terminal chosen for a file opens a new console in its folder and runs
+    /// the file there (a folder is just opened in it).
+    fn in_shell(path: &Path, id: &str) -> Option<Result<()>> {
+        use std::os::windows::process::CommandExt;
+        const NEW_CONSOLE: u32 = 0x0000_0010;
+        let stem = Path::new(id).file_stem()?.to_string_lossy().to_lowercase();
+        let dir = if path.is_dir() { path } else { path.parent()? };
+        let full = path.to_string_lossy().into_owned();
+        let quoted = full.replace('\'', "''");
+        let ps_command = format!("& '{quoted}'");
+        let mut cmd = Command::new(id);
+        cmd.current_dir(dir);
+        match stem.as_str() {
+            "cmd" => {
+                cmd.creation_flags(NEW_CONSOLE);
+                if !path.is_dir() {
+                    cmd.raw_arg(format!("/K \"\"{full}\"\""));
+                }
+            }
+            "powershell" | "pwsh" => {
+                cmd.creation_flags(NEW_CONSOLE).arg("-NoExit");
+                if !path.is_dir() {
+                    cmd.arg("-Command").arg(&ps_command);
+                }
+            }
+            "wt" => {
+                cmd.arg("-d").arg(dir);
+                if !path.is_dir() {
+                    cmd.args(["powershell", "-NoExit", "-Command"]).arg(&ps_command);
+                }
+            }
+            _ => return None,
+        }
+        Some(cmd.spawn().map(|_| ()).map_err(|e| CoreError::io(Path::new(id), e)))
+    }
+
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
+        if let Some(done) = in_shell(path, id) {
+            return done;
+        }
         Command::new(id).arg(path).spawn().map(|_| ()).map_err(|e| CoreError::io(Path::new(id), e))
     }
 
@@ -706,7 +747,7 @@ mod platform {
             }
         }
         apps.sort_by_key(|a| a.name.to_lowercase());
-        Choices { extension: extension_of(path), default: None, suggested: vec![], others: apps }
+        Choices { extension: extension_of(path), default: None, suggested: vec![], others: apps, general: vec![] }
     }
 
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
@@ -732,7 +773,227 @@ mod platform {
     }
 }
 
-pub use platform::{check, choices, open_with};
+pub use platform::{check, open_with};
+
+/// The programs that could open a file, with readable names, the system's helper programs left out, and the editors
+/// and terminals that suit any file picked out.
+pub fn choices(path: &Path) -> Choices {
+    refine(platform::choices(path))
+}
+
+/// Every program on this computer that could be chosen, by name (Windows: the Start menu's programs; elsewhere the
+/// programs the system lists), without helper programs, once each.
+pub fn installed_apps(path: &Path) -> Vec<App> {
+    let raw = platform::choices(path);
+    let mut all = start_menu_apps();
+    all.extend(extras());
+    all.extend(raw.default);
+    all.extend(raw.suggested);
+    all.extend(raw.others);
+    tidy_list(all)
+}
+
+// ---- Readable names, helpers left out, programs for any file ----------------------------------------------
+
+/// Program names (lower case, without ".exe") and the names to show for them.
+const FRIENDLY: &[(&str, &str)] = &[
+    ("devenv", "Visual Studio"),
+    ("code", "Visual Studio Code"),
+    ("code - insiders", "Visual Studio Code Insiders"),
+    ("vscodium", "VSCodium"),
+    ("cursor", "Cursor"),
+    ("windsurf", "Windsurf"),
+    ("zed", "Zed"),
+    ("notepad++", "Notepad++"),
+    ("notepad", "Notepad"),
+    ("sublime_text", "Sublime Text"),
+    ("subl", "Sublime Text"),
+    ("powershell", "Windows PowerShell"),
+    ("pwsh", "PowerShell 7"),
+    ("cmd", "Command Prompt"),
+    ("wt", "Windows Terminal"),
+    ("msedge", "Microsoft Edge"),
+    ("chrome", "Google Chrome"),
+    ("firefox", "Firefox"),
+    ("iexplore", "Internet Explorer"),
+    ("wmplayer", "Windows Media Player"),
+    ("mspaint", "Paint"),
+    ("write", "WordPad"),
+    ("wordpad", "WordPad"),
+    ("winword", "Microsoft Word"),
+    ("excel", "Microsoft Excel"),
+    ("powerpnt", "Microsoft PowerPoint"),
+    ("outlook", "Microsoft Outlook"),
+    ("7zfm", "7-Zip File Manager"),
+    ("acrobat", "Adobe Acrobat"),
+    ("acrord32", "Adobe Acrobat Reader"),
+    ("photoshop", "Adobe Photoshop"),
+    ("illustrator", "Adobe Illustrator"),
+    ("handbrake", "HandBrake"),
+    ("vlc", "VLC media player"),
+    ("subtitleedit", "Subtitle Edit"),
+    ("recuva64", "Recuva"),
+    ("recuva", "Recuva"),
+    ("copilotapp", "Microsoft Copilot"),
+];
+
+fn stem_of(id: &str) -> String {
+    let last = id.rsplit(['/', '\\']).next().unwrap_or(id);
+    let lower = last.to_lowercase();
+    lower.strip_suffix(".exe").or_else(|| lower.strip_suffix(".desktop")).unwrap_or(&lower).to_string()
+}
+
+/// The name to show for a program that is only known by its file name ("devenv" is Visual Studio).
+pub fn friendly(name: &str, id: &str) -> Option<&'static str> {
+    let stem = stem_of(id);
+    if name.to_lowercase().trim_end_matches(".exe") != stem {
+        return None; // it already has a proper name
+    }
+    FRIENDLY.iter().find(|(k, _)| *k == stem).map(|(_, v)| *v)
+}
+
+/// Programs that exist to serve other programs (installers, updaters, agents, shell extensions, diagnostics...) and
+/// are no use for opening a file.
+pub fn is_helper(name: &str, id: &str) -> bool {
+    const WORDS: &[&str] = &["install", "unins", "update", "agent", "shellext", "diag", "licens", "helper", "packaging", "migrat", "crash", "setup", "regsvr", "bootstrap", "elevat", "notifier", "uninstall"];
+    const EXACT: &[&str] = &["wab", "wabmig", "tabtip", "javaws", "acrodist", "acroinfo", "acrobatinfo", "cnmnsst", "iediagcmd", "scanutility", "iexplore", "conhost", "msiexec", "rundll32", "wermgr"];
+    let stem = stem_of(id);
+    let name = name.to_lowercase();
+    EXACT.contains(&stem.as_str()) || EXACT.contains(&name.as_str()) || WORDS.iter().any(|w| name.contains(w) || stem.contains(w))
+}
+
+/// Editors first, then shells and terminals: what people open an unknown file with.
+const GENERAL: &[&str] = &[
+    "code", "visual studio code", "code - insiders", "vscodium", "cursor", "windsurf", "zed", "visual studio", "notepad++", "sublime", "sublime_text", "notepad", "gedit", "gnome-text-editor", "text editor", "kate", "kwrite", "mousepad", "xed", "pluma", "textedit",
+    "geany", "idea", "pycharm", "webstorm", "clion", "rider", "goland", "windows terminal", "wt", "powershell 7", "pwsh", "windows powershell", "powershell", "command prompt", "cmd", "gnome-terminal", "konsole", "xfce4-terminal", "alacritty", "kitty", "iterm", "terminal", "xterm",
+];
+
+/// The programs from `pool` that suit any file, in the order of `GENERAL`, each once.
+pub fn general_apps(pool: &[App]) -> Vec<App> {
+    let mut out: Vec<App> = Vec::new();
+    for keyword in GENERAL {
+        let hit = pool.iter().find(|a| !is_helper(&a.name, &a.id) && (name_matches(&a.name, keyword) || name_matches(&stem_of(&a.id), keyword)));
+        if let Some(app) = hit {
+            if !out.iter().any(|o| o.id.eq_ignore_ascii_case(&app.id) || o.name.eq_ignore_ascii_case(&app.name)) {
+                out.push(app.clone());
+            }
+        }
+    }
+    out.truncate(12);
+    out
+}
+
+fn refine(mut c: Choices) -> Choices {
+    let rename = |a: &mut App| {
+        if let Some(n) = friendly(&a.name, &a.id) {
+            a.name = n.to_string();
+        }
+    };
+    c.default.iter_mut().for_each(rename);
+    c.suggested.iter_mut().for_each(rename);
+    c.others.iter_mut().for_each(rename);
+    c.others.retain(|a| !is_helper(&a.name, &a.id));
+    let mut pool: Vec<App> = extras();
+    pool.extend(c.default.iter().cloned());
+    pool.extend(c.suggested.iter().cloned());
+    pool.extend(c.others.iter().cloned());
+    c.general = general_apps(&pool);
+    c
+}
+
+/// Readable names, no helpers, each program once (by file and by name), sorted by name.
+pub fn tidy_list(all: Vec<App>) -> Vec<App> {
+    let mut seen_id = std::collections::HashSet::new();
+    let mut seen_name = std::collections::HashSet::new();
+    let mut out: Vec<App> = Vec::new();
+    for mut a in all {
+        if let Some(n) = friendly(&a.name, &a.id) {
+            a.name = n.to_string();
+        }
+        if is_helper(&a.name, &a.id) || !seen_id.insert(a.id.to_lowercase()) || !seen_name.insert(a.name.to_lowercase()) {
+            continue;
+        }
+        out.push(a);
+    }
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
+}
+
+/// The Start menu's programs, from the JSON the script prints: `[{"n": "Visual Studio Code", "p": "C:\\...\\Code.exe"}]`.
+pub fn parse_start_menu(json: &str) -> Vec<App> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json.trim().trim_start_matches('\u{feff}')) else { return vec![] };
+    let items = match value {
+        serde_json::Value::Array(a) => a,
+        one @ serde_json::Value::Object(_) => vec![one],
+        _ => vec![],
+    };
+    items
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("n")?.as_str()?.trim();
+            let exe = v.get("p")?.as_str()?.trim();
+            let lower = name.to_lowercase();
+            let skip = ["uninstall", "readme", "release notes", "documentation", "website", "manual", "license", "help", "what's new"].iter().any(|w| lower.contains(w));
+            (!name.is_empty() && !skip && exe.to_lowercase().ends_with(".exe")).then(|| App { id: exe.to_string(), name: name.to_string(), icon_url: None })
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn start_menu_apps() -> Vec<App> {
+    use std::process::Command;
+    const SCRIPT: &str = r#"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+$ErrorActionPreference='SilentlyContinue'
+$sh=New-Object -ComObject WScript.Shell
+$dirs=@("$env:ProgramData\Microsoft\Windows\Start Menu\Programs","$env:APPDATA\Microsoft\Windows\Start Menu\Programs")
+$r=foreach($d in $dirs){ Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk | ForEach-Object { $t=$sh.CreateShortcut($_.FullName).TargetPath; if($t -like '*.exe'){ [pscustomobject]@{n=$_.BaseName;p=$t} } } }
+ConvertTo-Json -InputObject @($r) -Compress"#;
+    let out = crate::proc::quiet(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])).output();
+    match out {
+        Ok(o) if o.status.success() => parse_start_menu(&String::from_utf8_lossy(&o.stdout)).into_iter().filter(|a| Path::new(&a.id).is_file()).collect(),
+        _ => vec![],
+    }
+}
+
+#[cfg(not(windows))]
+fn start_menu_apps() -> Vec<App> {
+    vec![]
+}
+
+/// Programs that are usually there on Windows and may not be registered anywhere a search finds them.
+#[cfg(windows)]
+fn extras() -> Vec<App> {
+    let env = |k: &str| std::env::var(k).ok();
+    let mut found: Vec<(String, &str)> = Vec::new();
+    if let Some(sys) = env("SystemRoot") {
+        found.push((format!(r"{sys}\System32\notepad.exe"), "Notepad"));
+        found.push((format!(r"{sys}\System32\cmd.exe"), "Command Prompt"));
+        found.push((format!(r"{sys}\System32\WindowsPowerShell\v1.0\powershell.exe"), "Windows PowerShell"));
+        found.push((format!(r"{sys}\System32\mspaint.exe"), "Paint"));
+    }
+    for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(pf) = env(var) {
+            found.push((format!(r"{pf}\PowerShell\7\pwsh.exe"), "PowerShell 7"));
+            found.push((format!(r"{pf}\Notepad++\notepad++.exe"), "Notepad++"));
+            found.push((format!(r"{pf}\Sublime Text\sublime_text.exe"), "Sublime Text"));
+            found.push((format!(r"{pf}\Microsoft VS Code\Code.exe"), "Visual Studio Code"));
+        }
+    }
+    if let Some(l) = env("LOCALAPPDATA") {
+        found.push((format!(r"{l}\Programs\Microsoft VS Code\Code.exe"), "Visual Studio Code"));
+        found.push((format!(r"{l}\Programs\Microsoft VS Code Insiders\Code - Insiders.exe"), "Visual Studio Code Insiders"));
+        found.push((format!(r"{l}\Programs\VSCodium\VSCodium.exe"), "VSCodium"));
+        found.push((format!(r"{l}\Programs\cursor\Cursor.exe"), "Cursor"));
+        found.push((format!(r"{l}\Programs\Windsurf\Windsurf.exe"), "Windsurf"));
+        found.push((format!(r"{l}\Microsoft\WindowsApps\wt.exe"), "Windows Terminal"));
+    }
+    found.into_iter().filter(|(p, _)| Path::new(p).is_file()).map(|(id, name)| App { id, name: name.to_string(), icon_url: None }).collect()
+}
+
+#[cfg(not(windows))]
+fn extras() -> Vec<App> {
+    vec![]
+}
 
 /// The system's own chooser window, where there is one (Windows only).
 #[cfg(windows)]
@@ -785,11 +1046,64 @@ mod tests {
             default: None,
             suggested: vec![],
             others: vec![app("C:\\Tools\\7zFM.exe", "7zFM"), app("C:\\Adobe\\Acrobat.exe", "Acrobat"), app("C:\\g\\chrome.exe", "chrome"), app("C:\\x\\i_view64.exe", "i_view64")],
+            general: vec![],
         };
         // An image viewer beats the browser, and archivers and PDF readers are not offered.
         assert_eq!(likely_app(&choices).map(|a| a.name), Some("i_view64".into()));
-        let only_junk = Choices { extension: ".png".into(), default: None, suggested: vec![], others: vec![app("a", "7zFM"), app("b", "Acrobat")] };
+        let only_junk = Choices { extension: ".png".into(), default: None, suggested: vec![], others: vec![app("a", "7zFM"), app("b", "Acrobat")], general: vec![] };
         assert_eq!(likely_app(&only_junk), None);
+    }
+
+    #[test]
+    fn raw_program_names_become_readable_and_helpers_go() {
+        assert_eq!(friendly("devenv", r"C:\VS\devenv.exe"), Some("Visual Studio"));
+        assert_eq!(friendly("msedge", r"C:\E\msedge.exe"), Some("Microsoft Edge"));
+        assert_eq!(friendly("Visual Studio Code", r"C:\x\Code.exe"), None);
+        for junk in ["IEDIAGCMD", "licensemanagershellext", "ShellMcpServers.Packaging", "UnifiedPluginInstallerAgent", "wabmig", "TabTip", "CNMNSST", "SCANUTILITY", "javaws", "Acrodist", "AcrobatInfo"] {
+            assert!(is_helper(junk, &format!(r"C:\x\{junk}.exe")), "{junk}");
+        }
+        for fine in ["Visual Studio Code", "Notepad++", "VLC media player", "HandBrake", "Adobe Photoshop", "Windows Terminal"] {
+            assert!(!is_helper(fine, &format!(r"C:\x\{fine}.exe")), "{fine}");
+        }
+    }
+
+    #[test]
+    fn editors_and_terminals_are_picked_out_in_order() {
+        let pool = vec![
+            app(r"C:\x\vlc.exe", "VLC media player"),
+            app(r"C:\s\cmd.exe", "Command Prompt"),
+            app(r"C:\s\powershell.exe", "Windows PowerShell"),
+            app(r"C:\s\notepad.exe", "Notepad"),
+            app(r"C:\p\Code.exe", "Visual Studio Code"),
+            app(r"C:\n\notepad++.exe", "Notepad++"),
+            app(r"C:\v\vs_installer.exe", "Visual Studio Installer"),
+        ];
+        let names: Vec<String> = general_apps(&pool).into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["Visual Studio Code", "Notepad++", "Notepad", "Windows PowerShell", "Command Prompt"]);
+    }
+
+    #[test]
+    fn the_installed_list_is_clean_and_has_each_program_once() {
+        let list = tidy_list(vec![
+            app(r"C:\a\Code.exe", "Visual Studio Code"),
+            app(r"C:\A\code.exe", "code"),
+            app(r"C:\b\devenv.exe", "devenv"),
+            app(r"C:\c\setup.exe", "setup"),
+            app(r"C:\d\vlc.exe", "VLC media player"),
+        ]);
+        let names: Vec<&str> = list.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Visual Studio", "Visual Studio Code", "VLC media player"]);
+    }
+
+    #[test]
+    fn reads_the_start_menu_script_output() {
+        let json = "\u{feff}[{\"n\":\"Visual Studio Code\",\"p\":\"C:\\\\Code.exe\"},{\"n\":\"Uninstall X\",\"p\":\"C:\\\\u.exe\"},{\"n\":\"Docs\",\"p\":\"C:\\\\readme.txt\"}]";
+        let apps = parse_start_menu(json);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Visual Studio Code");
+        let one = parse_start_menu("{\"n\":\"HandBrake\",\"p\":\"C:\\\\hb.exe\"}");
+        assert_eq!(one.len(), 1);
+        assert!(parse_start_menu("").is_empty() && parse_start_menu("not json").is_empty() && parse_start_menu("[]").is_empty());
     }
 
     #[test]
@@ -805,9 +1119,9 @@ mod tests {
 
     #[test]
     fn the_system_suggestion_is_used_when_the_table_has_no_opinion() {
-        let c = Choices { extension: ".weird".into(), default: None, suggested: vec![app("x.desktop", "Weird Viewer")], others: vec![app("y.desktop", "Other")] };
+        let c = Choices { extension: ".weird".into(), default: None, suggested: vec![app("x.desktop", "Weird Viewer")], others: vec![app("y.desktop", "Other")], general: vec![] };
         assert_eq!(likely_app(&c).map(|a| a.name), Some("Weird Viewer".into()));
-        let none = Choices { extension: "".into(), default: None, suggested: vec![app("x", "X")], others: vec![] };
+        let none = Choices { extension: "".into(), default: None, suggested: vec![app("x", "X")], others: vec![], general: vec![] };
         assert_eq!(likely_app(&none), None);
     }
 

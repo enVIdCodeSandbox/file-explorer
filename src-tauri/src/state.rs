@@ -58,6 +58,8 @@ pub struct Paths {
     pub terminal: PathBuf,
     /// Crash reports (plain text) and the running trail.
     pub crash: PathBuf,
+    /// Icon collections the person installed (one small file each); downloaded again on request.
+    pub icon_packs: PathBuf,
 }
 
 impl Paths {
@@ -84,6 +86,7 @@ impl Paths {
             update_state: config.join("update-state.json"),
             terminal: config.join("terminal"),
             crash: config.join("crash-logs"),
+            icon_packs: cache.join("icon-packs"),
         }
     }
 }

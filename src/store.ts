@@ -39,6 +39,8 @@ import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/f
 import { flushBoot, readBoot, writeBoot, type Boot } from "./util/bootCache";
 import { HOME, THIS_PC, trashLabel, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
 import { moveGroupBlock } from "./util/tabs";
+import { resetSize, zoomBy, type ZoomState } from "./util/viewZoom";
+import { viewLevelOf } from "./util/viewLevel";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
 import { isFiltering } from "./util/filter";
@@ -376,6 +378,8 @@ interface State {
   setColumns: (set: ColumnSet, scope: "here" | "all") => void;
   setFilter: (patch: Partial<FilterState> | null) => void;
   setViewLevel: (level: number) => void;
+  /** Zoom the folder view: bigger or smaller rows first, then on to the next kind of view. 0 puts the view in use back to its usual size. */
+  zoomView: (steps: number) => void;
   refreshFrequent: () => void;
   pushUndo: (a: UndoAction) => void;
   startTransfer: (sources: string[], destDir: string, op: TransferOp) => Promise<void>;
@@ -1032,15 +1036,32 @@ export const useStore = create<State>((set, get) => ({
     // inside an archive are unpacked first, so what other programs get are real files.
     if (clipboard?.paths.length) {
       const paths = clipboard.paths;
+      const staged = (list: string[]) => {
+        if (get().clipboard !== clipboard) return; // something newer was copied meanwhile
+        stagedClip = list;
+        return api.clipboardSetFiles(list);
+      };
       if (paths.every(isArchiveLoc)) {
-        void api
-          .archiveStage(paths)
-          .then((staged) => {
-            if (get().clipboard !== clipboard) return; // something newer was copied meanwhile
-            stagedClip = staged;
-            return api.clipboardSetFiles(staged);
-          })
-          .catch(() => {});
+        // The clipboard holds nothing of the earlier copy while these are unpacked, or a paste here would take that.
+        void api.clipboardClear().catch(() => {});
+        void api.archiveStage(paths).then(staged).catch(() => {});
+      } else if (paths.every(isRemote)) {
+        // From a server or a phone: fetched in the background (a job that can be stopped), then put on the clipboard.
+        void api.clipboardClear().catch(() => {});
+        if (adv<boolean>(get().settings, "clipboard.stageRemote")) {
+          void api
+            .remoteStageStart(paths)
+            .then((id) => {
+              pendingClips.set(id, clipboard);
+              // A very small job can end before its id was known here.
+              const early = earlyStages.get(id);
+              if (early) {
+                earlyStages.delete(id);
+                stagedForClipboard(early);
+              }
+            })
+            .catch((e) => get().showToast(friendlyRemoteError(e)));
+        }
       } else void api.clipboardSetFiles(paths).catch(() => {});
     }
     if (clipboard && clipboard.paths.length) get().notify(clipboard.op === "move" ? "cut" : "copy", `${clipboard.op === "move" ? "Cut" : "Copied"} ${describeItems(clipboard.paths)}`, "Ready to paste", itemFacts(clipboard.op === "move" ? "Cut (moves when pasted)" : "Copy", clipboard.paths, [["Status", "Ready to paste"]]));
@@ -1351,6 +1372,19 @@ export const useStore = create<State>((set, get) => ({
     }
     if (next === get().settings?.appearance.viewLevel) return;
     get().updateSettings((s) => void (s.appearance.viewLevel = next));
+  },
+
+  zoomView: (steps) => {
+    const s = get();
+    const now: ZoomState = { level: viewLevelOf(s.settings, s.folderView), details: adv<number>(s.settings, "view.zoomDetails"), list: adv<number>(s.settings, "view.zoomList") };
+    const next = steps === 0 ? resetSize(now) : zoomBy(now, steps, VIEW_LEVELS.length - 1);
+    if (next.details !== now.details || next.list !== now.list) {
+      s.updateSettings((x) => {
+        x.advanced["view.zoomDetails"] = next.details;
+        x.advanced["view.zoomList"] = next.list;
+      });
+    }
+    if (next.level !== now.level) get().setViewLevel(next.level);
   },
 
   refreshFrequent: () => {
@@ -2190,6 +2224,10 @@ function archiveFinished(p: DeleteProgress) {
 /** Server jobs that are running, by job id. */
 /** Where the items copied from inside an archive were unpacked for the system clipboard. */
 let stagedClip: string[] = [];
+/** Server or phone items being fetched for the clipboard, by job id, with the copy they belong to. */
+/** Stage jobs that ended before the copy they belong to was known. */
+const earlyStages = new Map<number, DeleteProgress>();
+const pendingClips = new Map<number, { paths: string[]; op: "copy" | "move" }>();
 const remoteJobs = new Map<number, { op: "copy" | "move" }>();
 
 /** Tell every open server folder to read its listing again. */
@@ -2236,11 +2274,34 @@ async function deleteOnServer(paths: string[]): Promise<boolean> {
   }
 }
 
+/** Items from a server or phone were fetched for the clipboard: put the files there, unless a newer copy replaced them. */
+function stagedForClipboard(p: DeleteProgress) {
+  const s = useStore.getState();
+  const mine = pendingClips.get(p.id);
+  if (!mine) {
+    earlyStages.set(p.id, p);
+    if (earlyStages.size > 20) earlyStages.delete(earlyStages.keys().next().value as number);
+    return;
+  }
+  pendingClips.delete(p.id);
+  if (s.clipboard !== mine) return;
+  if (p.phase === "cancelled") return s.showToast("Stopped. Paste here still works; other programs will not get these files.");
+  if (p.phase === "failed") return s.notify("error", "Could not get the files ready to paste in other programs", friendlyRemoteError(p.errors[0]?.message ?? ""));
+  const files = (p.result ?? "").split("\n").filter(Boolean);
+  if (!files.length) return;
+  stagedClip = files;
+  void api.clipboardSetFiles(files).then(
+    () => s.showToast("Ready to paste in other programs too."),
+    () => {},
+  );
+}
+
 /** An upload, download or delete on a server ended. */
 function remoteFinished(p: DeleteProgress) {
   const s = useStore.getState();
   const job = remoteJobs.get(p.id);
   remoteJobs.delete(p.id);
+  if (p.action === "stage") return stagedForClipboard(p);
   refreshRemoteTabs();
   refreshArchiveTabs();
   const name = p.selected === 1 && p.firstName ? `"${p.firstName}"` : `${p.selected} items`;

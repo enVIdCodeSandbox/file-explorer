@@ -40,6 +40,7 @@ function Panel({
   y,
   depth,
   onClose,
+  closeAll,
   anchorLeft,
 }: {
   items: MenuItem[];
@@ -47,6 +48,8 @@ function Panel({
   y: number;
   depth: number;
   onClose: () => void;
+  /** Closes the whole menu, for when an entry in a submenu is chosen (defaults to `onClose`). */
+  closeAll?: () => void;
   /** Where to flip to if there is no room on the right (the parent's left edge). */
   anchorLeft?: number;
 }) {
@@ -118,7 +121,7 @@ function Panel({
               onMouseOver={(e) => item.children && e.target === e.currentTarget && openChild(item, e.currentTarget, 0)}
               onClick={(e) => {
                 if (item.children) return openChild(item, e.currentTarget, 0);
-                onClose();
+                (closeAll ?? onClose)();
                 item.run?.();
               }}
             >
@@ -139,7 +142,7 @@ function Panel({
         ))}
       </div>
       {active && active.children && (
-        <Panel items={active.children} x={open.right - 2} y={open.top} depth={depth + 1} onClose={() => setOpen(null)} anchorLeft={open.left} />
+        <Panel items={active.children} x={open.right - 2} y={open.top} depth={depth + 1} onClose={() => setOpen(null)} closeAll={closeAll ?? onClose} anchorLeft={open.left} />
       )}
     </>
   );

@@ -6,6 +6,7 @@
 
 pub mod archive;
 pub mod fonts;
+pub mod iconpacks;
 pub mod proc;
 pub mod tasks;
 pub mod update;

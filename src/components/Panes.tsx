@@ -5,10 +5,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type FileEntry } from "../api";
 import { deletePaths, openFile, useStore } from "../store";
-import { baseName, isArchiveLoc, isRemote, joinPath, parentPath } from "../util/path";
+import { baseName, joinPath, parentPath } from "../util/path";
 import { formatDate, formatSize } from "../util/format";
 import { FileIcon, Icon } from "./Icons";
 import { Thumb } from "./Thumb";
+import { beginDrag } from "../dnd";
+import { PaneTabs } from "./PaneTabs";
+import { cyclePane, focusPane, navigatePane, otherPane, stepPane, useSplit } from "../split/state";
 
 /** The folders from the top down to `path`: C:\, C:\a, C:\a\b. */
 export function ancestors(path: string): string[] {
@@ -45,18 +48,16 @@ function useFolder(path: string | null) {
   return { entries, error, loading: !!path && entries === null };
 }
 
-// ---- The second pane ----------------------------------------------------------------------------------
+// ---- The extra panes ----------------------------------------------------------------------------------
 
-const SECOND_KEY = "fast.secondPane";
-
-export function SecondPane({ leftFolder }: { leftFolder: string }) {
-  const [path, setPath] = useState<string>(() => {
-    try {
-      return localStorage.getItem(SECOND_KEY) || leftFolder;
-    } catch {
-      return leftFolder;
-    }
+/** An extra pane of the split view (slot 1 to 7); the normal file list is slot 0. The folder is the one in its open tab. */
+export function SplitPane({ slot, leftFolder }: { slot: number; leftFolder: string }) {
+  const tab = useSplit((s) => {
+    const p = s.panes[slot];
+    return p ? (p.tabs.find((t) => t.id === p.active) ?? p.tabs[0]) : undefined;
   });
+  const path = tab?.path ?? leftFolder;
+  const tabId = tab?.id ?? "";
   const [typed, setTyped] = useState(path);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -64,17 +65,13 @@ export function SecondPane({ leftFolder }: { leftFolder: string }) {
   const root = useRef<HTMLDivElement>(null);
   const store = useStore.getState;
 
-  const go = useCallback((p: string) => {
-    setPath(p);
-    setTyped(p);
+  // A different tab or folder starts with nothing chosen and the new address in the box.
+  useEffect(() => {
+    setTyped(path);
     setPicked(new Set());
     setAnchor(null);
-    try {
-      localStorage.setItem(SECOND_KEY, p);
-    } catch {
-      /* not saved */
-    }
-  }, []);
+  }, [tabId, path]);
+  const go = useCallback((p: string) => navigatePane(slot, p), [slot]);
   const up = () => {
     const p = parentPath(path);
     if (p) go(p);
@@ -102,15 +99,14 @@ export function SecondPane({ leftFolder }: { leftFolder: string }) {
     }
   };
 
-  const transfer = (op: "copy" | "move", from: "this" | "other") => {
-    const other = (() => {
-      const l = store().tabs.find((t) => t.id === store().activeTab)?.location;
-      return l && !isRemote(l) && !isArchiveLoc(l) ? l : leftFolder;
-    })();
+  // "The other pane" is the one that had the focus before this one (the normal file list to begin with).
+  const target = () => otherPane(slot, leftFolder);
+  const transfer = (op: "copy" | "move", from: "this" | "main") => {
+    const other = target();
     const sources = from === "this" ? chosen : store().selection;
-    const dest = from === "this" ? other : path;
+    const dest = from === "this" ? other.path : path;
     if (!sources.length) {
-      store().showToast(from === "this" ? "Select something in the right pane first." : "Select something in the left pane first.");
+      store().showToast(from === "this" ? "Select something in this pane first." : "Select something in the main file list first.");
       return;
     }
     void store().startTransfer(sources, dest, op);
@@ -135,7 +131,9 @@ export function SecondPane({ leftFolder }: { leftFolder: string }) {
     else if (e.key === "F5") transfer("copy", "this");
     else if (e.key === "F6") transfer("move", "this");
     else if (e.key === "Delete" && chosen.length) void deletePaths(chosen, e.shiftKey).then(() => store().bumpDirs([path]));
-    else if (e.key === "Tab") document.querySelector<HTMLElement>(".file-scroller")?.focus();
+    else if (e.key === "Tab" && !e.ctrlKey) cyclePane(slot, e.shiftKey ? -1 : 1);
+    else if (e.altKey && e.key === "ArrowLeft") stepPane(slot, -1);
+    else if (e.altKey && e.key === "ArrowRight") stepPane(slot, 1);
     else if (e.key === "F3" && entries?.[i] && !entries[i].isDir) store().openViewer(full(entries[i].name), { siblings: entries.filter((x) => !x.isDir).map((x) => full(x.name)) });
     else return;
     e.preventDefault();
@@ -143,25 +141,33 @@ export function SecondPane({ leftFolder }: { leftFolder: string }) {
   };
 
   return (
-    <div ref={root} className="second-pane" tabIndex={0} onKeyDown={onKeyDown} aria-label="Second pane">
+    <div ref={root} className="second-pane" tabIndex={0} data-split-pane={slot} onKeyDown={onKeyDown} onFocusCapture={() => focusPane(slot)} onMouseDownCapture={() => focusPane(slot)} aria-label={`Pane ${slot + 1}`}>
+      <PaneTabs slot={slot} />
       <div className="second-pane-bar">
+        <button className="icon-button" aria-label="Back" title="Back (Alt+Left)" disabled={!tab?.back.length} onClick={() => stepPane(slot, -1)}><Icon name="back" size={14} /></button>
+        <button className="icon-button" aria-label="Forward" title="Forward (Alt+Right)" disabled={!tab?.fwd.length} onClick={() => stepPane(slot, 1)}><Icon name="forward" size={14} /></button>
         <button className="icon-button" aria-label="Up one level" title="Up (Backspace)" disabled={!parentPath(path)} onClick={up}><Icon name="up" size={14} /></button>
-        <input className="text-input second-pane-path" aria-label="Folder of the second pane" value={typed} spellCheck={false} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); go(typed); } else e.stopPropagation(); }} />
-        <button className="icon-button" aria-label="Show the folder of the left pane" title="Same folder as the left pane" onClick={() => go(leftFolder)}>=</button>
-        <button className="icon-button" aria-label="Close the second pane" title="Close the second pane" onClick={() => useStore.getState().updateSettings((s) => void (s.advanced["view.dualPane"] = false))}><Icon name="close" size={14} /></button>
+        <input className="text-input second-pane-path" aria-label={`Folder of pane ${slot + 1}`} value={typed} spellCheck={false} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); go(typed); } else e.stopPropagation(); }} />
+        <button className="icon-button" aria-label="Show the folder of the main file list" title="Same folder as the main file list" onClick={() => go(leftFolder)}>=</button>
       </div>
       <div className="second-pane-actions">
-        <button title="Copy the left pane's selection here" onClick={() => transfer("copy", "other")}>← Copy</button>
-        <button title="Move the left pane's selection here" onClick={() => transfer("move", "other")}>← Move</button>
+        <button title="Copy what is selected in the main file list into this pane's folder" onClick={() => transfer("copy", "main")}>← Copy</button>
+        <button title="Move what is selected in the main file list into this pane's folder" onClick={() => transfer("move", "main")}>← Move</button>
         <span className="grow" />
-        <button title="Copy this pane's selection to the left folder (F5)" onClick={() => transfer("copy", "this")}>Copy →</button>
-        <button title="Move this pane's selection to the left folder (F6)" onClick={() => transfer("move", "this")}>Move →</button>
+        <button title="Copy this pane's selection to the other pane (F5)" onClick={() => transfer("copy", "this")}>Copy →</button>
+        <button title="Move this pane's selection to the other pane (F6)" onClick={() => transfer("move", "this")}>Move →</button>
       </div>
-      <div className="second-pane-list" role="listbox" aria-multiselectable="true" aria-label="Items">
+      <div className="second-pane-list" role="listbox" aria-multiselectable="true" aria-label="Items" data-drop="folder" data-drop-path={path}>
         {loading && <div className="loading-bar" />}
         {error && <div className="empty-state"><span>{error}</span></div>}
         {entries?.map((e) => (
-          <div key={e.name} className="second-pane-row" role="option" aria-selected={picked.has(e.name)} data-selected={picked.has(e.name) || undefined} onClick={(ev) => click(e, ev)} onDoubleClick={() => open(e)}>
+          <div key={e.name} className="second-pane-row" role="option" aria-selected={picked.has(e.name)} data-selected={picked.has(e.name) || undefined} onClick={(ev) => click(e, ev)} onDoubleClick={() => open(e)}
+            data-drop={e.isDir ? "folder" : undefined} data-drop-path={e.isDir ? full(e.name) : undefined}
+            onPointerDown={(ev) => beginDrag(ev, () => {
+              const names = picked.has(e.name) ? [...picked] : [e.name];
+              const items = (entries ?? []).filter((x) => names.includes(x.name));
+              return { paths: items.map((x) => full(x.name)), dirs: items.map((x) => x.isDir), label: items.length === 1 ? items[0].name : `${items.length} items` };
+            })}>
             <FileIcon kind={e.isDir ? "folder" : "file"} name={e.name} size={16} />
             <span className="second-pane-name" title={e.name}>{e.name}</span>
             <span className="muted second-pane-size">{e.isDir ? "" : formatSize(e.size)}</span>

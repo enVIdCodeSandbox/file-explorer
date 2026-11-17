@@ -1,6 +1,7 @@
 //! Tauri shell: wires the UI-agnostic `fast-core` engine to the webview.
 
 mod commands;
+mod iconpacks;
 mod crash;
 mod launch;
 mod native_dnd;
@@ -242,6 +243,13 @@ pub fn run() {
             remote::archive_rename,
             remote::archive_create,
             remote::archive_stage,
+            remote::remote_stage_start,
+            iconpacks::icon_packs_list,
+            iconpacks::icon_pack_read,
+            iconpacks::icon_pack_remove,
+            iconpacks::icon_packs_clear,
+            iconpacks::icon_pack_preview,
+            iconpacks::icon_pack_install,
             remote::remote_remove_start,
             remote::servers_list,
             remote::servers_save,
@@ -339,6 +347,7 @@ pub fn run() {
             commands::create_item,
             commands::open_item,
             commands::open_choices,
+            commands::installed_apps,
             commands::open_with_app,
             commands::open_system_chooser,
             commands::open_terminal,

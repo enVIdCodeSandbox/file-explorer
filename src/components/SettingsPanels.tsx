@@ -111,40 +111,53 @@ export function FontPicker() {
   );
 }
 
+/** A drop-down of fonts: the default, the installed ones (only fixed-width ones when asked) and the imported ones. */
+export function FontSelect({ id, label, value, onChange, fixedWidth, defaultLabel }: { id?: string; label: string; value: string; onChange: (v: string) => void; fixedWidth?: boolean; defaultLabel: string }) {
+  const installed = useInstalledFonts();
+  const { assets } = useAssets("font");
+  const list = installed.filter((f) => !fixedWidth || f.fixedWidth);
+  const known = !value || list.some((f) => f.name === value) || assets.some((a) => `imported:${a.name}` === value);
+  return (
+    <select id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{defaultLabel}</option>
+      {!known && <option value={value}>{value.startsWith("imported:") ? `${value.slice(9)} (missing)` : `${value} (not found on this computer)`}</option>}
+      {assets.length > 0 && (
+        <optgroup label="Imported">
+          {assets.map((a) => (
+            <option key={a.name} value={`imported:${a.name}`}>
+              {a.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {list.length > 0 && (
+        <optgroup label={fixedWidth ? "Installed fixed-width fonts" : "Installed on this computer"}>
+          {list.map((f) => (
+            <option key={f.name} value={f.name}>
+              {f.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
+}
+
 /** A font for each major part of the app, from the installed fonts or the imported ones. */
 export function FontAreasPanel() {
   const installed = useInstalledFonts();
-  const { assets } = useAssets("font");
   const advanced = useStore((s) => s.settings!.advanced);
   const set = (key: string, value: string) => useStore.getState().updateSettings((s) => void (s.advanced = { ...s.advanced, [key]: value }));
   return (
     <div className="font-areas">
-      <p className="muted">Pick from the fonts installed on this computer (type to search), or type a name. Leave a part empty to use the app's font. Parts that show paths and code, and the terminal, need a fixed-width font.</p>
+      <p className="muted">Choose from the fonts installed on this computer, or from the fonts you imported. Parts that show paths and code, and the terminal, list only fixed-width fonts, which keep every letter in a cell of the same size.</p>
       {FONT_AREAS.map((a) => {
         const value = String(advanced?.[a.key] ?? "");
-        const list = `fonts-${a.id}`;
-        const options = installed.filter((f) => !a.fixedWidth || f.fixedWidth);
         const preview = fontStack(value, a.fallback, value.startsWith("imported:") ? importedFamily(value.slice(9)) : null);
         return (
           <div key={a.id} className="font-area">
             <label htmlFor={`font-${a.id}`}>{a.label}</label>
-            <input
-              id={`font-${a.id}`}
-              className="text-input"
-              list={list}
-              value={value}
-              placeholder={a.id === "terminal" || a.id === "mono" ? "Default fixed-width font" : "Same as the app"}
-              onChange={(e) => set(a.key, e.target.value)}
-              spellCheck={false}
-            />
-            <datalist id={list}>
-              {options.map((f) => (
-                <option key={f.name} value={f.name} />
-              ))}
-              {assets.map((x) => (
-                <option key={x.name} value={`imported:${x.name}`} label={`${x.name} (imported)`} />
-              ))}
-            </datalist>
+            <FontSelect id={`font-${a.id}`} label={a.label} value={value} onChange={(v) => set(a.key, v)} fixedWidth={a.fixedWidth} defaultLabel={a.fixedWidth ? "Default fixed-width font" : "Same as the app"} />
             <button className="secondary" disabled={!value} onClick={() => set(a.key, "")}>
               Reset
             </button>
@@ -154,7 +167,7 @@ export function FontAreasPanel() {
           </div>
         );
       })}
-      {installed.length === 0 && <p className="muted">The list of installed fonts is not available here; type the name of a font instead.</p>}
+      {installed.length === 0 && <p className="muted">The list of installed fonts is not available here.</p>}
     </div>
   );
 }
