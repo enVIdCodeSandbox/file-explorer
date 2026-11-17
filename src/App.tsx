@@ -9,6 +9,7 @@ import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { LockDialog } from "./components/Locks";
+import { IconContextMenu, IconPickerDialog } from "./components/IconPicker";
 import { ChooseDetails } from "./components/ChooseDetails";
 import { openTools } from "./components/toolsOpen";
 import { MillerColumns, SecondPane } from "./components/Panes";
@@ -396,6 +397,8 @@ function AppInner() {
             <PropertiesDialog />
             <OpenWithDialog />
             <LockDialog />
+            <IconPickerDialog />
+            <IconContextMenu />
             <ChooseDetails />
             <Part later><Viewer /></Part>
             <Part later><Tools /></Part>
@@ -477,6 +480,8 @@ function AppInner() {
       <PropertiesDialog />
       <OpenWithDialog />
       <LockDialog />
+      <IconPickerDialog />
+      <IconContextMenu />
       <ChooseDetails />
       <Part later><Viewer /></Part>
       <Part later><Tools /></Part>

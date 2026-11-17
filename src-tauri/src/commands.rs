@@ -239,14 +239,40 @@ pub async fn record_visit(state: State<'_, Shared>, from: Option<String>, to: St
     .await
 }
 
-/// The folders opened most often (recent visits weigh more), skipping any
-/// that no longer exist.
+/// The folders opened most often under the person's own rules (how far back, time open against times opened, how many
+/// opens it takes), skipping any that no longer exist.
 #[tauri::command]
-pub async fn frequent_folders(state: State<'_, Shared>, limit: usize) -> CmdResult<Vec<String>> {
+pub async fn frequent_folders(state: State<'_, Shared>, limit: usize, policy: Option<fast_core::predict::FrequentPolicy>) -> CmdResult<Vec<String>> {
     let st = state.inner().clone();
     blocking(move || {
-        let candidates = st.predictor.lock().frequent(limit.saturating_mul(2).max(limit), now_secs());
+        let candidates = st.predictor.lock().frequent_list(limit.saturating_mul(2).max(limit + 10), &policy.unwrap_or_default());
         Ok(candidates.into_iter().filter(|p| Path::new(p).is_dir()).take(limit).collect())
+    })
+    .await
+}
+
+/// Folders dragged into Frequently used: each starts out counting as `count` visits.
+#[tauri::command]
+pub async fn frequent_seed(state: State<'_, Shared>, paths: Vec<String>, count: f64) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let mut p = st.predictor.lock();
+        p.seed(&paths, count);
+        let _ = p.save(&st.paths.predictor);
+        Ok(())
+    })
+    .await
+}
+
+/// Take a folder out of Frequently used; opening it again brings it back.
+#[tauri::command]
+pub async fn frequent_forget(state: State<'_, Shared>, path: String) -> CmdResult<()> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let mut p = st.predictor.lock();
+        p.forget_frequent(&path);
+        let _ = p.save(&st.paths.predictor);
+        Ok(())
     })
     .await
 }
@@ -3462,6 +3488,7 @@ pub async fn open_window(app: AppHandle, state: State<'_, Shared>, location: Str
         .title("FAST File Explorer")
         .inner_size(1100.0, 720.0)
         .min_inner_size(520.0, 360.0)
+        .background_color(crate::theme::for_new_window(&app))
         .initialization_script(&script);
     #[cfg(target_os = "macos")]
     {
@@ -3567,6 +3594,7 @@ fn open_detached(app: &AppHandle, kind: &'static str, title: &str, size: (f64, f
         .inner_size(size.0, size.1)
         .min_inner_size(min.0, min.1)
         .resizable(true)
+        .background_color(crate::theme::for_new_window(app))
         .initialization_script(&format!("window.__VIEW__ = '{kind}';"))
         .build()
         .map_err(err)?;

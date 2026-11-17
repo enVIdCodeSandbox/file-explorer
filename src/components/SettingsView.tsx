@@ -8,6 +8,7 @@ import { Docs } from "./Docs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../api";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { IconsPanel } from "./IconPicker";
 import { SECTIONS, SETTINGS, getSetting, setSetting, type SettingDef } from "../settings/schema";
 import { useStore } from "../store";
 import { adv } from "../settings/advanced";
@@ -133,6 +134,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <DefaultFileManagerPanel />;
     case "updates":
       return <UpdatesPanel />;
+    case "icons":
+      return <IconsPanel />;
     case "methods":
       return <TransferMethodsPanel />;
     case "menuItems": {
@@ -308,7 +311,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             <section key={name}>
               <h3>{t(name)}</h3>
               {defs.map((d) => {
-                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "perfPresets", "uiPresets", "profiles", "resources", "locks", "methods"].includes(d.control.type);
+                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "perfPresets", "uiPresets", "profiles", "resources", "locks", "methods", "icons"].includes(d.control.type);
                 return (
                   <div key={d.key} className="setting" data-wide={wide || undefined} data-setting={d.key}>
                     <div className="setting-text">

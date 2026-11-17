@@ -12,6 +12,7 @@ mod terminal;
 mod tasks;
 mod tools;
 mod update;
+mod theme;
 
 use fast_core::history::History;
 use fast_core::predict::Predictor;
@@ -45,7 +46,17 @@ pub fn run() {
             let config = app.path().app_config_dir()?;
             let cache = app.path().app_cache_dir()?;
             let paths = Paths::new(&config, &cache);
-            // Crash logging first, so even a failure while starting is written down.
+            // Before anything else: paint the window the theme's color and show it, so it never flashes white.
+            let settings = Settings::load(&paths.settings);
+            #[cfg(desktop)]
+            if let Some(w) = app.get_webview_window("main") {
+                let dark = theme::system_dark(&w);
+                let _ = w.set_background_color(Some(theme::background(&settings.appearance.theme, dark)));
+                if !std::env::args().any(|a| a == "--minimized") {
+                    let _ = w.show();
+                }
+            }
+            // Crash logging next, so even a failure while starting is written down.
             let webview = tauri::webview_version().unwrap_or_default();
             fast_core::crashlog::install_panic_hook();
             let earlier = fast_core::crashlog::init(&paths.crash, env!("CARGO_PKG_VERSION"), &webview);
@@ -59,7 +70,6 @@ pub fn run() {
 
             // Only small JSON files are read before the window appears; the
             // index and drive list load on background threads.
-            let settings = Settings::load(&paths.settings);
             let session = Session::load(&paths.session);
             let budget = resources::compute(&settings.performance, &resources::snapshot());
 
@@ -132,6 +142,7 @@ pub fn run() {
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.minimize();
+                    let _ = w.show();
                 }
             }
 
@@ -239,6 +250,8 @@ pub fn run() {
             commands::prefetch,
             commands::record_visit,
             commands::frequent_folders,
+            commands::frequent_seed,
+            commands::frequent_forget,
             commands::get_details,
             commands::folder_stats,
             commands::open_window,

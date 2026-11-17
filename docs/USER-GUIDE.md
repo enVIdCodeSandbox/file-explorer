@@ -6,7 +6,17 @@
 
 **Address bar.** Click the path to type one. The parts of the path are clickable and are also drop targets: drop files on a part to move or copy them there.
 
-**Navigation pane (left).** Sections: Pinned, Frequent, Drives and others. Drag a section heading up or down to reorder the sections. Ctrl+B hides or shows the pane.
+**Navigation pane (left).** Sections: Frequently used, Recents, Pinned, Drives and others. Drag a section heading up or down to reorder the sections. Ctrl+B hides or shows the pane. Click a heading to fold the section; right-click it for its settings (the same ones are in Settings → Navigation pane).
+
+**Frequently used.** Built from the folders you open, by your own rules: how many of your latest navigations count (so a folder you stopped opening drops off; 0 counts everything remembered), how many times a folder must have been opened to be listed, how much of the ranking is time a folder stayed open rather than how often it was opened, and whether the newest navigations count more. A folder dragged onto the section starts out counting as a few opens ("default drag frequency", 3 unless changed) and fades away if you do not open it; folders with the same frequency are sorted by name. Right-click a folder to take it out of the list; opening it again brings it back.
+
+**Recents.** The last folders you opened (or files, or both: your choice, folders by default). Opening one again moves it to the top. Settings: how many entries are kept, rows before it scrolls. Right-click → Clear the list. Frequently used and Recents each have a switch (Settings → Navigation pane) that hides the entries and the heading text.
+
+**Entries in the pane** (frequent folders, recents, pins, drives) have the same right-click menu as in a folder window, including the system's own entries.
+
+**Moving Home, This PC, Recycle Bin, Disk usage and Smart Clear.** Drag any of them into another section, or next to another entry, and they stay there until you drag them out (right-click → Move back to the top). If you hide the section they are in, they are shown at the top until it comes back. Recycle Bin, Disk usage and Smart Clear can be hidden in Settings → Navigation pane.
+
+**Changing icons.** Right-click a drive, a phone or camera, or a saved server and choose Change icon… to give that one (or all of its kind) another of the app's icons or a picture of your own. The same works for the navigation entries and for any other icon in the window (right-click it). A changed icon changes everywhere that icon is used, but icons are changed for a kind of folder or file, never for one folder or file. Settings → Appearance → Icons lists every icon with Change and Reset, and one button puts them all back. Pictures are shrunk to 96 pixels and kept in the settings.
 
 **Pinning.** Drag any folder onto the Pinned heading, or between pinned entries, to pin it. Drag pinned entries to reorder. Right-click works too. The standard folders (Downloads, Documents, Pictures, Music, Videos, Desktop) have their own icons.
 
@@ -302,7 +312,7 @@ Performance presets set this too (the heaviest ones use Gentle, the rest Aggress
 
 ## Starting fast
 
-The window is drawn at once: a plain placeholder in your theme appears before anything loads, and the whole window (tabs, sidebar, folder) is then drawn from a copy of how it was last time, with the real data taking over a moment later. Settings → Advanced → Speed and memory → *Draw the window at once from how it was last time* turns this off (no copy is kept then). The copy never holds the update token. Things nobody waits for (following growing files, the crash trail, the check for a crash last time, start-with-computer, the network check) wait until the first screen is up, and the big list of remembered folder sizes loads in the background.
+The window stays hidden until its first frame is painted in your theme's own background (the saved theme, or your system's light or dark when it follows the system), so there is no white flash before a dark theme. The window is drawn at once: a plain placeholder in your theme appears before anything loads, and the whole window (tabs, sidebar, folder) is then drawn from a copy of how it was last time, with the real data taking over a moment later. Settings → Advanced → Speed and memory → *Draw the window at once from how it was last time* turns this off (no copy is kept then). The copy never holds the update token. Things nobody waits for (following growing files, the crash trail, the check for a crash last time, start-with-computer, the network check) wait until the first screen is up, and the big list of remembered folder sizes loads in the background.
 
 ## Updates
 

@@ -11,12 +11,16 @@
 //  * a folder onto the top or bottom edge of a Pinned row, or onto the Pinned
 //    heading: pin it there. Dragging a pin reorders the pins.
 //  * a section heading onto another: reorder the sections.
+//  * a folder onto the Frequently used section: add it there (it counts as a few opens to begin with).
+//  * Home, This PC, Recycle Bin, Disk usage or Smart Clear onto any section, or next to another of them: it moves
+//    there and stays there.
 
 import { crumb, flushTrail } from "./util/crashTrail";
 import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
 import { baseName, insideArchive, isArchiveLoc, isInside, parentPath } from "./util/path";
+import { isNavId, isZone, moveNav, parseLayout, serializeLayout, SETTING as LAYOUT_KEY, type NavId, type Zone } from "./util/sideLayout";
 
 export interface Mods {
   ctrl: boolean;
@@ -32,6 +36,8 @@ export interface DragPayload {
   pinIndex?: number;
   /** Set when a sidebar section heading is being dragged. */
   section?: string;
+  /** Set when one of the fixed navigation entries (Home, This PC…) is being dragged. */
+  navItem?: NavId;
   /** Short text for the floating label. */
   label: string;
 }
@@ -122,12 +128,32 @@ type Hit =
   | { kind: "pin"; index: number; el: HTMLElement; where: "before" | "after" }
   | { kind: "section"; id: string; el: HTMLElement; where: "before" | "after" }
   | { kind: "tab"; id: string; path: string | null; el: HTMLElement }
+  | { kind: "nav"; id: NavId; el: HTMLElement; where: "before" | "after" }
+  | { kind: "zone"; zone: Zone; el: HTMLElement }
+  | { kind: "frequent"; el: HTMLElement }
   | null;
 
 const marks = ["data-drop-over", "data-insert"];
 const clearMarks = () => marks.forEach((m) => document.querySelectorAll(`[${m}]`).forEach((n) => n.removeAttribute(m)));
 
 function targetAt(x: number, y: number, p: DragPayload): Hit {
+  if (p.navItem) {
+    const nodes = document.elementsFromPoint(x, y);
+    for (const node of nodes) {
+      const el = (node as HTMLElement).closest?.("[data-nav-item]") as HTMLElement | null;
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const id = el.dataset.navItem;
+      if (!isNavId(id) || !r.height) continue;
+      return { kind: "nav", id, el, where: (y - r.top) / r.height < 0.5 ? "before" : "after" };
+    }
+    for (const node of nodes) {
+      const el = (node as HTMLElement).closest?.("[data-nav-zone]") as HTMLElement | null;
+      const zone = el?.dataset.navZone;
+      if (el && isZone(zone)) return { kind: "zone", zone, el };
+    }
+    return null;
+  }
   for (const node of document.elementsFromPoint(x, y)) {
     const el = (node as HTMLElement).closest?.("[data-drop]") as HTMLElement | null;
     if (!el) continue;
@@ -138,6 +164,7 @@ function targetAt(x: number, y: number, p: DragPayload): Hit {
       if (kind === "section") return { kind: "section", id: el.dataset.section!, el, where: rel < 0.5 ? "before" : "after" };
       continue;
     }
+    if (kind === "section" && el.dataset.section === "frequent" && p.pinIndex === undefined) return { kind: "frequent", el };
     if (kind === "pinitem") {
       const index = Number(el.dataset.pinIndex);
       const isFolder = el.dataset.dropPath !== undefined;
@@ -196,6 +223,16 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
     } else if (hit?.kind === "section") {
       verdict = { ok: true, text: "Move section here" };
       hit.el.setAttribute("data-insert", hit.where);
+    } else if (hit?.kind === "nav") {
+      verdict = { ok: true, text: "Move here" };
+      hit.el.setAttribute("data-insert", hit.where);
+    } else if (hit?.kind === "zone") {
+      verdict = { ok: true, text: hit.zone === "top" ? "Move to the top" : `Move into ${SECTION_NAMES[hit.zone] ?? "this section"}` };
+      hit.el.setAttribute("data-drop-over", "");
+    } else if (hit?.kind === "frequent") {
+      const folders = payload.dirs.length > 0 && payload.dirs.every(Boolean);
+      verdict = folders ? { ok: true, text: "Add to Frequently used" } : { ok: false, text: "Only folders can be added" };
+      if (verdict.ok) hit.el.setAttribute("data-drop-over", "");
     }
     if (hit?.kind !== "tab") {
       window.clearTimeout(springTimer);
@@ -310,6 +347,25 @@ async function drop(p: DragPayload, hit: Hit, v: Verdict, _mods: Mods) {
     p.paths.forEach((path, i) => s.pinAt(path, at + i, !p.dirs[i]));
     return;
   }
+  if (hit.kind === "frequent") {
+    const count = Number(s.settings?.advanced?.["frequent.dragCount"] ?? 3);
+    await api.frequentSeed(p.paths, count).catch((e) => s.showToast(String(e)));
+    return s.refreshFrequent();
+  }
+  if ((hit.kind === "nav" || hit.kind === "zone") && p.navItem) {
+    const zone: Zone = hit.kind === "zone" ? hit.zone : zoneOfEl(hit.el);
+    s.updateSettings((st) => {
+      const layout = parseLayout(st.advanced?.[LAYOUT_KEY]);
+      const next = hit.kind === "nav" ? moveNav(layout, p.navItem!, zone, hit.id, hit.where) : moveNav(layout, p.navItem!, zone);
+      st.advanced = { ...st.advanced, [LAYOUT_KEY]: serializeLayout(next) };
+      // A folded section would hide what was just put in it.
+      if (zone !== "top") {
+        const folded = new Set(String(st.advanced?.["sidebar.folded"] ?? "").split(",").filter(Boolean));
+        if (folded.delete(zone)) st.advanced = { ...st.advanced, "sidebar.folded": [...folded].join(",") };
+      }
+    });
+    return;
+  }
   if (hit.kind === "section") {
     const order = sidebarOrder(s.settings);
     const from = order.indexOf(p.section!);
@@ -321,7 +377,15 @@ async function drop(p: DragPayload, hit: Hit, v: Verdict, _mods: Mods) {
   }
 }
 
-export const SECTIONS = ["frequent", "pinned", "drives"] as const;
+/** The zone of the section or header a navigation entry is in. */
+function zoneOfEl(el: HTMLElement): Zone {
+  const z = (el.closest("[data-nav-zone]") as HTMLElement | null)?.dataset.navZone;
+  return isZone(z) ? z : "top";
+}
+
+const SECTION_NAMES: Record<string, string> = { frequent: "Frequently used", recents: "Recents", pinned: "Pinned", drives: "Drives" };
+
+export const SECTIONS = ["frequent", "recents", "pinned", "drives"] as const;
 export function sidebarOrder(settings: { advanced?: Record<string, unknown> } | null): string[] {
   const raw = String(settings?.advanced?.["sidebar.order"] ?? SECTIONS.join(","));
   const given = raw.split(",").filter((x) => (SECTIONS as readonly string[]).includes(x));

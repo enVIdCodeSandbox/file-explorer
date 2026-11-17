@@ -5,6 +5,15 @@ import type { CSSProperties, ReactNode } from "react";
 import { useStore } from "../store";
 import { fileTypeOf } from "../util/fileTypes";
 import { FLUENT } from "./fluentIcons";
+import { ICONS_KEY, iconMap, pick, type IconChoice } from "../util/customIcons";
+
+/** The names of the app's own icons, for choosing one in place of another. */
+export const iconNames = (): string[] => Object.keys(PATHS);
+
+/** The icon the person chose for the first of these slots (nothing when they kept the default). */
+export function useIconChoice(...slots: (string | undefined)[]): IconChoice | undefined {
+  return useStore((s) => pick(iconMap(s.settings?.advanced?.[ICONS_KEY]), ...slots));
+}
 
 const PATHS: Record<string, string> = {
   back: "M10 3 5 8l5 5M5 8h9",
@@ -70,12 +79,26 @@ const PATHS: Record<string, string> = {
   usb: "M8 14V3M8 3 6.5 4.5M8 3l1.5 1.5M8 9.5 5 8V6.5M8 11.5l3-1.5V8.5M4 5h2v1.5H4zM10 7h2v1.5h-2z",
 };
 
-export function Icon({ name, size = 16, style }: { name: string; size?: number; style?: CSSProperties }) {
+/**
+ * `slot` is the icon's own place for a change of icon (a drive has one each); without it the icon is changed along with
+ * every other use of the same name. `plain` ignores any change, for showing what the choices look like.
+ */
+export function Icon({ name, size = 16, style, slot, plain }: { name: string; size?: number; style?: CSSProperties; slot?: string; plain?: boolean }) {
+  const own = `icon:${name}`;
+  const choice = useIconChoice(plain ? undefined : slot, plain ? undefined : own);
+  const mark = plain ? undefined : (slot ?? own);
+  if (choice && "img" in choice) {
+    return <img className="icon" data-custom data-icon-slot={mark} src={choice.img} width={size} height={size} style={{ objectFit: "contain", ...style }} alt="" draggable={false} />;
+  }
+  return <Glyph name={choice ? choice.app : name} size={size} style={style} mark={mark} />;
+}
+
+function Glyph({ name, size, style, mark }: { name: string; size: number; style?: CSSProperties; mark?: string }) {
   const fluent = useStore((s) => s.settings?.appearance.style.icons === "fluent");
   const f = fluent ? FLUENT[name] : undefined;
   if (f) {
     return (
-      <svg className="icon" data-set="fluent" width={size} height={size} viewBox={`0 0 ${f.s} ${f.s}`} fill="currentColor" style={style} aria-hidden="true">
+      <svg className="icon" data-set="fluent" data-icon-slot={mark} width={size} height={size} viewBox={`0 0 ${f.s} ${f.s}`} fill="currentColor" style={style} aria-hidden="true">
         {f.d.map((d, i) => (
           <path key={i} d={d} />
         ))}
@@ -85,6 +108,7 @@ export function Icon({ name, size = 16, style }: { name: string; size?: number; 
   return (
     <svg
       className="icon"
+      data-icon-slot={mark}
       width={size}
       height={size}
       viewBox="0 0 16 16"
@@ -154,10 +178,21 @@ const PLACE_MARKS: Record<string, { color: string; mark: ReactNode }> = {
 };
 
 export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?: number; name?: string; /** A folder with something in it: papers show above its front. */ full?: boolean }) {
+  // One icon for each kind of folder or file, never for a single one: a well-known folder (Downloads…) has its own.
+  const place = kind === "folder" && name && PLACE_MARKS[name.toLowerCase()] ? name.toLowerCase() : "";
+  const slot = place ? `place:${place}` : `kind:${kind}`;
+  const choice = useIconChoice(slot);
+  if (choice) {
+    return "img" in choice ? (
+      <img className="file-icon" data-custom data-icon-slot={slot} data-kind={kind} src={choice.img} width={size} height={size} style={{ objectFit: "contain" }} alt="" draggable={false} />
+    ) : (
+      <Glyph name={choice.app} size={size} mark={slot} />
+    );
+  }
   if (kind === "folder" && name && PLACE_MARKS[name.toLowerCase()]) {
     const { color, mark } = PLACE_MARKS[name.toLowerCase()];
     return (
-      <svg className="file-icon" data-kind="folder" data-place={name.toLowerCase()} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+      <svg className="file-icon" data-kind="folder" data-icon-slot={slot} data-place={name.toLowerCase()} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
         <path d="M1.5 4.2c0-.7.5-1.2 1.2-1.2h3.1l1.4 1.4h6.1c.7 0 1.2.5 1.2 1.2v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill={color} />
         <path d="M1.5 5.6h13v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill="rgba(255,255,255,.18)" />
         <g fill="none" stroke="#fff" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">{mark}</g>
@@ -167,7 +202,7 @@ export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?:
   if (kind === "folder") {
     const color = KIND_COLORS.folder;
     return (
-      <svg className="file-icon" data-kind="folder" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+      <svg className="file-icon" data-kind="folder" data-icon-slot={slot} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
         <path d="M1.5 4.2c0-.7.5-1.2 1.2-1.2h3.1l1.4 1.4h6.1c.7 0 1.2.5 1.2 1.2v6.2c0 .7-.5 1.2-1.2 1.2H2.7c-.7 0-1.2-.5-1.2-1.2z" fill={color} />
         {full && (
           <>
@@ -186,7 +221,7 @@ export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?:
   const glyph = type ? GLYPH_PATHS[type.glyph] : undefined;
   const showLabel = !!type && size >= 28;
   return (
-    <svg className="file-icon" data-kind={kind} data-ext={type?.label} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+    <svg className="file-icon" data-kind={kind} data-icon-slot={slot} data-ext={type?.label} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M3.5 1.5h6l3 3v10h-9z" fill="var(--icon-page)" stroke={color} strokeWidth="1" strokeLinejoin="round" />
       <path d="M9.5 1.5v3h3" fill="none" stroke={color} strokeWidth="1" strokeLinejoin="round" />
       {glyph && !showLabel ? (

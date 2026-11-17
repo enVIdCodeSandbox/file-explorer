@@ -31,7 +31,7 @@
     </div>
     <script>
       // The theme of last time, so the first frame is not the wrong color.
-      try { var t = localStorage.getItem("fast.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+      try { var pref = localStorage.getItem("fast.themePref"), t = localStorage.getItem("fast.theme"); if (pref === "system" || (!pref && !t)) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; if (t) document.documentElement.dataset.theme = t; } catch (e) {}
     </script>
     <script type="module" src="/src/preview/main.ts"></script>
   </body>

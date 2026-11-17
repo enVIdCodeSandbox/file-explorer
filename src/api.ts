@@ -819,7 +819,10 @@ export const api = {
   analysisSnapshot: (path: string) => invoke<AnalysisResult | null>("analysis_snapshot", { path }),
   analyzeStart: (path: string) => invoke<void>("analyze_start", { path }),
   analyzeCancel: (path: string) => invoke<void>("analyze_cancel", { path }),
-  frequentFolders: (limit: number) => invoke<string[]>("frequent_folders", { limit }),
+  frequentFolders: (limit: number, policy?: { window: number; timeWeight: number; minVisits: number; recencyBias: number }) =>
+    invoke<string[]>("frequent_folders", { limit, policy }),
+  frequentSeed: (paths: string[], count: number) => invoke<void>("frequent_seed", { paths, count }),
+  frequentForget: (path: string) => invoke<void>("frequent_forget", { path }),
   trashPaths: (paths: string[]) => invoke<void>("trash_paths", { paths }),
   restoreFromTrash: (paths: string[]) => invoke<number>("restore_from_trash", { paths }),
   trashList: () => invoke<Bin>("trash_list"),

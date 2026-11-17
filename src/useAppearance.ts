@@ -61,6 +61,7 @@ export function useAppearance() {
       // The next start paints this theme before any script has run.
       try {
         localStorage.setItem("fast.theme", root.dataset.theme);
+        localStorage.setItem("fast.themePref", appearance.theme);
       } catch {
         // storage may be unavailable
       }

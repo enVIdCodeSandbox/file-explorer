@@ -9,6 +9,9 @@ import { api, on, type Device, type Drive, type Hit, type SearchResponse } from 
 import { ask, compressPaths, deletePaths, extractArchive, isArchiveName, openFile, promptText, renamePath, thisPcLabel, useStore } from "../store";
 import { useShellItems } from "./shellMenu";
 import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
+import { iconMenuItems } from "./IconPicker";
+import { driveSlot } from "../util/customIcons";
+import { deviceSlot, deviceTarget, driveTarget } from "../util/iconTarget";
 import { KIND_LABEL, deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { applyFilter, isFiltering } from "../util/filter";
 import { adv } from "../settings/advanced";
@@ -249,6 +252,7 @@ export function DrivesView() {
                             ...driveMenuItems(d, { os, drives, appearance }),
                             { id: "rename", label: "Rename in this app…", icon: "rename", shortcut: "F2", separatorBefore: true, run: () => void renameDrive(d) },
                             ...(alias?.name && alias.base === d.name ? [{ id: "resetName", label: "Use the system's name", run: () => setAlias(d, { name: "" }) }] : []),
+                            ...iconMenuItems(driveTarget(d.mount, driveName(d, appearance), d.media)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
                           ],
                         });
                       }}
@@ -257,7 +261,7 @@ export function DrivesView() {
                       {showSpace && appearance.driveChart === "donut" && d.online ? (
                         <Donut fraction={shown} />
                       ) : (
-                        <Icon name={d.media === "network" ? "network" : "drive"} size={34} />
+                        <Icon name={d.media === "network" ? "network" : "drive"} slot={driveSlot(d.mount)} size={34} />
                       )}
                       <div className="drive-info">
                         <strong>{driveName(d, appearance)}</strong>
@@ -304,12 +308,15 @@ export function DrivesView() {
                         setMenu({
                           x: e.clientX,
                           y: e.clientY,
-                          items: [{ id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : d.open ? "Open in the system's file tool" : "Open", run: () => void openDevice(d), disabled: !d.path && !d.connectable && !d.open }],
+                          items: [
+                            { id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : d.open ? "Open in the system's file tool" : "Open", run: () => void openDevice(d), disabled: !d.path && !d.connectable && !d.open },
+                            ...iconMenuItems(deviceTarget(d.id, d.name, deviceIcon(d))).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+                          ],
                         });
                       }}
                       title={`${d.name}\n${d.note || deviceStatus(d)}\nDouble-click to open`}
                     >
-                      <Icon name={deviceIcon(d)} size={34} />
+                      <Icon name={deviceIcon(d)} slot={deviceSlot(d.id)} size={34} />
                       <div className="drive-info">
                         <strong>{d.name}</strong>
                         <span className="muted">{deviceStatus(d)}</span>

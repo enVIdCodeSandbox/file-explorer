@@ -80,6 +80,12 @@ fn match_record<'a, T>(records: &'a [(RecycleRecord, T)], parent: &str, name: &s
         .map(|(_, t)| t)
 }
 
+/// The account's security identifier from `whoami /user /fo csv /nh` output: `"PC\\me","S-1-5-21-…"`.
+#[cfg(any(windows, test))]
+fn sid_from_whoami(text: &str) -> Option<String> {
+    text.split('"').map(str::trim).find(|p| p.starts_with("S-1-")).map(str::to_owned)
+}
+
 /// The newest first.
 fn newest_first(items: &mut [BinItem]) {
     items.sort_by(|a, b| b.deleted.cmp(&a.deleted).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -108,22 +114,49 @@ mod imp {
         file.symlink_metadata().is_ok().then_some(file)
     }
 
-    /// Every `$I` record in the bins this person can read, with the `$R` item it describes.
+    /// This account's security identifier: its items sit in the bin folder named after it.
+    #[cfg(windows)]
+    fn current_sid() -> Option<String> {
+        static SID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        SID.get_or_init(|| {
+            let mut cmd = std::process::Command::new("whoami");
+            cmd.args(["/user", "/fo", "csv", "/nh"]);
+            crate::proc::quiet(&mut cmd);
+            sid_from_whoami(&String::from_utf8_lossy(&cmd.output().ok()?.stdout))
+        })
+        .clone()
+    }
+
+    /// The `$Recycle.Bin` folder of every local drive that is there (shares and drives that do not answer are left alone).
+    #[cfg(windows)]
+    fn bin_roots() -> Vec<std::path::PathBuf> {
+        crate::drives::list_drives()
+            .into_iter()
+            .filter(|d| d.online && d.media != crate::drives::Media::Network)
+            .filter_map(|d| {
+                let m = d.mount.trim_end_matches(['\\', '/']).to_string();
+                (m.len() == 2 && m.ends_with(':')).then(|| std::path::PathBuf::from(format!("{m}\\$Recycle.Bin")))
+            })
+            .collect()
+    }
+
+    /// Every `$I` record in this account's bins, with the `$R` item it describes.
     #[cfg(windows)]
     fn windows_records() -> Vec<(RecycleRecord, std::path::PathBuf)> {
+        let sid = current_sid();
         let mut out = Vec::new();
-        for letter in b'A'..=b'Z' {
-            let bin = std::path::PathBuf::from(format!("{}:\\$Recycle.Bin", letter as char));
+        for bin in bin_roots() {
             let Ok(sids) = std::fs::read_dir(&bin) else { continue };
-            for sid in sids.flatten() {
-                let Ok(files) = std::fs::read_dir(sid.path()) else { continue };
+            for dir in sids.flatten() {
+                // Only this account's own items are in the system's list; other accounts' folders are not readable anyway.
+                if sid.as_deref().is_some_and(|s| !dir.file_name().to_string_lossy().eq_ignore_ascii_case(s)) {
+                    continue;
+                }
+                let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
                 for f in files.flatten() {
                     let name = f.file_name().to_string_lossy().into_owned();
                     let Some(rest) = name.strip_prefix("$I") else { continue };
-                    let data = sid.path().join(format!("$R{rest}"));
-                    if data.symlink_metadata().is_err() {
-                        continue;
-                    }
+                    let data = dir.path().join(format!("$R{rest}"));
                     if let Some(r) = std::fs::read(f.path()).ok().and_then(|b| parse_recycle_record(&b)) {
                         out.push((r, data));
                     }
@@ -133,7 +166,87 @@ mod imp {
         out
     }
 
+    /// The list straight from the bin's own records: no question is put to the system for each item, so even a bin
+    /// with thousands of items appears at once. None when it cannot be read this way.
+    #[cfg(windows)]
+    fn fast_list() -> Option<Vec<BinItem>> {
+        let records = windows_records();
+        if records.is_empty() {
+            return os_limited::is_empty().ok()?.then(Vec::new);
+        }
+        Some(
+            records
+                .into_iter()
+                .map(|(r, data)| {
+                    let original = std::path::Path::new(&r.original);
+                    let name = original.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| r.original.clone());
+                    BinItem {
+                        id: data.to_string_lossy().into_owned(),
+                        name,
+                        original_parent: original.parent().map(|p| p.to_string_lossy().into_owned()).filter(|p| !p.is_empty()),
+                        deleted: Some(r.deleted),
+                        size: Some(r.size),
+                        entries: None,
+                        is_dir: data.is_dir(),
+                        path: data.symlink_metadata().is_ok().then(|| data.to_string_lossy().into_owned()),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// What the system itself lists, kept after the first time it is asked for: that is the slow question, so it is
+    /// put once, in the background, while the person is still looking at the list, and acting on items is quick.
+    #[cfg(windows)]
+    static SHELL: parking_lot::Mutex<Option<Vec<trash::TrashItem>>> = parking_lot::Mutex::new(None);
+
+    #[cfg(windows)]
+    fn warm_shell_items() {
+        static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if WARMING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return; // already being asked
+        }
+        std::thread::spawn(|| {
+            if let Ok(v) = os_limited::list() {
+                *SHELL.lock() = Some(v);
+            }
+            WARMING.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    fn shell_items() -> Result<Vec<trash::TrashItem>> {
+        #[cfg(windows)]
+        if let Some(v) = SHELL.lock().clone() {
+            return Ok(v);
+        }
+        let v = os_limited::list().map_err(|e| CoreError::Invalid(format!("could not read the {}: {e}", LABEL)))?;
+        #[cfg(windows)]
+        {
+            *SHELL.lock() = Some(v.clone());
+        }
+        Ok(v)
+    }
+
+    /// What was listed is out of date once something is put back or deleted.
+    fn forget_shell_items() {
+        #[cfg(windows)]
+        {
+            *SHELL.lock() = None;
+        }
+    }
+
     pub fn list() -> Result<Vec<BinItem>> {
+        #[cfg(windows)]
+        if let Some(mut out) = fast_list() {
+            warm_shell_items();
+            newest_first(&mut out);
+            return Ok(out);
+        }
+        slow_list()
+    }
+
+    /// Asks the system about every item: right everywhere, but slow for a big bin on Windows.
+    fn slow_list() -> Result<Vec<BinItem>> {
         #[cfg(windows)]
         let records = windows_records();
         let items = os_limited::list().map_err(|e| CoreError::Invalid(format!("could not read the {}: {e}", LABEL)))?;
@@ -167,20 +280,45 @@ mod imp {
         Ok(out)
     }
 
+    /// The system's own items for the ids asked about. Ids from the quick list are the `$R` paths: they are matched
+    /// to the system's items by that path, or else by the original place and time of deletion.
     fn chosen(ids: &[String]) -> Result<Vec<trash::TrashItem>> {
-        let want: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        Ok(os_limited::list()
-            .map_err(|e| CoreError::Invalid(format!("could not read the {}: {e}", LABEL)))?
-            .into_iter()
-            .filter(|i| want.contains(i.id.to_string_lossy().as_ref()))
-            .collect())
+        let found = pick(shell_items()?, ids);
+        // What was kept may be older than the bin (another program put something in): look again before giving up.
+        if found.len() < ids.len() {
+            forget_shell_items();
+            return Ok(pick(shell_items()?, ids));
+        }
+        Ok(found)
+    }
+
+    fn pick(all: Vec<trash::TrashItem>, ids: &[String]) -> Vec<trash::TrashItem> {
+        // Windows paths do not care about capitals; the others' ids do.
+        let norm = |s: &str| if cfg!(windows) { s.to_lowercase() } else { s.to_owned() };
+        let want: HashSet<String> = ids.iter().map(|i| norm(i)).collect();
+        #[cfg(windows)]
+        let records = windows_records();
+        let mut out = Vec::new();
+        for i in all {
+            let mine = want.contains(&norm(&i.id.to_string_lossy()));
+            #[cfg(windows)]
+            let mine = mine
+                || match_record(&records, &i.original_parent.to_string_lossy(), &i.name.to_string_lossy(), i.time_deleted)
+                    .is_some_and(|p| want.contains(&norm(&p.to_string_lossy())));
+            if mine {
+                out.push(i);
+            }
+        }
+        out
     }
 
     pub fn restore(ids: &[String]) -> Result<usize> {
         let items = chosen(ids)?;
         let n = items.len();
         if n > 0 {
-            os_limited::restore_all(items).map_err(|e| CoreError::Invalid(format!("could not put the items back: {e}")))?;
+            let done = os_limited::restore_all(items).map_err(|e| CoreError::Invalid(format!("could not put the items back: {e}")));
+            forget_shell_items();
+            done?;
         }
         Ok(n)
     }
@@ -189,18 +327,37 @@ mod imp {
         let items = chosen(ids)?;
         let n = items.len();
         if n > 0 {
-            os_limited::purge_all(items).map_err(|e| CoreError::Invalid(format!("could not delete the items: {e}")))?;
+            let done = os_limited::purge_all(items).map_err(|e| CoreError::Invalid(format!("could not delete the items: {e}")));
+            forget_shell_items();
+            done?;
         }
         Ok(n)
     }
 
     pub fn empty() -> Result<usize> {
-        let items = os_limited::list().map_err(|e| CoreError::Invalid(format!("could not read the {}: {e}", LABEL)))?;
-        let n = items.len();
-        if n > 0 {
-            os_limited::purge_all(items).map_err(|e| CoreError::Invalid(format!("could not empty the {}: {e}", LABEL)))?;
+        // Windows empties every drive's bin in one call; asking for each item first would take far longer.
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::Shell::{SHEmptyRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND};
+            let n = fast_list().map_or(0, |l| l.len());
+            // SAFETY: no window and no path are given; the flags only switch off questions and sounds.
+            let hr = unsafe { SHEmptyRecycleBinW(std::ptr::null_mut(), std::ptr::null(), SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND) };
+            forget_shell_items();
+            // S_FALSE (1) is what it says when there was nothing to empty.
+            if hr < 0 {
+                return Err(CoreError::Invalid(format!("could not empty the {}: error {:#x}", LABEL, hr)));
+            }
+            return Ok(n);
         }
-        Ok(n)
+        #[cfg(not(windows))]
+        {
+            let items = os_limited::list().map_err(|e| CoreError::Invalid(format!("could not read the {}: {e}", LABEL)))?;
+            let n = items.len();
+            if n > 0 {
+                os_limited::purge_all(items).map_err(|e| CoreError::Invalid(format!("could not empty the {}: {e}", LABEL)))?;
+            }
+            Ok(n)
+        }
     }
 
     pub const CAN_RESTORE: bool = true;
@@ -379,5 +536,11 @@ mod tests {
         let id = list().unwrap().items.into_iter().find(|i| i.name == "fast-trashbin-test-file.txt").unwrap().id;
         assert_eq!(purge(&[id]).unwrap(), 1);
         assert!(!f.exists());
+    }
+
+    #[test]
+    fn finds_the_account_id_in_whoami_output() {
+        assert_eq!(sid_from_whoami("\"DESKTOP-1\\me\",\"S-1-5-21-111-222-333-1001\"\r\n").as_deref(), Some("S-1-5-21-111-222-333-1001"));
+        assert_eq!(sid_from_whoami("nothing"), None);
     }
 }

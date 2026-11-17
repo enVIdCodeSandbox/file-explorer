@@ -26,6 +26,7 @@ export type Control =
   | { type: "locks" }
   | { type: "defaultFm" }
   | { type: "updates" }
+  | { type: "icons" }
   | { type: "methods" };
 
 export interface SettingDef {
@@ -114,13 +115,14 @@ export const SETTINGS: SettingDef[] = [
   { key: "appearance.style.folderColor", section: "Themes", label: "Folder color", control: { type: "select", options: [{ value: "classic", label: "Classic yellow" }, { value: "blue", label: "Blue" }, { value: "mono", label: "Grey" }, { value: "accent", label: "Match accent" }] }, keywords: "folder icon" },
   { key: "appearance.style.background", section: "Themes", label: "Window background", control: { type: "select", options: [{ value: "plain", label: "Plain" }, { value: "gradient", label: "Soft gradient" }, { value: "aurora", label: "Aurora" }, { value: "dusk", label: "Dusk" }, { value: "mist", label: "Mist" }, { value: "image", label: "My picture (import below)" }] }, keywords: "wallpaper backdrop" },
   { key: "appearance.style.imports", section: "Themes", label: "Import fonts, style sheets and pictures", description: "Files are copied into the app's own folder. A style sheet is plain CSS that can override any variable or class (see docs/THEMING.md).", control: { type: "imports" }, keywords: "custom font ttf otf woff css background image" },
+  { key: "icons.panel", section: "Appearance", label: "Icons", description: "Swap any icon in the app for another app icon or a picture of your own, and put each back to its default. A changed icon changes everywhere it is used.", control: { type: "icons" }, keywords: "icon change custom picture drive folder image replace reset default" },
   { key: "appearance.customCss", section: "Themes", label: "Custom CSS", description: "Applied on top of the built-in theme as you type. Every color, radius and size is a CSS variable; see docs/THEMING.md for the full list and the app's class names.", control: { type: "css" }, keywords: "theme style skin stylesheet" },
 
   // ---- Layout ----
   { key: "appearance.layout", section: "Layout", label: "Window layout", description: "Every part of the window is a panel: dock it to any edge, float it, make it pop out from a button, collapse it or hide it.", control: { type: "layout" }, keywords: "dock move drag panels toolbar tabs sidebar position" },
 
   // ---- Navigation pane ----
-  { key: "appearance.showFrequent", section: "Navigation pane", label: "Show Frequently used", description: "The folders you open most.", control: toggle },
+  { key: "appearance.showFrequent", section: "Navigation pane", label: "Show Frequently used", description: "The folders you open most. Off hides the folders and the heading text as well.", control: toggle },
   { key: "appearance.showPinned", section: "Navigation pane", label: "Show Pinned", control: toggle },
   { key: "appearance.showDrives", section: "Navigation pane", label: "Show Drives", control: toggle },
   { key: "appearance.sidebarCollapsed", section: "Navigation pane", label: "Collapse to icons only", description: "Drag the pane's edge to resize it, or drag it nearly shut.", control: toggle },

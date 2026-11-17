@@ -50,6 +50,11 @@ import {
 } from "../util/path";
 import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
+import { usePathMenu, type MenuTarget } from "./pathMenu";
+import { iconMenuItems } from "./IconPicker";
+import { driveSlot } from "../util/customIcons";
+import { deviceSlot, deviceTarget, driveTarget, iconTarget, serverSlot, serverTarget } from "../util/iconTarget";
+import { SETTING as LAYOUT_KEY, isDefault as layoutIsDefault, moveNav, parseLayout, placed, serializeLayout, zoneOf, type NavId, type Zone } from "../util/sideLayout";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { toggleTerminalPanel, useTerminal } from "../terminal/state";
@@ -1136,13 +1141,15 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   const places = useStore((s) => s.places);
   const drives = useStore((s) => s.drives);
   const frequent = useStore((s) => s.frequent);
+  const recent = useStore((s) => s.recent);
   const servers = useStore((s) => s.servers);
   const info = useStore((s) => s.info);
   const appearance = useStore((s) => s.settings!.appearance);
   const settings = useStore((s) => s.settings);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
-  const { navigate, newTab, togglePin, addRecent, showToast, updateSettings } = useStore.getState();
+  const { navigate, newTab, addRecent, showToast, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const openPathMenu = usePathMenu(setMenu);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const terminalOpen = useTerminal((t) => t.open);
 
@@ -1185,11 +1192,12 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
     label: string,
     target: string,
     icon: React.ReactNode,
-    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload; onOpen?: () => void },
+    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload; onOpen?: () => void; navId?: NavId; pathMenu?: MenuTarget },
   ) => (
     <button
       key={key}
       className="side-item"
+      data-nav-item={extra?.navId}
       data-drop={extra?.drop}
       data-drop-path={extra?.drop && !extra.isFile ? target : undefined}
       data-pin-index={extra?.pinIndex}
@@ -1205,6 +1213,8 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
       }}
       onAuxClick={(e) => e.button === 1 && !extra?.isFile && !extra?.onOpen && newTab(target, { background: true })}
       onContextMenu={(e) => {
+        // Folders and files get the same menu as in a folder window.
+        if (extra?.pathMenu) return openPathMenu(e, extra.pathMenu, extra.menu ?? []);
         e.preventDefault();
         const items: MenuItem[] = [
           ...(extra?.isFile || extra?.onOpen ? [] : [{ id: "newTab", label: "Open in new tab", run: () => newTab(target) }]),
@@ -1246,7 +1256,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
       next.has(id) ? next.delete(id) : next.add(id);
       st.advanced = { ...st.advanced, ["sidebar.folded"]: [...next].join(",") };
     });
-  const heading = (text: string, rowsKey?: string, flag?: "showFrequent" | "showPinned" | "showDrives", id?: string) =>
+  const heading = (text: string, rowsKey?: string, flag?: "showFrequent" | "showPinned" | "showDrives", id?: string, onMenu?: (e: React.MouseEvent) => void) =>
     collapsed ? (
       <div className="side-divider" key={text} />
     ) : (
@@ -1257,7 +1267,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
         data-pin-count={id === "pinned" ? pins.length : undefined}
         onPointerDown={id ? (e) => beginDrag(e, () => ({ paths: [], dirs: [], section: id, label: text })) : undefined}
         onClick={id ? () => toggleFold(id) : undefined}
-        onContextMenu={rowsKey && flag ? (e) => sectionMenu(e, rowsKey, flag) : undefined}
+        onContextMenu={onMenu ?? (rowsKey && flag ? (e) => sectionMenu(e, rowsKey, flag) : undefined)}
         title={rowsKey ? `${folded.has(id ?? "") ? "Click to expand" : "Click to collapse"} · drag to move · right-click for options` : undefined}
         aria-expanded={id ? !folded.has(id) : undefined}
       >
@@ -1275,61 +1285,182 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
       </div>
     );
   };
+  // ---- where the five fixed entries are shown ----
+  const layout = parseLayout(settings?.advanced?.[LAYOUT_KEY]);
+  const setAdv = (key: string, value: boolean | number | string) => updateSettings((st) => void (st.advanced = { ...st.advanced, [key]: value }));
+  const showRecents = adv<boolean>(settings, "recents.show");
+  const shownZones = new Set<Zone>(["top", ...(appearance.showFrequent ? ["frequent" as const] : []), ...(showRecents ? ["recents" as const] : []), ...(appearance.showPinned ? ["pinned" as const] : []), ...(appearance.showDrives ? ["drives" as const] : [])]);
+  const hiddenNav = new Set<NavId>([
+    ...(adv<boolean>(settings, "sidebar.showTrash") ? [] : ["trash" as const]),
+    ...(adv<boolean>(settings, "sidebar.showAnalyze") ? [] : ["analyze" as const]),
+    ...(adv<boolean>(settings, "sidebar.showClear") ? [] : ["clear" as const]),
+  ]);
+  const where = placed(layout, shownZones, hiddenNav);
+  const move = (id: NavId, zone: Zone) => setAdv(LAYOUT_KEY, serializeLayout(moveNav(layout, id, zone)));
+  const NAV_KEY: Partial<Record<NavId, string>> = { trash: "sidebar.showTrash", analyze: "sidebar.showAnalyze", clear: "sidebar.showClear" };
+  const navEntry = (id: NavId): React.ReactNode => {
+    const spec: Record<NavId, [string, string, string, string?]> = {
+      home: ["Home", HOME, "home"],
+      thispc: [thisPcLabel(info?.os), THIS_PC, "pc"],
+      trash: [trashLabel(info?.os), TRASH, "trash", `${trashLabel(info?.os)}: what was deleted, and Put back`],
+      analyze: ["Disk usage", info?.home ? analyzeLocation(info.home) : "", "chart", "Disk usage"],
+      clear: ["Smart Clear", clearLocation(null), "broom", "Smart Clear: free up space"],
+    };
+    const [label, target, icon, tip] = spec[id];
+    if (!target) return null;
+    const placedAt = zoneOf(layout, id);
+    const menuItems: MenuItem[] = [
+      ...(placedAt !== "top" ? [{ id: "nav-top", label: "Move back to the top", run: () => move(id, "top") }] : []),
+      ...(layoutIsDefault(layout) ? [] : [{ id: "nav-reset", label: "Put all of these back at the top", run: () => setAdv(LAYOUT_KEY, "") }]),
+      ...iconMenuItems(iconTarget(icon, label)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+      ...(NAV_KEY[id] ? [{ id: "nav-hide", label: `Hide ${label}`, separatorBefore: true, run: () => setAdv(NAV_KEY[id]!, false) }] : []),
+    ];
+    return item(`nav-${id}`, label, target, <Icon name={icon} />, { tip, navId: id, drag: { paths: [], dirs: [], navItem: id, label }, menu: menuItems });
+  };
+  const navRows = (zone: Zone) => where[zone].map(navEntry);
+
+  // Right-click Frequently used or Recents: the settings that shape them, without opening Settings.
+  const radio = (key: string, values: [number | string, string][], current: number | string) =>
+    values.map(([v, label]) => ({ id: `${key}-${v}`, label, checked: current === v, run: () => setAdv(key, v) }));
+  const rowChoices = (rowsKey: string): MenuItem[] =>
+    radio(rowsKey, [[3, "3 rows"], [5, "5 rows"], [8, "8 rows"], [12, "12 rows"], [20, "20 rows"], [0, "All rows"]], adv<number>(settings, rowsKey));
+  const moreSettings = (): MenuItem => ({
+    id: "more",
+    label: "More settings…",
+    separatorBefore: true,
+    run: () => {
+      useStore.setState({ settingsSection: "Navigation pane" });
+      useStore.getState().openSettings();
+    },
+  });
+  const frequentMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const a = <T extends boolean | number | string>(k: string) => adv<T>(settings, k);
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { id: "f-window", label: "Count the last…", children: radio("frequent.window", [[50, "50 navigations"], [100, "100 navigations"], [300, "300 navigations"], [1000, "1000 navigations"], [0, "Everything remembered"]], a<number>("frequent.window")) },
+        { id: "f-rank", label: "Rank by…", children: radio("frequent.timeWeight", [[0, "How many times opened"], [25, "Mostly times opened, some time open"], [50, "Both equally"], [75, "Mostly time open"], [100, "Only how long it stayed open"]], a<number>("frequent.timeWeight")) },
+        { id: "f-recency", label: "Newest navigations count…", children: radio("frequent.recencyBias", [[0, "The same as older ones"], [30, "A little more"], [100, "Twice as much"]], a<number>("frequent.recencyBias")) },
+        { id: "f-min", label: "Opened at least…", children: radio("frequent.minVisits", [[1, "1 time"], [2, "2 times"], [3, "3 times"], [5, "5 times"], [10, "10 times"]], a<number>("frequent.minVisits")) },
+        { id: "f-drag", label: "Folders dragged in count as…", children: radio("frequent.dragCount", [[1, "1 open"], [3, "3 opens"], [5, "5 opens"], [10, "10 opens"]], a<number>("frequent.dragCount")) },
+        { id: "f-count", label: "Folders listed", separatorBefore: true, children: radio("files.frequentCount", [[5, "5"], [10, "10"], [15, "15"], [20, "20"], [30, "30"]], a<number>("files.frequentCount")) },
+        { id: "f-rows", label: "Rows before it scrolls", children: rowChoices("sidebar.frequentRows") },
+        moreSettings(),
+        { id: "hide", label: "Hide this section", run: () => updateSettings((st) => void (st.appearance.showFrequent = false)) },
+      ],
+    });
+  };
+  const recentsMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const a = <T extends boolean | number | string>(k: string) => adv<T>(settings, k);
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { id: "r-kind", label: "List…", children: radio("recents.kind", [["folders", "Folders"], ["files", "Files"], ["both", "Folders and files"]], a<string>("recents.kind")) },
+        { id: "r-count", label: "Entries kept", children: radio("recents.count", [[5, "5"], [8, "8"], [10, "10"], [15, "15"], [25, "25"], [50, "50"]], a<number>("recents.count")) },
+        { id: "r-rows", label: "Rows before it scrolls", children: rowChoices("sidebar.recentsRows") },
+        { id: "r-clear", label: "Clear the list", separatorBefore: true, run: () => useStore.getState().clearRecent() },
+        moreSettings(),
+        { id: "hide", label: "Hide this section", run: () => setAdv("recents.show", false) },
+      ],
+    });
+  };
+  const recentKind = adv<string>(settings, "recents.kind");
+  const recentShown = recent
+    .filter((r) => !isAppLocation(r.path) && (recentKind === "both" || (recentKind === "files" ? !r.isDir : r.isDir)))
+    .slice(0, adv<number>(settings, "recents.count"));
+
   const devices = useStore((s) => s.devices);
-  const driveIcon = (d: Drive) => <Icon name={d.media === "network" ? "network" : "drive"} />;
+  const driveIcon = (d: Drive) => <Icon name={d.media === "network" ? "network" : "drive"} slot={driveSlot(d.mount)} />;
   const pinnedPaths = new Set(pins.map((p) => p.path));
   const frequentShown = frequent.filter((p) => !pinnedPaths.has(p)).slice(0, adv<number>(useStore.getState().settings, "files.frequentCount"));
 
   const blocks: Record<string, React.ReactNode> = {
     frequent: (
-      <div key="frequent" className="side-group" data-drop="section" data-section="frequent">
-        {appearance.showFrequent && frequentShown.length > 0 && (
+      <div key="frequent" className="side-group" data-drop="section" data-section="frequent" data-nav-zone="frequent">
+        {appearance.showFrequent && (
         <>
-          {heading("Frequently used", "sidebar.frequentRows", "showFrequent", "frequent")}
-          {!folded.has("frequent") && section(
+          {heading("Frequently used", "sidebar.frequentRows", "showFrequent", "frequent", frequentMenu)}
+          {!folded.has("frequent") && frequentShown.length === 0 && where.frequent.length === 0 && !collapsed && <div className="side-empty">Folders you open often show up here. You can also drag one in.</div>}
+          {!folded.has("frequent") && (frequentShown.length > 0 || where.frequent.length > 0) && section(
             "sidebar.frequentRows",
-            frequentShown.map((p) =>
-              item(`freq-${p}`, baseName(p), p, <FileIcon kind="folder" />, {
-                drop: "folder",
-                drag: { paths: [p], dirs: [true], label: baseName(p) },
-                menu: [{ id: "pin", label: "Pin to sidebar", run: () => togglePin(p) }],
-              }),
-            ),
+            [
+              ...navRows("frequent"),
+              ...frequentShown.map((p) =>
+                item(`freq-${p}`, baseName(p) || p, p, <FileIcon kind="folder" />, {
+                  drop: "folder",
+                  drag: { paths: [p], dirs: [true], label: baseName(p) || p },
+                  pathMenu: { path: p, isDir: true },
+                  menu: [{ id: "forget", label: "Remove from Frequently used", run: () => useStore.getState().forgetFrequent(p) }],
+                }),
+              ),
+            ],
+          )}
+        </>
+      )}
+      </div>
+    ),
+    recents: (
+      <div key="recents" className="side-group" data-drop="section" data-section="recents" data-nav-zone="recents">
+        {showRecents && (
+        <>
+          {heading("Recents", "sidebar.recentsRows", undefined, "recents", recentsMenu)}
+          {!folded.has("recents") && recentShown.length === 0 && where.recents.length === 0 && !collapsed && <div className="side-empty">Nothing opened yet.</div>}
+          {!folded.has("recents") && (recentShown.length > 0 || where.recents.length > 0) && section(
+            "sidebar.recentsRows",
+            [
+              ...navRows("recents"),
+              ...recentShown.map((r) =>
+                item(`recent-${r.path}`, baseName(r.path) || r.path, r.path, <FileIcon kind={r.isDir ? "folder" : "file"} name={r.isDir ? undefined : baseName(r.path)} />, {
+                  isFile: !r.isDir,
+                  drop: r.isDir ? "folder" : undefined,
+                  drag: { paths: [r.path], dirs: [r.isDir], label: baseName(r.path) || r.path },
+                  pathMenu: { path: r.path, isDir: r.isDir },
+                  menu: [{ id: "unrecent", label: "Remove from Recents", run: () => useStore.getState().removeRecent(r.path) }],
+                }),
+              ),
+            ],
           )}
         </>
       )}
       </div>
     ),
     pinned: (
-      <div key="pinned" className="side-group" data-drop="section" data-section="pinned">
+      <div key="pinned" className="side-group" data-drop="section" data-section="pinned" data-nav-zone="pinned">
         {appearance.showPinned && (
         <>
           {heading("Pinned", "sidebar.pinnedRows", "showPinned", "pinned")}
-          {!folded.has("pinned") && pins.length === 0 && !collapsed && <div className="side-empty" data-drop="pins" data-pin-count={0}>Drag a folder here to pin it.</div>}
+          {!folded.has("pinned") && pins.length === 0 && where.pinned.length === 0 && !collapsed && <div className="side-empty" data-drop="pins" data-pin-count={0}>Drag a folder here to pin it.</div>}
           {!folded.has("pinned") && section(
             "sidebar.pinnedRows",
-            pins.map((p, i) =>
-              item(`pin-${p.path}`, p.label, p.path, <FileIcon kind={p.isFile ? "file" : "folder"} name={p.isFile ? p.label : places.some((pl) => pl.path === p.path) ? p.label : undefined} />, {
-                isFile: p.isFile,
-                drop: "pinitem",
-                pinIndex: i,
-                drag: { paths: [p.path], dirs: [!p.isFile], pinIndex: i, label: p.label },
-                menu: [{ id: "unpin", label: "Unpin", run: () => togglePin(p.path) }],
-              }),
-            ),
+            [
+              ...navRows("pinned"),
+              ...pins.map((p, i) =>
+                item(`pin-${p.path}`, p.label, p.path, <FileIcon kind={p.isFile ? "file" : "folder"} name={p.isFile ? p.label : places.some((pl) => pl.path === p.path) ? p.label : undefined} />, {
+                  isFile: p.isFile,
+                  drop: "pinitem",
+                  pinIndex: i,
+                  drag: { paths: [p.path], dirs: [!p.isFile], pinIndex: i, label: p.label },
+                  pathMenu: { path: p.path, isDir: !p.isFile },
+                }),
+              ),
+            ],
           )}
         </>
       )}
       </div>
     ),
     drives: (
-      <div key="drives" className="side-group" data-drop="section" data-section="drives">
+      <div key="drives" className="side-group" data-drop="section" data-section="drives" data-nav-zone="drives">
         {appearance.showDrives && (
         <>
           {heading("Drives", "sidebar.drivesRows", "showDrives", "drives")}
           {!folded.has("drives") && section(
             "sidebar.drivesRows",
-            [...drives.map((d) =>
+            [...navRows("drives"), ...drives.map((d) =>
               item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
                 drop: d.online ? "folder" : undefined,
                 sub: d.online ? undefined : d.removable ? "no media" : "offline",
@@ -1337,15 +1468,19 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
                 menu: [
                   { id: "open", label: "Open", run: () => navigate(d.mount), disabled: !d.online },
                   ...driveMenuItems(d, { os: info?.os, drives, appearance }).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+                  ...iconMenuItems(driveTarget(d.mount, driveName(d, appearance), d.media)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
                 ],
               }),
             ),
             // Phones and cameras sit with the drives.
             ...devices.filter(isMainDevice).map((d) =>
-              item(`device-${d.id}`, d.name, d.path ?? `device:${d.id}`, <Icon name={deviceIcon(d)} />, {
+              item(`device-${d.id}`, d.name, d.path ?? `device:${d.id}`, <Icon name={deviceIcon(d)} slot={deviceSlot(d.id)} />, {
                 onOpen: () => void openDevice(d),
                 tip: `${d.name}\n${deviceStatus(d)}${d.note ? `\n${d.note}` : ""}`,
-                menu: [{ id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : "Open", run: () => void openDevice(d) }],
+                menu: [
+                  { id: "open", label: d.path ? "Open" : d.connectable ? "Connect and open" : "Open", run: () => void openDevice(d) },
+                  ...iconMenuItems(deviceTarget(d.id, d.name, deviceIcon(d))).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+                ],
               }),
             )],
           )}
@@ -1358,20 +1493,18 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   return (
     <div className="sidebar-wrap" data-horizontal={horizontal || undefined} style={horizontal ? undefined : { width }}>
     <nav className="sidebar" aria-label="Places" data-collapsed={(!horizontal && collapsed) || undefined} data-horizontal={horizontal || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
-      <button
-        className="side-item side-toggle"
-        title={collapsed ? "Expand the navigation pane" : "Collapse to icons"}
-        aria-label={collapsed ? "Expand the navigation pane" : "Collapse the navigation pane"}
-        onClick={() => updateSettings((s) => void (s.appearance.sidebarCollapsed = !s.appearance.sidebarCollapsed))}
-      >
-        <Icon name="sidebar" />
-        {!collapsed && <span className="side-label">Navigation</span>}
-      </button>
-      {item("home", "Home", HOME, <Icon name="home" />)}
-      {item("thispc", thisPcLabel(info?.os), THIS_PC, <Icon name="pc" />)}
-      {item("trash", trashLabel(info?.os), TRASH, <Icon name="trash" />, { tip: `${trashLabel(info?.os)}: what was deleted, and Put back` })}
-      {info?.home && item("analyze", "Disk usage", analyzeLocation(info.home), <Icon name="chart" />, { tip: "Disk usage" })}
-      {item("clear", "Smart Clear", clearLocation(null), <Icon name="broom" />, { tip: "Smart Clear: free up space" })}
+      <div className="side-top" data-nav-zone="top">
+        <button
+          className="side-item side-toggle"
+          title={collapsed ? "Expand the navigation pane" : "Collapse to icons"}
+          aria-label={collapsed ? "Expand the navigation pane" : "Collapse the navigation pane"}
+          onClick={() => updateSettings((s) => void (s.appearance.sidebarCollapsed = !s.appearance.sidebarCollapsed))}
+        >
+          <Icon name="sidebar" />
+          {!collapsed && <span className="side-label">Navigation</span>}
+        </button>
+        {navRows("top")}
+      </div>
 
       {sidebarOrder(settings).map((id) => blocks[id])}
 
@@ -1385,7 +1518,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
         {(!folded.has("servers") || collapsed) && <div className="side-section">
           {servers.map((sv) => {
             const url = serverUrl(sv);
-            return item(`server-${sv.name}`, sv.name, url, <Icon name="network" />, {
+            return item(`server-${sv.name}`, sv.name, url, <Icon name="network" slot={serverSlot(sv.name)} />, {
               sub: undefined,
               drop: "folder",
               tip: `${sv.name}\n${maskAddresses(url)}`,
@@ -1393,6 +1526,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
                 { id: "server-login", label: "Log in again…", run: () => useStore.getState().openConnect({ saved: sv }) },
                 { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((e) => showToast(String(e))) },
                 { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(useStore.getState().setServers).catch((e) => showToast(String(e))) },
+                ...iconMenuItems(serverTarget(sv.name)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
               ],
             });
           })}

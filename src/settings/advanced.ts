@@ -148,14 +148,18 @@ export const ADVANCED: AdvDef[] = [
   num(3, "files.confirmDeleteOver", "Files and lists", "Always confirm deleting this many items or more", 0, 1000, "items", "Even when \"Ask before deleting\" is off. 0 never forces it."),
   num(100, "files.recentLimit", "Files and lists", "Recent items to remember", 0, 1000),
   num(10, "files.frequentCount", "Navigation pane", "Frequently used folders to keep in the list", 0, 50, undefined, "The list is built from what you open most."),
-  sel("frequent,pinned,drives", "sidebar.order", "Navigation pane", "Order of the sections", [
-    ["frequent,pinned,drives", "Frequently used, Pinned, Drives"],
-    ["pinned,frequent,drives", "Pinned, Frequently used, Drives"],
-    ["pinned,drives,frequent", "Pinned, Drives, Frequently used"],
-    ["frequent,drives,pinned", "Frequently used, Drives, Pinned"],
-    ["drives,pinned,frequent", "Drives, Pinned, Frequently used"],
-    ["drives,frequent,pinned", "Drives, Frequently used, Pinned"],
-  ], "You can also drag a section's heading to move it."),
+  num(300, "frequent.window", "Navigation pane", "Frequently used: navigations looked back on", 0, 3000, undefined, "Only this many of your latest navigations count. A folder you stopped opening drops off once it is no longer within them. 0 uses everything that is remembered."),
+  num(2, "frequent.minVisits", "Navigation pane", "Frequently used: opens needed to be listed", 1, 50, undefined, "A folder must have been opened this many times within the range above."),
+  num(25, "frequent.timeWeight", "Navigation pane", "Frequently used: weight of time spent open", 0, 100, "%", "0 ranks only by how many times a folder was opened; 100 only by how long it stayed open (a folder left open counts for at most 15 minutes each time)."),
+  num(30, "frequent.recencyBias", "Navigation pane", "Frequently used: favour recent navigations", 0, 100, "%", "0 counts every navigation in the range the same; 100 makes the newest count twice as much as the oldest."),
+  num(3, "frequent.dragCount", "Navigation pane", "Frequently used: default drag frequency", 0, 50, "opens", "A folder dragged into the section starts out counting as this many opens, so it fades away if you do not open it. Folders with the same frequency are sorted by name."),
+  yn(true, "recents.show", "Navigation pane", "Show Recents", "The folders or files you opened last. Off hides the entries and the heading text as well."),
+  sel("folders", "recents.kind", "Navigation pane", "Recents: what to list", [["folders", "Folders"], ["files", "Files"], ["both", "Folders and files"]]),
+  num(8, "recents.count", "Navigation pane", "Recents: entries kept", 1, 100, undefined, "The oldest is removed when a new one comes in. Opening one again moves it to the top."),
+  num(6, "sidebar.recentsRows", "Navigation pane", "Recents: rows shown before it scrolls", 0, 100, undefined, "0 shows them all."),
+  yn(true, "sidebar.showTrash", "Navigation pane", "Show Recycle Bin"),
+  yn(true, "sidebar.showAnalyze", "Navigation pane", "Show Disk usage"),
+  yn(true, "sidebar.showClear", "Navigation pane", "Show Smart Clear"),
   sel("always", "sidebar.scrollbar", "Navigation pane", "Scroll bar in the left pane", [["always", "Always show"], ["hover", "Show when the pointer is over it"], ["hidden", "Hide completely (still scrolls)"]]),
   num(6, "sidebar.frequentRows", "Navigation pane", "Frequently used: rows shown before it scrolls", 0, 50, undefined, "0 shows them all. Longer lists get their own scroll bar so the rest of the pane stays in view."),
   num(10, "sidebar.pinnedRows", "Navigation pane", "Pinned: rows shown before it scrolls", 0, 100, undefined, "0 shows them all."),
@@ -263,4 +267,14 @@ export function adv<T extends boolean | number | string>(settings: Settings | nu
   const saved = settings?.advanced?.[key];
   const def = BY_KEY.get(key)?.default as T;
   return (saved === undefined || typeof saved !== typeof def ? def : saved) as T;
+}
+
+/** The rules for working out the Frequently used list, as the settings give them. */
+export function frequentPolicy(settings: Settings | null | undefined) {
+  return {
+    window: adv<number>(settings, "frequent.window"),
+    timeWeight: adv<number>(settings, "frequent.timeWeight"),
+    minVisits: adv<number>(settings, "frequent.minVisits"),
+    recencyBias: adv<number>(settings, "frequent.recencyBias"),
+  };
 }

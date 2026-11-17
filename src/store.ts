@@ -30,7 +30,8 @@ import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
 import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
 import { columnsPerFolder, loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
-import { adv } from "./settings/advanced";
+import { adv, frequentPolicy } from "./settings/advanced";
+import type { IconTarget } from "./util/iconTarget";
 import { metricOn } from "./settings/transferMetrics";
 import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
@@ -326,10 +327,16 @@ interface State {
   /** Move a pin to a new position (counted before the move). */
   movePin: (from: number, to: number) => void;
   addRecent: (path: string, isDir: boolean) => void;
+  removeRecent: (path: string) => void;
+  /** Take a folder out of Frequently used (opening it again brings it back). */
+  forgetFrequent: (path: string) => void;
   /** The "Open with" chooser: the file, and why it is being asked (empty when the person asked for it). */
   openWith: { path: string; reason: string } | null;
   /** The folder or drive the "Lock with passcode" dialog is open for. */
   lockDialog: string | null;
+  /** The "Change icon" dialog: what is being changed, and the other places the same choice could apply to. */
+  iconPicker: IconTarget | null;
+  openIconPicker: (t: IconTarget) => void;
   /** A tab another window is dragging over this one: the slot it would take. */
   incomingTab: { index: number; w: number } | null;
   openLockDialog: (path: string) => void;
@@ -528,6 +535,8 @@ export const useStore = create<State>((set, get) => ({
   searches: [],
   openWith: null,
   lockDialog: null,
+  iconPicker: null,
+  openIconPicker: (t) => set({ iconPicker: t }),
   incomingTab: null,
   openLockDialog: (path) => set({ lockDialog: path }),
   drives: [],
@@ -962,6 +971,14 @@ export const useStore = create<State>((set, get) => ({
     set({ recent: [] });
     persist();
   },
+  removeRecent: (path) => {
+    set({ recent: get().recent.filter((r) => r.path !== path) });
+    persist();
+  },
+  forgetFrequent: (path) => {
+    set({ frequent: get().frequent.filter((p) => p !== path) });
+    void api.frequentForget(path).then(() => get().refreshFrequent()).catch(() => {});
+  },
 
   addSearch: (text) => {
     const t = text.trim();
@@ -1338,7 +1355,7 @@ export const useStore = create<State>((set, get) => ({
 
   refreshFrequent: () => {
     void api
-      .frequentFolders(Math.min(60, adv<number>(get().settings, "files.frequentCount") + 10))
+      .frequentFolders(Math.min(60, adv<number>(get().settings, "files.frequentCount") + 10), frequentPolicy(get().settings))
       .then((frequent) => set({ frequent }))
       .catch(() => {});
   },
