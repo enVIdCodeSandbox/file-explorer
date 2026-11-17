@@ -11,6 +11,7 @@ import { baseName } from "../util/path";
 import { adv } from "../settings/advanced";
 import { metricOn } from "../settings/transferMetrics";
 import { METHOD_NAME } from "../util/methods";
+import { finishMark } from "../util/finishMarker";
 import { Icon } from "./Icons";
 
 const STRATEGY_LABEL: Record<NonNullable<Progress["strategy"]>, string> = {
@@ -226,7 +227,7 @@ function jobRate(s: { itemsPerSec: number; bytesPerSec: number }): string {
   return s.bytesPerSec > 0 ? `${formatSize(s.bytesPerSec)}/s · ${items}` : items;
 }
 
-export function SpeedGraph({ samples, total, etaSecs, bytes = true }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean }) {
+export function SpeedGraph({ samples, total, etaSecs, bytes = true, fraction = 0 }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean; fraction?: number }) {
   const W = 520;
   const H = 150;
   const pad = { l: 46, r: 56, t: 10, b: 22 };
@@ -236,6 +237,8 @@ export function SpeedGraph({ samples, total, etaSecs, bytes = true }: { samples:
   // Leave empty room on the right (up to the expected finish) so the streak has somewhere to run.
   const end = Math.max(5, now * 1.15, now + Math.min(etaSecs ?? 0, now * 0.6 + 5), 1);
   const last = samples.at(-1);
+  // The typical finish gives way to where this transfer is really heading, and meets the end when it ends.
+  const mark = total != null && total > 0 ? finishMark(total, now, etaSecs, fraction) : null;
   const maxFiles = niceMax(Math.max(1, ...samples.map((s) => s.filesPerSec)));
   const maxBytes = niceMax(Math.max(1, ...samples.map((s) => s.bytesPerSec)));
   const x = (t: number) => pad.l + (t / end) * w;
@@ -281,7 +284,7 @@ export function SpeedGraph({ samples, total, etaSecs, bytes = true }: { samples:
           })}
         </>
       )}
-      {total != null && total > 0 && total < end * 1.5 && <line x1={x(Math.min(total, end))} x2={x(Math.min(total, end))} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
+      {mark != null && mark > 0 && mark < end * 1.5 && <line x1={x(Math.min(mark, end))} x2={x(Math.min(mark, end))} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
       <text x={pad.l} y={pad.t - 1} className="graph-label files" fontSize="9">files/s</text>
       {bytes && <text x={pad.l + w} y={pad.t - 1} textAnchor="end" className="graph-label bytes" fontSize="9">MB/s</text>}
     </svg>
@@ -418,7 +421,7 @@ function TransferDetail({ p, endedAt }: { p: Progress; endedAt?: number }) {
       <Bar fraction={fraction} indeterminate={p.phase === "scanning" || counting} />
       {on("graph") && (
         <>
-          <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} />
+          <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} fraction={fraction} />
           <div className="graph-legend">
             <span className="files">● Files per second</span>
             <span className="bytes">● Megabytes per second</span>
@@ -622,7 +625,7 @@ function DeleteDetail({ p }: { p: DeleteProgress }) {
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
       {stats && (
         <>
-          <SpeedGraph samples={series} total={typical} etaSecs={stats.etaSecs} bytes={hasBytes} />
+          <SpeedGraph samples={series} total={typical} etaSecs={stats.etaSecs} bytes={hasBytes} fraction={fraction} />
           <div className="graph-legend">
             <span className="files">● Items per second</span>
             {hasBytes && <span className="bytes">● Megabytes per second</span>}
