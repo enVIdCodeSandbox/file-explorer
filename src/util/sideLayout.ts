@@ -5,8 +5,14 @@
 export const NAV_ITEMS = ["home", "thispc", "trash", "analyze", "clear"] as const;
 export type NavId = (typeof NAV_ITEMS)[number];
 
-/** "top" is the pane's own header; the rest are sections. */
-export const ZONES = ["top", "frequent", "recents", "pinned", "drives"] as const;
+/**
+ * "top" is the pane's own header; "frequent" to "drives" are inside the sections; "below:x" is the strip between
+ * section x and the next one, so an entry can also sit on its own between sections.
+ */
+export const ZONES = [
+  "top", "frequent", "recents", "pinned", "drives",
+  "below:frequent", "below:recents", "below:pinned", "below:drives",
+] as const;
 export type Zone = (typeof ZONES)[number];
 
 export type Layout = Record<Zone, NavId[]>;
@@ -17,7 +23,9 @@ export const isZone = (x: unknown): x is Zone => typeof x === "string" && (ZONES
 export const SETTING = "sidebar.layout";
 
 export function defaultLayout(): Layout {
-  return { top: [...NAV_ITEMS], frequent: [], recents: [], pinned: [], drives: [] };
+  const out = Object.fromEntries(ZONES.map((z) => [z, [] as NavId[]])) as Layout;
+  out.top = [...NAV_ITEMS];
+  return out;
 }
 
 /** Reads the saved layout; whatever is missing, repeated or unknown is put right, so every entry is in exactly one place. */
@@ -93,11 +101,15 @@ export function placed(layout: Layout, shown: ReadonlySet<Zone>, hidden: Readonl
   for (const z of ZONES) {
     for (const id of layout[z]) {
       if (hidden.has(id)) continue;
-      out[shown.has(z) || z === "top" ? z : "top"].push(id);
+      // The header and the strips between sections are always there; a turned-off section is not.
+      out[shown.has(z) || z === "top" || isBetween(z) ? z : "top"].push(id);
     }
   }
   return out;
 }
+
+/** Whether a zone is the strip between two sections (not inside one). */
+export const isBetween = (z: Zone) => z.startsWith("below:");
 
 /** The zone an entry is in. */
 export function zoneOf(layout: Layout, id: NavId): Zone {

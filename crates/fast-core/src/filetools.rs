@@ -611,7 +611,7 @@ pub fn stage_archive(archive: &Path, into: &Path, cancel: &AtomicBool, progress:
         if entry.is_dir() || entry.is_symlink() {
             continue;
         }
-        let (Some(rel), Some(t)) = (crate::archive::safe_relative(entry.name()), entry.last_modified()) else { continue };
+        let (Some(rel), Some(t)) = (crate::archive::safe_relative(&entry.name().map(|n| n.into_owned()).unwrap_or_default()), entry.last_modified()) else { continue };
         let naive = chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32).and_then(|d| d.and_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32));
         let Some(local) = naive.and_then(|n| chrono::Local.from_local_datetime(&n).earliest()) else { continue };
         let _ = filetime::set_file_mtime(into.join(rel), filetime::FileTime::from_unix_time(local.timestamp(), 0));
@@ -840,7 +840,7 @@ fn grep_one(path: &Path, re: &regex::Regex, o: &GrepOpts) -> Vec<GrepHit> {
                     if e.is_dir() || e.size() > o.max_file_size.min(20 * 1024 * 1024) {
                         continue;
                     }
-                    let name = e.name().to_string();
+                    let name = e.name().map(|n| n.into_owned()).unwrap_or_default();
                     if !wild_any(&o.masks, name.rsplit('/').next().unwrap_or(&name)) && !o.masks.is_empty() {
                         continue;
                     }

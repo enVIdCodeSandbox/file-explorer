@@ -292,7 +292,7 @@ fn read_items(archive: &Path, kind: Kind) -> Result<Vec<Item>> {
             let mut zip = zip::ZipArchive::new(BufReader::new(open(archive)?)).map_err(|e| zip_error(archive, e))?;
             for i in 0..zip.len() {
                 let entry = zip.by_index_raw(i).map_err(|e| zip_error(archive, e))?;
-                let Some(path) = clean(entry.name()) else { continue };
+                let Some(path) = clean(&entry.name().map(|n| n.into_owned()).unwrap_or_default()) else { continue };
                 let modified = entry.last_modified().and_then(zip_millis);
                 items.push(Item { path, is_dir: entry.is_dir(), size: entry.size(), modified });
             }
@@ -574,13 +574,15 @@ pub fn extract_items_with(archive: &Path, inners: &[String], into: &Path, cancel
     match kind {
         Kind::Zip => {
             let mut zip = zip::ZipArchive::new(BufReader::new(open(archive)?)).map_err(|e| zip_error(archive, e))?;
+            // Local headers must agree with the central directory the names were listed from.
+            zip.validate_header_consistency().map_err(|e| zip_error(archive, e))?;
             let count = zip.len() as u64;
             for i in 0..zip.len() {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(cancelled());
                 }
-                let mut entry = zip.by_index(i).map_err(|e| zip_error(archive, e))?;
-                let Some(path) = clean(entry.name()) else {
+                let mut entry = zip.by_index_with_options(i, crate::archive::zip_read_options()).map_err(|e| zip_error(archive, e))?;
+                let Some(path) = clean(&entry.name().map(|n| n.into_owned()).unwrap_or_default()) else {
                     out.refused += 1;
                     continue;
                 };

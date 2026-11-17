@@ -14,7 +14,7 @@
 
 **Entries in the pane** (frequent folders, recents, pins, drives) have the same right-click menu as in a folder window, including the system's own entries.
 
-**Moving Home, This PC, Recycle Bin, Disk usage and Smart Clear.** Drag any of them into another section, or next to another entry, and they stay there until you drag them out (right-click → Move back to the top). If you hide the section they are in, they are shown at the top until it comes back. Recycle Bin, Disk usage and Smart Clear can be hidden in Settings → Navigation pane.
+**Moving Home, This PC, Recycle Bin, Disk usage and Smart Clear.** Drag any of them into a section, next to another entry, or into the strip between two sections (it lights up while you drag), and they stay there until you drag them out (right-click → Move back to the top). If you hide the section they are in, they are shown at the top until it comes back. Recycle Bin, Disk usage and Smart Clear can be hidden in Settings → Navigation pane.
 
 **Changing icons.** Right-click a drive, a phone or camera, or a saved server and choose Change icon… to give that one (or all of its kind) another of the app's icons or a picture of your own. The same works for the navigation entries and for any other icon in the window (right-click it). A changed icon changes everywhere that icon is used, but icons are changed for a kind of folder or file, never for one folder or file. Settings → Appearance → Icons lists every icon with Change and Reset, and one button puts them all back. Pictures are shrunk to 96 pixels and kept in the settings.
 
@@ -110,6 +110,8 @@ Select two or more items and press **F2** (or Rename in the command bar or right
 Extensions stay as they are. Names that would be empty, contain characters the system does not allow, clash with each other or with another item are marked in red and the button stays off. Shifting a series (1→2, 2→3) works without overwriting anything. One Ctrl+Z undoes the whole batch.
 
 ## Zip and other archives
+
+**Safety.** Before a zip is unpacked its two sets of headers (the list of names the app shows and checks, and the headers beside each file) must agree and nothing may be hidden from the list, so a doctored archive ("zip cloaking") is refused instead of writing a different file than the one listed. Names that climb out of the folder, and links, are refused as before.
 
 Right-click → **Compress to ZIP** makes `name.zip` next to the item (`Archive.zip` for several items). Right-click a `.zip`, `.tar` or `.tar.gz` / `.tgz` file → **Extract to "name"** unpacks into a new folder next to it, or **Extract here**. Files that already exist are kept, never replaced. Compressing and extracting can be cancelled from the progress card. Symbolic links are left out of zips, and archive entries that try to reach outside the target folder are refused.
 

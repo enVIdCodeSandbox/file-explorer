@@ -368,7 +368,7 @@ fn zip_rewrite(archive: &Path, tmp: &Path, plan: &Plan, cancel: &AtomicBool, rep
             return Err(cancelled());
         }
         let file = zip.by_index_raw(i).map_err(zip_err(archive))?;
-        let raw = file.name().to_string();
+        let raw = file.name().map(|n| n.into_owned()).unwrap_or_default();
         let is_dir = file.is_dir();
         let Some(path) = clean(&raw) else {
             w.raw_copy_file(file).map_err(zip_err(archive))?; // not ours to judge: kept as it was

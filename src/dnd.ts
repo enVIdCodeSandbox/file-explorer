@@ -20,7 +20,7 @@ import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
 import { baseName, insideArchive, isArchiveLoc, isInside, parentPath } from "./util/path";
-import { isNavId, isZone, moveNav, parseLayout, serializeLayout, SETTING as LAYOUT_KEY, type NavId, type Zone } from "./util/sideLayout";
+import { isBetween, isNavId, isZone, moveNav, parseLayout, serializeLayout, SETTING as LAYOUT_KEY, type NavId, type Zone } from "./util/sideLayout";
 
 export interface Mods {
   ctrl: boolean;
@@ -227,7 +227,7 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
       verdict = { ok: true, text: "Move here" };
       hit.el.setAttribute("data-insert", hit.where);
     } else if (hit?.kind === "zone") {
-      verdict = { ok: true, text: hit.zone === "top" ? "Move to the top" : `Move into ${SECTION_NAMES[hit.zone] ?? "this section"}` };
+      verdict = { ok: true, text: hit.zone === "top" ? "Move to the top" : isBetween(hit.zone) ? "Put between sections" : `Move into ${SECTION_NAMES[hit.zone] ?? "this section"}` };
       hit.el.setAttribute("data-drop-over", "");
     } else if (hit?.kind === "frequent") {
       const folders = payload.dirs.length > 0 && payload.dirs.every(Boolean);
@@ -271,6 +271,7 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
       payload = get();
       if (!payload) return finish(false);
       document.body.setAttribute("data-dragging", "");
+      if (payload.navItem) document.body.setAttribute("data-dragging-nav", "");
       // Items inside an archive do not exist on disk. Unpack them now, while the pointer is
       // still crossing the window, so they are ready when it reaches the edge.
       if (payload.paths.length && payload.paths.every(isArchiveLoc)) {
@@ -320,6 +321,7 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
     clearMarks();
     setView(null);
     document.body.removeAttribute("data-dragging");
+    document.body.removeAttribute("data-dragging-nav");
     if (!started) return;
     // The click that follows letting go must not open what was dropped on.
     const swallow = (e: Event) => (e.stopPropagation(), e.preventDefault());
@@ -359,7 +361,7 @@ async function drop(p: DragPayload, hit: Hit, v: Verdict, _mods: Mods) {
       const next = hit.kind === "nav" ? moveNav(layout, p.navItem!, zone, hit.id, hit.where) : moveNav(layout, p.navItem!, zone);
       st.advanced = { ...st.advanced, [LAYOUT_KEY]: serializeLayout(next) };
       // A folded section would hide what was just put in it.
-      if (zone !== "top") {
+      if (zone !== "top" && !isBetween(zone)) {
         const folded = new Set(String(st.advanced?.["sidebar.folded"] ?? "").split(",").filter(Boolean));
         if (folded.delete(zone)) st.advanced = { ...st.advanced, "sidebar.folded": [...folded].join(",") };
       }

@@ -368,9 +368,11 @@ pub fn appimage_script(new_file: &Path, target: &Path) -> String {
 /// Unpack a downloaded build into `into`. Names that would land outside it are refused.
 pub fn unzip(zip_file: &Path, into: &Path) -> std::io::Result<()> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_file)?).map_err(std::io::Error::other)?;
+    // Local headers must agree with the central directory, so what is checked is what is written.
+    archive.validate_header_consistency().map_err(std::io::Error::other)?;
     std::fs::create_dir_all(into)?;
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(std::io::Error::other)?;
+        let mut entry = archive.by_index_with_options(i, crate::archive::zip_read_options()).map_err(std::io::Error::other)?;
         let Some(rel) = entry.enclosed_name() else {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the build contains a path outside its folder"));
         };

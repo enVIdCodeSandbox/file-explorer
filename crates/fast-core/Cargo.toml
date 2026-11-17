@@ -41,7 +41,7 @@ bytes = "1"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 # Archives
-zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+zip = { version = "9", default-features = false, features = ["deflate", "time"] }
 tar = { version = "0.4", default-features = false }
 sevenz-rust2 = { version = "0.25", default-features = false, features = ["bzip2", "deflate"] }
 bzip2-rs = "0.1"

@@ -23,6 +23,13 @@ describe("the navigation entries' places", () => {
     expect(l.drives).toEqual(["analyze", "home", "trash"]);
   });
 
+  it("can leave an entry between two sections, which stays when a section is turned off", () => {
+    const l = moveNav(defaultLayout(), "home", "below:pinned");
+    expect(parseLayout(serializeLayout(l))["below:pinned"]).toEqual(["home"]);
+    const shown = new Set<Zone>(["top", "frequent"]);
+    expect(placed(l, shown, new Set())["below:pinned"]).toEqual(["home"]);
+  });
+
   it("puts right what is missing, repeated or unknown", () => {
     const l = parseLayout(JSON.stringify({ top: ["home", "home", "bogus"], pinned: ["home", "clear"], elsewhere: ["trash"] }));
     expect(l.top).toEqual(["home", "thispc", "trash", "analyze"]);

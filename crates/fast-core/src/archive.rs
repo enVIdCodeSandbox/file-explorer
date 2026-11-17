@@ -154,6 +154,12 @@ pub(crate) fn add_tree(
     Ok(())
 }
 
+/// How entries are read when they are about to be written to disk: each one's local header must match the central
+/// directory the names were judged from.
+pub(crate) fn zip_read_options() -> zip::read::ZipReadOptions<'static> {
+    zip::read::ZipReadOptions::new().enforce_header_consistency(true)
+}
+
 pub(crate) fn zip_err(path: &Path) -> impl Fn(zip::result::ZipError) -> CoreError + '_ {
     move |e| match e {
         zip::result::ZipError::Io(io) => CoreError::io(path, io),
@@ -274,15 +280,19 @@ pub fn extract_with(archive: &Path, into: &Path, cancel: &AtomicBool, report: Re
     match format {
         Format::Zip => {
             let mut zip = zip::ZipArchive::new(BufReader::new(File::open(archive).map_err(|e| CoreError::io(archive, e))?)).map_err(zip_err(archive))?;
+            // What was listed is what gets written: the local headers must agree with the central directory, with
+            // nothing hidden from it ("zip cloaking").
+            zip.validate_header_consistency().map_err(zip_err(archive))?;
             let count = zip.len() as u64;
             report(0, count, "");
             for i in 0..zip.len() {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(cancelled());
                 }
-                let mut entry = zip.by_index(i).map_err(zip_err(archive))?;
-                report(i as u64, count, entry.name());
-                let Some(rel) = safe_relative(entry.name()) else {
+                let mut entry = zip.by_index_with_options(i, zip_read_options()).map_err(zip_err(archive))?;
+                let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
+                report(i as u64, count, &name);
+                let Some(rel) = safe_relative(&name) else {
                     refused += 1;
                     continue;
                 };
@@ -541,6 +551,37 @@ mod tests {
         assert_eq!(done.files, 1);
         assert!(!tmp.path().join("escaped.txt").exists());
         assert_eq!(fs::read(out.join("fine.txt")).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn a_cloaked_zip_whose_two_headers_disagree_is_refused() {
+        // The central directory (what is listed and checked) says one name; the local header (what a streaming
+        // reader writes) says another. Nothing may be written.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cloaked.zip");
+        {
+            let mut z = zip::ZipWriter::new(File::create(&path).unwrap());
+            z.start_file("report.pdf", zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(b"payload").unwrap();
+            z.finish().unwrap();
+        }
+        let mut bytes = fs::read(&path).unwrap();
+        let name = b"report.pdf";
+        let last = bytes.windows(name.len()).rposition(|w| w == name).unwrap();
+        bytes[last..last + name.len()].copy_from_slice(b"run_job.sh");
+        fs::write(&path, &bytes).unwrap();
+        let out = tmp.path().join("out");
+        assert!(extract(&path, &out, &no()).is_err());
+        assert!(!out.join("run_job.sh").exists() && !out.join("report.pdf").exists());
+        // The same archive made properly still extracts.
+        let good = tmp.path().join("good.zip");
+        {
+            let mut z = zip::ZipWriter::new(File::create(&good).unwrap());
+            z.start_file("report.pdf", zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(b"payload").unwrap();
+            z.finish().unwrap();
+        }
+        assert_eq!(extract(&good, &tmp.path().join("ok"), &no()).unwrap().files, 1);
     }
 
     #[test]

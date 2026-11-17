@@ -993,3 +993,9 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .icons-row[data-changed] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .icons-preview { display: grid; place-items: center; }
 img.icon[data-custom], img.file-icon[data-custom] { display: inline-block; flex: none; vertical-align: middle; }
+
+/* Between sections: nothing to see until an entry is being dragged, then a strip to drop it on. */
+.side-gap { min-height: 0; }
+.sidebar[data-horizontal] .side-gap { display: flex; align-items: center; gap: 2px; flex: none; }
+body[data-dragging-nav] .side-gap { min-height: 14px; margin: 1px 0; border-radius: 4px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }

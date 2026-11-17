@@ -4,7 +4,7 @@
 import { shellFor } from "../util/shellWords";
 import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, type Drive, type SavedServer, type TerminalMode } from "../api";
 import {
   GROUP_COLORS,
@@ -1506,7 +1506,15 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
         {navRows("top")}
       </div>
 
-      {sidebarOrder(settings).map((id) => blocks[id])}
+      {sidebarOrder(settings).map((id) => (
+        <Fragment key={id}>
+          {blocks[id]}
+          {/* The strip below a section: entries can be dropped here to sit between sections. */}
+          <div className="side-gap" data-nav-zone={`below:${id}`} data-has={where[`below:${id}` as Zone].length || undefined}>
+            {navRows(`below:${id}` as Zone)}
+          </div>
+        </Fragment>
+      ))}
 
       <div className="side-group" key="servers">
         {collapsed ? <div className="side-divider" /> : (
