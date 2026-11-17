@@ -250,6 +250,7 @@ pub fn run() {
             commands::prefetch,
             commands::record_visit,
             commands::frequent_folders,
+            commands::list_fonts,
             commands::frequent_seed,
             commands::frequent_forget,
             commands::get_details,

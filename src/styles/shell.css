@@ -999,3 +999,11 @@ img.icon[data-custom], img.file-icon[data-custom] { display: inline-block; flex:
 .sidebar[data-horizontal] .side-gap { display: flex; align-items: center; gap: 2px; flex: none; }
 body[data-dragging-nav] .side-gap { min-height: 14px; margin: 1px 0; border-radius: 4px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
 body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
+
+/* A font of its own for some parts of the app (Settings → Themes → Fonts for each part). Empty: the app's font. */
+.sidebar, .sidebar-wrap { font-family: var(--font-sidebar, inherit); }
+.file-scroller, .file-header, .col-header, .miller { font-family: var(--font-files, inherit); }
+.tab-bar, .toolbar, .address-bar { font-family: var(--font-toolbar, inherit); }
+.font-areas { display: grid; gap: 10px; }
+.font-area { display: grid; grid-template-columns: 200px 1fr auto; gap: 6px 8px; align-items: center; }
+.font-area .font-sample { grid-column: 2 / -1; padding: 4px 8px; border: 1px dashed var(--border); border-radius: var(--radius-small); color: var(--text-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

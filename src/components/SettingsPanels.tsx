@@ -14,6 +14,7 @@ import { RULES_KEY, cacheRules } from "../util/cacheRules";
 import { DOCK_LABEL, PANELS, PRESETS, moveTo, nudge, panelsAt, type Dock } from "../util/layout";
 import { THEMES } from "../util/themes";
 import { FONTS } from "../useAppearance";
+import { FONT_AREAS, fontStack, importedFamily } from "../util/fontAreas";
 import { patchPanel, useLayout } from "./Layout";
 
 // ---------------------------------------------------------------------------
@@ -63,9 +64,25 @@ const FILTERS: Record<AssetKind, { name: string; extensions: string[] }> = {
   image: { name: "Pictures", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] },
 };
 
+/** The fonts installed on this computer (looked up once). */
+let installedFonts: Promise<{ name: string; fixedWidth: boolean }[]> | null = null;
+export function useInstalledFonts() {
+  const [fonts, setFonts] = useState<{ name: string; fixedWidth: boolean }[]>([]);
+  useEffect(() => {
+    installedFonts ??= api.listFonts().then((f) => f ?? []).catch(() => []);
+    let alive = true;
+    void installedFonts.then((f) => alive && setFonts(f));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return fonts;
+}
+
 export function FontPicker() {
   const font = useStore((s) => s.settings!.appearance.style.font);
   const { assets } = useAssets("font");
+  const installed = useInstalledFonts();
   const set = (v: string) => useStore.getState().updateSettings((s) => void (s.appearance.style.font = v));
   return (
     <select aria-label="Font" value={font} onChange={(e) => set(e.target.value)}>
@@ -79,8 +96,66 @@ export function FontPicker() {
           {a.name} (imported)
         </option>
       ))}
+      {installed.length > 0 && (
+        <optgroup label="Installed on this computer">
+          {installed.map((f) => (
+            <option key={f.name} value={`installed:${f.name}`}>
+              {f.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {font.startsWith("installed:") && !installed.some((f) => `installed:${f.name}` === font) && <option value={font}>{font.slice(10)}</option>}
       {font.startsWith("imported:") && !assets.some((a) => `imported:${a.name}` === font) && <option value={font}>{font.slice(9)} (missing)</option>}
     </select>
+  );
+}
+
+/** A font for each major part of the app, from the installed fonts or the imported ones. */
+export function FontAreasPanel() {
+  const installed = useInstalledFonts();
+  const { assets } = useAssets("font");
+  const advanced = useStore((s) => s.settings!.advanced);
+  const set = (key: string, value: string) => useStore.getState().updateSettings((s) => void (s.advanced = { ...s.advanced, [key]: value }));
+  return (
+    <div className="font-areas">
+      <p className="muted">Pick from the fonts installed on this computer (type to search), or type a name. Leave a part empty to use the app's font. Parts that show paths and code, and the terminal, need a fixed-width font.</p>
+      {FONT_AREAS.map((a) => {
+        const value = String(advanced?.[a.key] ?? "");
+        const list = `fonts-${a.id}`;
+        const options = installed.filter((f) => !a.fixedWidth || f.fixedWidth);
+        const preview = fontStack(value, a.fallback, value.startsWith("imported:") ? importedFamily(value.slice(9)) : null);
+        return (
+          <div key={a.id} className="font-area">
+            <label htmlFor={`font-${a.id}`}>{a.label}</label>
+            <input
+              id={`font-${a.id}`}
+              className="text-input"
+              list={list}
+              value={value}
+              placeholder={a.id === "terminal" || a.id === "mono" ? "Default fixed-width font" : "Same as the app"}
+              onChange={(e) => set(a.key, e.target.value)}
+              spellCheck={false}
+            />
+            <datalist id={list}>
+              {options.map((f) => (
+                <option key={f.name} value={f.name} />
+              ))}
+              {assets.map((x) => (
+                <option key={x.name} value={`imported:${x.name}`} label={`${x.name} (imported)`} />
+              ))}
+            </datalist>
+            <button className="secondary" disabled={!value} onClick={() => set(a.key, "")}>
+              Reset
+            </button>
+            <div className="font-sample" style={preview ? { fontFamily: preview } : undefined}>
+              {a.sample}
+            </div>
+          </div>
+        );
+      })}
+      {installed.length === 0 && <p className="muted">The list of installed fonts is not available here; type the name of a font instead.</p>}
+    </div>
   );
 }
 

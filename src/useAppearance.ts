@@ -8,6 +8,7 @@ import { useStore } from "./store";
 import { configureSort } from "./util/filter";
 import { configureFormat } from "./util/format";
 import { resolveTheme } from "./util/themes";
+import { FONT_AREAS, cssFamily, fontStack, importedFamily } from "./util/fontAreas";
 
 /** Built-in font choices: a name for Settings and the CSS font stack. */
 export const FONTS: { id: string; name: string; stack: string }[] = [
@@ -36,7 +37,7 @@ const loadedFonts = new Map<string, string>();
 async function loadFont(file: string): Promise<string | null> {
   if (loadedFonts.has(file)) return loadedFonts.get(file)!;
   try {
-    const family = `Imported ${file.replace(/\.[^.]+$/, "")}`;
+    const family = importedFamily(file);
     const face = new FontFace(family, await api.readAsset("font", file));
     await face.load();
     document.fonts.add(face);
@@ -85,6 +86,7 @@ export function useAppearance() {
     let alive = true;
     const builtin = FONTS.find((f) => f.id === style.font);
     if (builtin) root.style.setProperty("--font", builtin.stack);
+    else if (style.font.startsWith("installed:")) root.style.setProperty("--font", `${cssFamily(style.font.slice("installed:".length))}, ${FONTS[0].stack}`);
     else if (style.font.startsWith("imported:")) {
       void loadFont(style.font.slice("imported:".length)).then((family) => {
         if (alive && family) root.style.setProperty("--font", `"${family}", ${FONTS[0].stack}`);
@@ -101,6 +103,33 @@ export function useAppearance() {
       alive = false;
     };
   }, [style?.font, style?.fontSize, style?.radius, style?.menu, style?.icons, style?.folderColor, style?.background]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A font of its own for each major part of the app.
+  const areaFonts = useStore((s) => FONT_AREAS.map((a) => String(s.settings?.advanced?.[a.key] ?? "")).join("\u0001"));
+  useEffect(() => {
+    const root = document.documentElement;
+    let alive = true;
+    const choices = areaFonts.split("\u0001");
+    FONT_AREAS.forEach((a, i) => {
+      const choice = choices[i] ?? "";
+      // The terminal reads its own setting, but an imported font must still be loaded for it.
+      if (!a.cssVar) {
+        if (choice.startsWith("imported:")) void loadFont(choice.slice("imported:".length));
+        return;
+      }
+      const set = (family?: string | null) => {
+        if (!alive) return;
+        const stack = fontStack(choice, a.fallback, family);
+        if (stack) root.style.setProperty(a.cssVar!, stack);
+        else root.style.removeProperty(a.cssVar!);
+      };
+      if (choice.startsWith("imported:")) void loadFont(choice.slice("imported:".length)).then(set);
+      else set();
+    });
+    return () => {
+      alive = false;
+    };
+  }, [areaFonts]);
 
   // Imported background picture.
   useEffect(() => {

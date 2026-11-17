@@ -2,6 +2,7 @@
 // the terminal host (see src/terminal/state.ts and crates/fast-core/src/terminal).
 
 import "@xterm/xterm/css/xterm.css";
+import { fontStack, importedFamily } from "../util/fontAreas";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -26,6 +27,18 @@ const toB64 = (bytes: Uint8Array) => {
 const fromB64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
 const DEFAULT_FONT = 13;
+
+/**
+ * Only fixed-width fonts, ending in the system's own. The terminal draws each letter in a cell of one size, so a font
+ * whose letters differ in width (what a theme may set for the app's own text) comes out cramped and uneven.
+ */
+export const TERMINAL_FONTS = '"Cascadia Mono", "Cascadia Code", Consolas, "Lucida Console", Menlo, "SF Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace';
+
+/** The font stack to use: the person's choice (followed by the fixed-width ones) or the built-in list. */
+export function terminalFont(chosen: string): string {
+  const own = chosen.trim();
+  return fontStack(chosen, TERMINAL_FONTS, own.startsWith("imported:") ? importedFamily(own.slice(9)) : null) || TERMINAL_FONTS;
+}
 
 /** Make the terminal text bigger or smaller (0 = back to the default); the size is the one in Settings, so it is kept. */
 function zoomText(step: 1 | -1 | 0) {
@@ -72,7 +85,7 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
     const s = useStore.getState().settings;
     const t = new XTerm({
       fontSize: adv<number>(s, "terminal.fontSize"),
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "ui-monospace, Menlo, Consolas, monospace",
+      fontFamily: terminalFont(adv<string>(s, "terminal.fontFamily")),
       cursorStyle: adv<string>(s, "terminal.cursor") as "block" | "bar" | "underline",
       cursorBlink: adv<boolean>(s, "terminal.cursorBlink"),
       scrollback: adv<number>(s, "terminal.scrollback"),
@@ -223,6 +236,7 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
     const t = term.current;
     if (!t) return;
     t.options.fontSize = adv<number>(settings, "terminal.fontSize");
+    t.options.fontFamily = terminalFont(adv<string>(settings, "terminal.fontFamily"));
     t.options.cursorStyle = adv<string>(settings, "terminal.cursor") as "block" | "bar" | "underline";
     t.options.cursorBlink = adv<boolean>(settings, "terminal.cursorBlink");
     t.options.scrollback = adv<number>(settings, "terminal.scrollback");

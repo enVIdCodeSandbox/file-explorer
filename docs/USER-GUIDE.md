@@ -357,6 +357,8 @@ Type `cmd`, `powershell`, `pwsh`, `wt` or `wsl` (on macOS and Linux: `terminal`,
 
 ## Built-in terminal (Ctrl+`)
 
+The terminal always uses a fixed-width font (Cascadia Mono, Consolas and similar), whatever font a theme sets for the rest of the app. Settings → Advanced → Terminal panel → Font chooses another installed fixed-width font.
+
 The **Terminal** button on the left, under Servers, shows or hides a terminal inside the window, at the bottom by default. It works like the one in VS Code:
 
 - **Tabs and split panes.** `+` opens a new terminal in the folder you are viewing (or your home folder; Settings > Terminal). The split button puts a second shell beside the first (below it when the terminal is docked left or right). Middle-click or the `x` on a tab closes it.
@@ -418,6 +420,8 @@ Settings > Terminal chooses the terminal (on Windows Command Prompt, PowerShell,
 Opening a file goes in this order: the app set for that kind of file, then whatever the system itself does with it (the system's own choice is trusted, including Store apps such as Photos), and only if neither works the app picks the most likely installed app for the file type, counting programs that say they can open it (an image viewer for a picture, a media player for a video, and so on for the common types). Only when none is found does it show a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
 
 ## Settings
+
+**Fonts.** Settings → Themes → Font picks the app's font from the built-in choices, the fonts you import, or any font installed on the computer. *Fonts for each part* gives the file list, the navigation pane, the tabs, address bar and toolbar, paths and code, and the terminal a font of their own (type to search the installed fonts; leave a part empty to follow the app). Paths, code and the terminal list only fixed-width fonts.
 
 Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once, unless you turn that off (Advanced > Interface > "Save changes automatically"): then a **Save** bar appears at the bottom with Save and Discard, so a set of changes can be made and applied together. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
 

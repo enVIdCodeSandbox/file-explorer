@@ -924,6 +924,7 @@ export const api = {
   shellInvoke: (id: number) => invoke<void>("shell_invoke", { id }),
   createShortcut: (path: string) => invoke<string>("create_shortcut", { path }),
   importAsset: (kind: AssetKind, path: string) => invoke<string>("import_asset", { kind, path }),
+  listFonts: () => invoke<{ name: string; fixedWidth: boolean }[]>("list_fonts"),
   listAssets: (kind: AssetKind) => invoke<Asset[]>("list_assets", { kind }),
   readAsset: (kind: AssetKind, name: string) => invoke<ArrayBuffer>("read_asset", { kind, name }),
   deleteAsset: (kind: AssetKind, name: string) => invoke<void>("delete_asset", { kind, name }),

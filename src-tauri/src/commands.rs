@@ -3323,6 +3323,12 @@ pub async fn import_asset(state: State<'_, Shared>, kind: String, path: String) 
     .await
 }
 
+/// The fonts installed on this computer.
+#[tauri::command]
+pub async fn list_fonts() -> Vec<fast_core::fonts::InstalledFont> {
+    tauri::async_runtime::spawn_blocking(fast_core::fonts::installed).await.unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn list_assets(state: State<'_, Shared>, kind: String) -> CmdResult<Vec<Asset>> {
     let st = state.inner().clone();

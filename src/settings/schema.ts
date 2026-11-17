@@ -27,6 +27,7 @@ export type Control =
   | { type: "defaultFm" }
   | { type: "updates" }
   | { type: "icons" }
+  | { type: "fontAreas" }
   | { type: "methods" };
 
 export interface SettingDef {
@@ -108,6 +109,7 @@ export const SETTINGS: SettingDef[] = [
   // ---- Themes ----
   { key: "appearance.theme", section: "Themes", label: "Color theme", description: "Nineteen built in, including Windows 11, macOS and GNOME looks. The accent color in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colors scheme" },
   { key: "appearance.style.font", section: "Themes", label: "Font", description: "Built-in stacks, or a font file you import below.", control: { type: "font" }, keywords: "typeface text" },
+  { key: "font.areas", section: "Themes", label: "Fonts for each part", description: "Give the file list, navigation pane, tabs and toolbar, paths and code, and the terminal a font of their own.", control: { type: "fontAreas" }, keywords: "typeface font family installed system terminal sidebar file list" },
   { key: "appearance.style.fontSize", section: "Themes", label: "Text size", control: { type: "number", min: 10, max: 22, unit: "px" } },
   { key: "appearance.style.radius", section: "Themes", label: "Corner roundness", control: { type: "number", min: 0, max: 20, unit: "px" }, keywords: "rounded square corners" },
   { key: "appearance.style.menu", section: "Themes", label: "Menu style", control: { type: "select", options: [{ value: "glass", label: "Glass (blurred)" }, { value: "flat", label: "Flat" }, { value: "outlined", label: "Outlined" }, { value: "floating", label: "Floating card" }] }, keywords: "context menu popup" },

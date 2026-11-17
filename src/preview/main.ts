@@ -159,6 +159,11 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
       { id: "t3", name: "node_modules", originalParent: "C:\\Projects\\site", deleted: Math.floor(Date.now() / 1000) - 86400 * 9, size: null, entries: 214, isDir: true, path: null },
     ],
   }),
+  list_fonts: () => [
+    { name: "Arial", fixedWidth: false },
+    { name: "Consolas", fixedWidth: true },
+    { name: "DejaVu Serif", fixedWidth: false },
+  ],
   trash_restore: () => 1,
   trash_purge: () => 1,
   trash_empty: () => 3,

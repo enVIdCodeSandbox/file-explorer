@@ -57,6 +57,8 @@ argon2 = "0.5"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # Terminal sessions (a pseudo-terminal on Unix, ConPTY on Windows).
 portable-pty = "0.9"
+# The fonts installed on the computer, for choosing one in Settings.
+fontdb = { version = "0.24", default-features = false, features = ["std", "fs", "memmap"] }
 # Phones over USB. Its USB layer cannot list devices on Android, and a phone has no use for it.
 mtp-rs = "0.38"
 sysinfo = { version = "0.33", default-features = false, features = ["disk", "system"] }
