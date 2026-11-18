@@ -142,9 +142,12 @@ describe("interface presets", () => {
   });
   it("gives no two shortcuts the same key within a preset", () => {
     for (const p of UI_PRESETS) {
-      const keys = { ...Object.fromEntries(KEY_COMMANDS.map((k) => [k.id, k.default])), ...((p.patch.keys as Record<string, string>) ?? {}) };
+      // Space is shared by Quick look and ticking a box on purpose, and the split view's own keys (F5, Tab) win in a pane.
+      const own = KEY_COMMANDS.filter((k) => k.scope !== "panes" && k.id !== "toggleCheck");
+      const keys = { ...Object.fromEntries(own.map((k) => [k.id, k.default])), ...((p.patch.keys as Record<string, string>) ?? {}) };
       const seen = new Map<string, string>();
       for (const [id, combo] of Object.entries(keys)) {
+        if (!combo) continue;
         expect(seen.has(combo), `${p.id}: ${id} and ${seen.get(combo)} both use ${combo}`).toBe(false);
         seen.set(combo, id);
       }

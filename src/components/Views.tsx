@@ -1,5 +1,7 @@
 // Non-folder pages: Home, This PC, search results and disk usage.
 
+import { commandsFor } from "../settings/keys";
+import { sk, skShift } from "../util/shortcutText";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useSelectionBand } from "./useSelectionBand";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -555,23 +557,25 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const mod = e.ctrlKey || e.metaKey;
     const picked = chosen();
     const paths = picked.map((h) => h.path);
     let handled = true;
-    if (e.key === "ArrowDown") move(1, e.shiftKey);
-    else if (e.key === "ArrowUp") move(-1, e.shiftKey);
-    else if (e.key === "Home") move(-hits.length, e.shiftKey);
-    else if (e.key === "End") move(hits.length, e.shiftKey);
-    else if (e.key === "PageDown") move(15, e.shiftKey);
-    else if (e.key === "PageUp") move(-15, e.shiftKey);
-    else if (e.key === "Enter" && picked.length) picked.forEach(open);
-    else if (e.key === "Delete" && paths.length) void deletePaths(paths, e.shiftKey);
-    else if (e.key === "Escape") setSelected(new Set());
-    else if (mod && e.key.toLowerCase() === "a") setSelected(new Set(hits.map((h) => h.path)));
-    else if (mod && e.key.toLowerCase() === "c" && paths.length) setClipboard({ paths, op: "copy" });
-    else if (mod && e.key.toLowerCase() === "x" && paths.length) setClipboard({ paths, op: "move" });
-    else if (mod && e.key.toLowerCase() === "v") paste();
+    const cmds = commandsFor(useStore.getState().settings, e.nativeEvent);
+    const is = (id: string) => cmds.includes(id);
+    if (is("cursorDown")) move(1, e.shiftKey);
+    else if (is("cursorUp")) move(-1, e.shiftKey);
+    else if (is("cursorFirst")) move(-hits.length, e.shiftKey);
+    else if (is("cursorLast")) move(hits.length, e.shiftKey);
+    else if (is("pageDown")) move(15, e.shiftKey);
+    else if (is("pageUp")) move(-15, e.shiftKey);
+    else if (is("open") && picked.length) picked.forEach(open);
+    else if (is("delete") && paths.length) void deletePaths(paths, e.shiftKey);
+    else if (is("clearSelection")) setSelected(new Set());
+    else if (is("selectAll")) setSelected(new Set(hits.map((h) => h.path)));
+    else if (is("copy") && paths.length) setClipboard({ paths, op: "copy" });
+    else if (is("cut") && paths.length) setClipboard({ paths, op: "move" });
+    else if (is("paste")) paste();
+    else if (is("copyPath") && paths.length) void navigator.clipboard.writeText(paths.join("\n"));
     else handled = false;
     if (handled) {
       e.preventDefault();
@@ -618,7 +622,7 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
       setSelected(new Set([made]));
     };
     const items: (MenuItem | false | null | undefined)[] = [
-      one && { id: "open", label: "Open", shortcut: "Enter", run: () => open(one) },
+      one && { id: "open", label: "Open", shortcut: sk("open"), run: () => open(one) },
       one?.isDir && { id: "openNewTab", label: "Open in new tab", run: () => newTab(one.path, { background: true }) },
       one && !one.isDir && { id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(one.path) },
       one && { id: "reveal", label: "Open containing folder", icon: "folderOpen", run: () => reveal(one) },
@@ -641,13 +645,13 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
       { id: "archive-zip", label: "Compress to ZIP", icon: "archive", run: () => void compressPaths(paths) },
       one && !one.isDir && isArchiveName(one.name) && { id: "archive-here", label: "Extract here", icon: "archive", run: () => void extractArchive(one.path, true) },
       one && !one.isDir && isArchiveName(one.name) && { id: "archive-to", label: `Extract to "${one.name.replace(/(\.tar)?\.[^.]+$/i, "")}"`, icon: "archive", run: () => void extractArchive(one.path, false) },
-      { id: "cut", label: "Cut", icon: "cut", shortcut: "Ctrl+X", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
-      { id: "copy", label: "Copy", icon: "copy", shortcut: "Ctrl+C", run: () => setClipboard({ paths, op: "copy" }) },
-      { id: "paste", label: one?.isDir ? "Paste into this folder" : "Paste", icon: "paste", shortcut: "Ctrl+V", disabled: !dest, run: () => dest && void pasteInto(dest) },
+      { id: "cut", label: "Cut", icon: "cut", shortcut: sk("cut"), separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
+      { id: "copy", label: "Copy", icon: "copy", shortcut: sk("copy"), run: () => setClipboard({ paths, op: "copy" }) },
+      { id: "paste", label: one?.isDir ? "Paste into this folder" : "Paste", icon: "paste", shortcut: sk("paste"), disabled: !dest, run: () => dest && void pasteInto(dest) },
       one && { id: "createShortcut", label: "Create shortcut", separatorBefore: true, run: () => void api.createShortcut(one.path).then(() => showToast("Shortcut created.")).catch((e) => showToast(String(e))) },
-      { id: "delete", label: "Delete", icon: "trash", shortcut: "Del", run: () => void deletePaths(paths) },
-      { id: "deletePermanent", label: "Delete permanently", shortcut: "Shift+Del", danger: true, run: () => void deletePaths(paths, true) },
-      one && { id: "rename", label: "Rename", shortcut: "F2", icon: "rename", run: () => void rename(one) },
+      { id: "delete", label: "Delete", icon: "trash", shortcut: sk("delete"), run: () => void deletePaths(paths) },
+      { id: "deletePermanent", label: "Delete permanently", shortcut: skShift("delete"), danger: true, run: () => void deletePaths(paths, true) },
+      one && { id: "rename", label: "Rename", shortcut: sk("rename"), icon: "rename", run: () => void rename(one) },
       one && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirOf(one), "here") },
       one && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirOf(one), "admin") },
       one?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(one.path)) },

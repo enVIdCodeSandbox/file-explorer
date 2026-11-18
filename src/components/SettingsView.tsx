@@ -332,7 +332,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
           {!q && section === "Advanced" && (
             <>
               <section>
-                <h3>Keyboard shortcuts</h3>
+                <h3>Keyboard and mouse</h3>
                 <KeysPanel />
               </section>
               <section>

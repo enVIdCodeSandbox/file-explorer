@@ -24,18 +24,17 @@ import { latestLabel } from "./components/UpdatesPanel";
 import { Notices } from "./components/Notices";
 import { DetachedTransfers, Transfers } from "./components/Transfers";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
-import { commandFor } from "./settings/keys";
+import { commandById, commandsFor, mouseComboOf } from "./settings/keys";
 import { startLiveTracker } from "./util/liveFiles";
 import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
-import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parseLocation } from "./util/path";
+import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parentPath, parseLocation } from "./util/path";
 import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 import { useMobile } from "./util/device";
 import { crumb, installTrail } from "./util/crashTrail";
 import { whenIdle } from "./util/idle";
-import { zoomStep } from "./util/zoomKeys";
 
 // Parts that most sessions never open are loaded when first needed, so the first screen has less to read.
 const Tools = lazy(() => import("./components/Tools").then((m) => ({ default: m.Tools })));
@@ -317,21 +316,7 @@ function AppInner() {
       // Undo and Redo work wherever the focus is (a dialog that just closed leaves none), except while typing,
       // where the text box has its own undo. Their keys are the ones set in Settings > Advanced > Keyboard.
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
-      // F5 always refreshes, even if the Refresh key was changed.
-      if (e.key === "F5" && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) {
-        e.preventDefault();
-        s.refreshTab();
-        return;
-      }
-      // Ctrl + and Ctrl - resize the folder view, as Ctrl + scroll does. (The built-in terminal sizes its own text.)
-      const zoom = zoomStep(e);
-      const place = s.tabs.find((t) => t.id === s.activeTab)?.location ?? "";
-      if (zoom !== null && !typing && !isAppLocation(place) && !(e.target as HTMLElement | null)?.closest?.(".term-body, .xterm") && adv<boolean>(s.settings, "files.wheelZoom")) {
-        e.preventDefault();
-        s.zoomView(zoom);
-        return;
-      }
-      const command = commandFor(s.settings, e);
+      const command = commandsFor(s.settings, e).find((id) => commandById(id)?.scope === "app") ?? null;
       if (!command) return;
       // In the built-in terminal these are the shell's own keys (Ctrl+R searches its history, Ctrl+Y pastes what was cut).
       if (["undo", "redo", "redoAlt", "refresh", "refreshAlt"].includes(command) && (e.target as HTMLElement | null)?.closest?.(".term-body, .xterm")) return;
@@ -340,37 +325,21 @@ function AppInner() {
         e.preventDefault();
         return;
       }
-      const i = s.tabs.findIndex((t) => t.id === s.activeTab);
-      const n = s.tabs.length;
-      switch (command) {
-        case "undo": if (typing) return; void undoLast(); break;
-        case "redo":
-        case "redoAlt": if (typing) return; void redoLast(); break;
-        case "refresh":
-        case "refreshAlt": s.refreshTab(); break;
-        case "newTab": s.newTab(); break;
-        case "closeTab": s.closeTab(s.activeTab); break;
-        case "reopenTab": s.reopenTab(); break;
-        case "settings": s.openSettings(); break;
-        case "nextTab": s.activate(s.tabs[(i + 1) % n].id); break;
-        case "prevTab": s.activate(s.tabs[(i + n - 1) % n].id); break;
-        case "toggleSidebar": s.updateSettings((x) => void (x.appearance.sidebarCollapsed = !x.appearance.sidebarCollapsed)); break;
-        case "toggleDetails": s.updateSettings((x) => void (x.appearance.showDetailsPane = !x.appearance.showDetailsPane)); break;
-        case "toggleTypeFind": s.updateSettings((x) => void (x.advanced["files.typeFind"] = !adv<boolean>(x, "files.typeFind"))); s.showToast(adv<boolean>(useStore.getState().settings, "files.typeFind") ? "Type to find is on." : "Type to find is off."); break;
-        case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); break;
-        case "toggleTerminal": toggleTerminalPanel(); break;
-        case "searchInFiles": openTools("grep"); break;
-        case "focusCommandLine": {
-          if (!adv<boolean>(s.settings!, "ui.commandLine")) s.updateSettings((x) => void (x.advanced["ui.commandLine"] = true));
-          setTimeout(() => document.querySelector<HTMLInputElement>(".command-line-input")?.focus(), 50);
-          break;
-        }
-        case "thisPc": s.navigate(THIS_PC); break;
-        case "home": s.navigate(HOME); break;
-        case "toggleHidden": s.updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)); break;
-        default: return;
-      }
+      if (typing && ["zoomIn", "zoomInNum", "zoomOut", "zoomOutNum", "zoomReset"].includes(command)) return;
+      if (runAppCommand(command, { typing: !!typing, target: e.target as HTMLElement | null })) e.preventDefault();
+    };
+    // The extra mouse buttons (the side ones that go back and forward). The page must never go "back" itself.
+    const stopNative = (e: MouseEvent) => {
+      if (e.button === 3 || e.button === 4) e.preventDefault();
+    };
+    const onMouse = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
       e.preventDefault();
+      const s = useStore.getState();
+      if (s.dialog || !mouseComboOf(e)) return;
+      if ((e.target as HTMLElement | null)?.closest?.("[data-capture-key]")) return;
+      const command = commandsFor(s.settings, e)[0];
+      if (command) runAppCommand(command, { typing: false, target: e.target as HTMLElement | null });
     };
     // The webview's own right-click menu (Reload, Inspect…) is not part of the app.
     const onContext = (e: MouseEvent) => {
@@ -379,9 +348,15 @@ function AppInner() {
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("contextmenu", onContext);
+    window.addEventListener("mousedown", stopNative, true);
+    window.addEventListener("mouseup", onMouse, true);
+    window.addEventListener("auxclick", stopNative, true);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("contextmenu", onContext);
+      window.removeEventListener("mousedown", stopNative, true);
+      window.removeEventListener("mouseup", onMouse, true);
+      window.removeEventListener("auxclick", stopNative, true);
     };
   }, []);
 
@@ -546,6 +521,87 @@ async function askToRestart() {
     else useStore.getState().notify("info", "Update waiting", "Restart from Settings > Updates when you are ready");
   } finally {
     asking = false;
+  }
+}
+
+/** Do what a shortcut says, whether it came from a key or a mouse button. Says whether it was one of ours. */
+function runAppCommand(command: string, ctx: { typing: boolean; target: HTMLElement | null }): boolean {
+  const s = useStore.getState();
+  const { typing, target } = ctx;
+  const inTerminal = !!target?.closest?.(".term-body, .xterm");
+  // In the built-in terminal these are the shell's own keys (Ctrl+R searches its history, Ctrl+Y pastes what was cut).
+  if (["undo", "redo", "redoAlt", "refresh", "refreshAlt"].includes(command) && inTerminal) return false;
+  const place = s.tabs.find((t) => t.id === s.activeTab)?.location ?? "";
+  const i = s.tabs.findIndex((t) => t.id === s.activeTab);
+  const n = s.tabs.length;
+  const tabAt = (k: number) => s.tabs[Math.min(Math.max(k, 0), n - 1)];
+  switch (command) {
+    case "zoomIn":
+    case "zoomInNum":
+    case "zoomOut":
+    case "zoomOutNum":
+    case "zoomReset": {
+      // Ctrl + and Ctrl - resize the folder view, as Ctrl + scroll does. (The built-in terminal sizes its own text.)
+      if (isAppLocation(place) || inTerminal || !adv<boolean>(s.settings, "files.wheelZoom")) return false;
+      s.zoomView(command === "zoomReset" ? 0 : command.startsWith("zoomIn") ? 1 : -1);
+      return true;
+    }
+    case "back":
+    case "backMouse": s.back(); return true;
+    case "forward":
+    case "forwardMouse": s.forward(); return true;
+    case "goUp": {
+      const here = parseLocation(place);
+      if (here.kind !== "folder") return false;
+      s.navigate(parentPath(place) ?? THIS_PC);
+      return true;
+    }
+    case "undo": if (typing) return false; void undoLast(); return true;
+    case "redo":
+    case "redoAlt": if (typing) return false; void redoLast(); return true;
+    case "refresh":
+    case "refreshAlt": s.refreshTab(); return true;
+    case "newTab": s.newTab(); return true;
+    case "closeTab": s.closeTab(s.activeTab); return true;
+    case "reopenTab": s.reopenTab(); return true;
+    case "duplicateTab": s.duplicateTab(s.activeTab); return true;
+    case "settings": s.openSettings(); return true;
+    case "nextTab": s.activate(s.tabs[(i + 1) % n].id); return true;
+    case "prevTab": s.activate(s.tabs[(i + n - 1) % n].id); return true;
+    case "tabLast": s.activate(tabAt(n - 1).id); return true;
+    case "toggleSidebar": s.updateSettings((x) => void (x.appearance.sidebarCollapsed = !x.appearance.sidebarCollapsed)); return true;
+    case "toggleDetails": s.updateSettings((x) => void (x.appearance.showDetailsPane = !x.appearance.showDetailsPane)); return true;
+    case "toggleTypeFind": s.updateSettings((x) => void (x.advanced["files.typeFind"] = !adv<boolean>(x, "files.typeFind"))); s.showToast(adv<boolean>(useStore.getState().settings, "files.typeFind") ? "Type to find is on." : "Type to find is off."); return true;
+    case "editLayout": useStore.setState({ layoutEdit: !s.layoutEdit }); return true;
+    case "toggleTerminal": toggleTerminalPanel(); return true;
+    case "searchInFiles": openTools("grep"); return true;
+    case "focusCommandLine": {
+      if (!adv<boolean>(s.settings!, "ui.commandLine")) s.updateSettings((x) => void (x.advanced["ui.commandLine"] = true));
+      setTimeout(() => document.querySelector<HTMLInputElement>(".command-line-input")?.focus(), 50);
+      return true;
+    }
+    case "thisPc": s.navigate(THIS_PC); return true;
+    case "home": s.navigate(HOME); return true;
+    case "toggleHidden": s.updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)); return true;
+    case "fullscreen": void toggleFullscreen(); return true;
+    default: {
+      const m = /^tab([1-8])$/.exec(command);
+      if (m) {
+        s.activate(tabAt(Number(m[1]) - 1).id);
+        return true;
+      }
+      return false;
+    }
+  }
+}
+
+async function toggleFullscreen() {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const w = getCurrentWindow();
+    await w.setFullscreen(!(await w.isFullscreen()));
+  } catch {
+    /* no window to change (the browser preview, a phone) */
   }
 }
 

@@ -1,6 +1,7 @@
 // Window chrome: the title bar (tabs and window buttons in one row), the
 // address row, the command bar and the sidebar.
 
+import { sk } from "../util/shortcutText";
 import { shellFor } from "../util/shellWords";
 import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -22,7 +23,7 @@ import {
   useStore,
 } from "../store";
 import { adv } from "../settings/advanced";
-import { commandFor, keyFor } from "../settings/keys";
+import { commandById, commandsFor, keyFor } from "../settings/keys";
 import { driveName, driveRemote, hidesAddress } from "../util/drives";
 import { deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { isFiltering, toSearchQuery } from "../util/filter";
@@ -138,9 +139,9 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
       .filter((g) => g.id !== groupId)
       .map((g) => ({ id: `group-${g.id}`, label: `Add to "${g.name}"`, run: () => groupTab(id, g.id) })),
     ...(groupId ? [{ id: "ungroup", label: "Remove from group", run: () => groupTab(id, null) }] : []),
-    { id: "close", label: "Close tab", shortcut: "Ctrl+W", separatorBefore: true, run: () => closeTab(id) },
+    { id: "close", label: "Close tab", shortcut: sk("closeTab"), separatorBefore: true, run: () => closeTab(id) },
     { id: "closeOthers", label: "Close other tabs", disabled: tabs.length < 2, run: () => closeOthers(id) },
-    { id: "reopen", label: "Bring back closed tab", shortcut: "Ctrl+Shift+T", disabled: closedCount === 0, run: () => useStore.getState().reopenTab() },
+    { id: "reopen", label: "Bring back closed tab", shortcut: sk("reopenTab"), disabled: closedCount === 0, run: () => useStore.getState().reopenTab() },
   ];
 
   const groupMenu = (id: string): MenuItem[] => {
@@ -509,10 +510,11 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const cmd = commandFor(useStore.getState().settings, e);
+      const cmd = commandsFor(useStore.getState().settings, e).find((id) => commandById(id)?.scope === "nav") ?? null;
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
       // Two copies can be on screen (header and path bar): each answers only for what it shows.
-      if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
+      const toAddress = cmd === "focusAddress" || cmd === "focusAddressAlt" || cmd === "focusAddressF4";
+      if (toAddress) {
         if (!has("address")) return;
       } else if (!has("nav") && !has("search")) return;
       const chordOn = adv<boolean>(useStore.getState().settings, "search.chord");
@@ -537,7 +539,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
       if (cmd === "focusSearch") focusBox("level");
       else if (cmd === "searchGlobal") focusBox("global");
       else if (e.key === "F3") focusBox(null);
-      else if (cmd === "focusAddress" || (e.altKey && e.key.toLowerCase() === "d")) {
+      else if (toAddress) {
         e.preventDefault();
         setEditing(true);
       } else if (cmd === "back" && !(typing && !e.altKey && !e.ctrlKey && !e.metaKey)) {
@@ -879,7 +881,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
 
   const newMenu = (e: React.MouseEvent) =>
     below(e, [
-      { id: "folder", label: "Folder", icon: "folderOpen", shortcut: "Ctrl+Shift+N", run: () => void create(true, "New folder") },
+      { id: "folder", label: "Folder", icon: "folderOpen", shortcut: sk("newFolder"), run: () => void create(true, "New folder") },
       { id: "text", label: "Text document", icon: "list", run: () => void create(false, "New Text Document.txt") },
       { id: "file", label: "File…", icon: "newItem", run: () => void create(false, "New file") },
     ]);
@@ -950,13 +952,13 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
             ...networkMenuItems(drives, os, settings.appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           ]
         : []),
-      { id: "newTab", label: "New tab", shortcut: "Ctrl+T", separatorBefore: true, run: () => useStore.getState().newTab() },
-      { id: "selectAll", label: "Select all", shortcut: "Ctrl+A", disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
+      { id: "newTab", label: "New tab", shortcut: sk("newTab"), separatorBefore: true, run: () => useStore.getState().newTab() },
+      { id: "selectAll", label: "Select all", shortcut: sk("selectAll"), disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
       { id: "selectNone", label: "Select none", disabled: !inFolder, run: () => useStore.getState().runCommand("selectNone") },
       { id: "invert", label: "Invert selection", disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
-      { id: "selectGroup", label: "Select group…", shortcut: "Num +", disabled: !inFolder, run: () => useStore.getState().runCommand("selectGroup") },
-      { id: "deselectGroup", label: "Unselect group…", shortcut: "Num −", disabled: !inFolder, run: () => useStore.getState().runCommand("deselectGroup") },
-      { id: "restoreSelection", label: "Restore selection", shortcut: "Num /", disabled: !inFolder, run: () => useStore.getState().runCommand("restoreSelection") },
+      { id: "selectGroup", label: "Select group…", shortcut: sk("selectGroup"), disabled: !inFolder, run: () => useStore.getState().runCommand("selectGroup") },
+      { id: "deselectGroup", label: "Unselect group…", shortcut: sk("deselectGroup"), disabled: !inFolder, run: () => useStore.getState().runCommand("deselectGroup") },
+      { id: "restoreSelection", label: "Restore selection", shortcut: sk("restoreSelection"), disabled: !inFolder, run: () => useStore.getState().runCommand("restoreSelection") },
       { id: "todo", label: openCount(folder ?? "") ? `To-do for this folder (${openCount(folder ?? "")})…` : "To-do for this folder…", separatorBefore: true, disabled: !inFolder || !folder, run: () => useStore.setState({ todoFor: folder }) },
       { id: "fileTools", label: "File tools", disabled: !inFolder, children: fileToolsItems(selection) },
       { id: "properties", label: "Properties", icon: "info", separatorBefore: true, disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },

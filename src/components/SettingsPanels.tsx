@@ -4,7 +4,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type UserCommand, type HistoryInfo, type CrashLog } from "../api";
-import { KEY_COMMANDS, comboOf, keyFor } from "../settings/keys";
+import { KEYS_OFF, KEY_COMMANDS, KEY_GROUPS, MOUSE_BINDABLE, PICKER_KEYS, clashesOf, comboFrom, comboOf, commandById, keyFor, mouseComboOf, offList, piecesOf, type KeyCommand, type Pieces } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { formatCount, formatSize } from "../util/format";
 import { ALL_METHODS, METHOD_NAME, METHOD_NOTE, jobGroup } from "../util/methods";
@@ -773,52 +773,155 @@ export function KeysPanel() {
   const settings = useStore((s) => s.settings)!;
   const { updateSettings } = useStore.getState();
   const [recording, setRecording] = useState<string | null>(null);
-  const set = (id: string, combo: string | null) =>
+  const [picking, setPicking] = useState<string | null>(null);
+  const [find, setFind] = useState("");
+  const off = offList(settings);
+
+  const setBinding = (id: string, combo: string) =>
     updateSettings((s) => {
       const keys = { ...s.keys };
-      const def = KEY_COMMANDS.find((k) => k.id === id)!.default;
-      if (combo == null || combo === def) delete keys[id];
+      if (combo === commandById(id)!.default) delete keys[id];
       else keys[id] = combo;
       s.keys = keys;
     });
+  const setOn = (id: string, on: boolean) =>
+    updateSettings((s) => {
+      const list = offList(s);
+      if (on) list.delete(id);
+      else list.add(id);
+      if (list.size) s.advanced[KEYS_OFF] = [...list].join(",");
+      else delete s.advanced[KEYS_OFF];
+    });
+  const reset = (id: string) => {
+    setBinding(id, commandById(id)!.default);
+    setOn(id, true);
+  };
+  const changed = (id: string) => keyFor(settings, id) !== commandById(id)!.default || off.has(id);
+  const anyChanged = KEY_COMMANDS.some((k) => changed(k.id));
+  const resetAll = async () => {
+    const r = await ask({
+      title: "Reset every shortcut?",
+      message: "All keys and mouse buttons go back to their defaults and every shortcut is turned on again.",
+      buttons: [
+        { id: "ok", label: "Reset all shortcuts", primary: true, danger: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (r?.button !== "ok") return;
+    updateSettings((s) => {
+      s.keys = {};
+      delete s.advanced[KEYS_OFF];
+    });
+  };
+
+  const words = find.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = (k: KeyCommand) => !words.length || words.every((w) => `${k.label} ${k.group} ${keyFor(settings, k.id)}`.toLowerCase().includes(w));
+
   return (
     <div className="keys-panel">
-      {KEY_COMMANDS.map((k) => {
-        const current = keyFor(settings, k.id);
-        const clash = KEY_COMMANDS.find((o) => o.id !== k.id && keyFor(settings, o.id).toLowerCase() === current.toLowerCase());
+      <p className="muted">
+        Every key and mouse button of the app is here. Click a key and press the keys you want (or a side button of your mouse), or choose them from a list with <b>Choose…</b>. Each shortcut can be turned off, and <b>Reset</b> brings back its own key. The side buttons of a mouse (Mouse4 goes back, Mouse5 goes forward) work like keys, and can be given to other commands too.
+      </p>
+      <div className="keys-tools">
+        <input className="text-input" placeholder="Find a shortcut or a key…" aria-label="Find a shortcut" value={find} onChange={(e) => setFind(e.target.value)} />
+        <button className="secondary" disabled={!anyChanged} onClick={() => void resetAll()}>
+          Reset all
+        </button>
+      </div>
+      {KEY_GROUPS.map((group) => {
+        const rows = KEY_COMMANDS.filter((k) => k.group === group && shown(k));
+        if (!rows.length) return null;
         return (
-          <div key={k.id} className="setting">
-            <div className="setting-text">
-              <span className="setting-label">{k.label}</span>
-              {clash && <span className="muted warn">Also used for “{clash.label}”.</span>}
-            </div>
-            <span className="key-controls">
-              <button
-                className="secondary key-capture"
-                data-capture-key
-                onClick={() => setRecording(k.id)}
-                onBlur={() => setRecording((r) => (r === k.id ? null : r))}
-                onKeyDown={(e) => {
-                  if (recording !== k.id) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (e.key === "Escape") return setRecording(null);
-                  const combo = comboOf(e.nativeEvent);
-                  if (combo) {
-                    set(k.id, combo);
-                    setRecording(null);
-                  }
-                }}
-              >
-                {recording === k.id ? "Press the keys…" : current}
-              </button>
-              <button className="link-button" disabled={!settings.keys[k.id]} onClick={() => set(k.id, null)}>
-                Reset
-              </button>
-            </span>
-          </div>
+          <section key={group} className="keys-group">
+            <h4>{group}</h4>
+            {rows.map((k) => {
+              const current = keyFor(settings, k.id);
+              const on = !off.has(k.id);
+              const clash = clashesOf(settings, k.id);
+              const canMouse = MOUSE_BINDABLE(k);
+              return (
+                <div key={k.id} className="setting key-row" data-off={on ? undefined : true}>
+                  <button role="switch" aria-checked={on} aria-label={`${k.label}: on or off`} title={on ? "On: click to turn this shortcut off" : "Off: click to turn this shortcut on"} className="switch" data-on={on ? true : undefined} onClick={() => setOn(k.id, !on)}>
+                    <span />
+                  </button>
+                  <div className="setting-text">
+                    <span className="setting-label">{k.label}</span>
+                    {clash.length > 0 && <span className="muted warn">Also used for “{clash.map((o) => o.label).join("”, “")}”.</span>}
+                  </div>
+                  <span className="key-controls">
+                    <button
+                      className="secondary key-capture"
+                      data-capture-key
+                      aria-label={`Key for ${k.label}`}
+                      onClick={() => setRecording(k.id)}
+                      onBlur={() => setRecording((r) => (r === k.id ? null : r))}
+                      onMouseDown={(e) => {
+                        if (recording !== k.id || (e.button !== 3 && e.button !== 4)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!canMouse) return void useStore.getState().showToast("A mouse button can only be used for commands that go somewhere or change the app.");
+                        setBinding(k.id, mouseComboOf(e.nativeEvent));
+                        setRecording(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (recording !== k.id) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (e.key === "Escape") return setRecording(null);
+                        const combo = comboOf(e.nativeEvent);
+                        if (combo) {
+                          setBinding(k.id, combo);
+                          setRecording(null);
+                        }
+                      }}
+                    >
+                      {recording === k.id ? (canMouse ? "Press the keys or a mouse button…" : "Press the keys…") : current || "Not set"}
+                    </button>
+                    <button className="secondary" aria-expanded={picking === k.id} onClick={() => setPicking(picking === k.id ? null : k.id)}>
+                      Choose…
+                    </button>
+                    <button className="link-button" disabled={!changed(k.id)} onClick={() => reset(k.id)}>
+                      Reset
+                    </button>
+                  </span>
+                  {picking === k.id && <KeyPicker value={current} mouse={canMouse} onChange={(c) => setBinding(k.id, c)} />}
+                </div>
+              );
+            })}
+          </section>
         );
       })}
+      {words.length > 0 && !KEY_COMMANDS.some(shown) && <p className="muted">No shortcut matches.</p>}
+    </div>
+  );
+}
+
+/** Choose a key from lists: the modifier keys, then the key. */
+function KeyPicker({ value, mouse, onChange }: { value: string; mouse: boolean; onChange: (combo: string) => void }) {
+  const p = piecesOf(value);
+  const set = (patch: Partial<Pieces>) => onChange(comboFrom({ ...p, ...patch }));
+  const isMouse = p.key.startsWith("Mouse");
+  return (
+    <div className="key-picker" role="group" aria-label="Choose a key">
+      {(["ctrl", "alt", "shift"] as const).map((m) => (
+        <label key={m} className="key-mod">
+          <input type="checkbox" checked={p[m]} onChange={(e) => set({ [m]: e.target.checked })} /> {m === "ctrl" ? "Ctrl" : m === "alt" ? "Alt" : "Shift"}
+        </label>
+      ))}
+      <select className="text-input" aria-label="Key" value={p.key} onChange={(e) => set({ key: e.target.value })}>
+        <option value="">(none)</option>
+        {PICKER_KEYS.filter((g) => mouse || g.group !== "Mouse side buttons").map((g) => (
+          <optgroup key={g.group} label={g.group}>
+            {g.keys.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+        {p.key && !PICKER_KEYS.some((g) => g.keys.includes(p.key)) && <option value={p.key}>{p.key}</option>}
+      </select>
+      {isMouse && <span className="muted">A mouse button.</span>}
     </div>
   );
 }

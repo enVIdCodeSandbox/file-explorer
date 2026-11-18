@@ -2,6 +2,7 @@
 // rows on screen (plus a small overscan) exist in the DOM, so a folder with
 // 100,000 files scrolls as smoothly as one with ten.
 
+import { sk, skShift } from "../util/shortcutText";
 import { viewLevelOf } from "../util/viewLevel";
 import { wheelSteps } from "../util/zoomKeys";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -38,7 +39,7 @@ import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
 import { taskFromSelection } from "./tasksUtil";
 import { LockedCard } from "./Locks";
-import { commandFor, keyFor } from "../settings/keys";
+import { commandsFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
@@ -603,10 +604,10 @@ export function FileView({ path }: { path: string }) {
       .map((a) => ({ id: `custom-${a.id}`, label: a.label, icon: "newItem", run: () => void api.runCustomAction(a.id, paths).catch((err) => showToast(String(err))) }));
     const items: (MenuItem | false | null | undefined)[] = target
       ? [
-          single && { id: "open", label: "Open", shortcut: "Enter", run: () => open(single) },
+          single && { id: "open", label: "Open", shortcut: sk("open"), run: () => open(single) },
           picked.length > 0 && { id: "fileTools", label: "File tools", children: fileToolsItems(picked.map((x) => fullPath(x.name))) },
-          single && !single.isDir && { id: "view", label: "View", shortcut: "F3", run: () => viewFile(single, false) },
-          single && !single.isDir && { id: "quickLook", label: "Quick look", shortcut: "Space", run: () => viewFile(single, true) },
+          single && !single.isDir && { id: "view", label: "View", shortcut: sk("view"), run: () => viewFile(single, false) },
+          single && !single.isDir && { id: "quickLook", label: "Quick look", shortcut: sk("quickLook"), run: () => viewFile(single, true) },
           single?.isDir && { id: "openNewTab", label: "Open in new tab", run: () => newTab(fullPath(single.name), { background: true }) },
           single && !single.isDir && !isRemote(fullPath(single.name)) && !isArchiveLoc(fullPath(single.name)) && { id: "openWith", label: "Open with…", run: () => useStore.getState().chooseApp(fullPath(single.name)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
@@ -633,8 +634,8 @@ export function FileView({ path }: { path: string }) {
           { id: "archive-zip", label: "Compress to ZIP", icon: "archive", run: () => void compressPaths(paths) },
           single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-here", label: "Extract here", icon: "archive", run: () => void extractArchive(fullPath(single.name), true) },
           single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-to", label: `Extract to "${single.name.replace(/(\.tar)?\.[^.]+$/i, "")}"`, icon: "archive", run: () => void extractArchive(fullPath(single.name), false) },
-          { id: "cut", label: "Cut", shortcut: "Ctrl+X", icon: "cut", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
-          { id: "copy", label: "Copy", shortcut: "Ctrl+C", icon: "copy", run: () => setClipboard({ paths, op: "copy" }) },
+          { id: "cut", label: "Cut", shortcut: sk("cut"), icon: "cut", separatorBefore: true, run: () => setClipboard({ paths, op: "move" }) },
+          { id: "copy", label: "Copy", shortcut: sk("copy"), icon: "copy", run: () => setClipboard({ paths, op: "copy" }) },
           single?.isDir && {
             id: "paste",
             label: "Paste into folder",
@@ -647,9 +648,9 @@ export function FileView({ path }: { path: string }) {
             separatorBefore: true,
             run: () => void api.createShortcut(fullPath(single.name)).then(() => showToast("Shortcut created.")).catch((e) => showToast(String(e))),
           },
-          { id: "delete", label: "Delete", shortcut: "Del", icon: "trash", run: () => void deletePaths(paths) },
-          { id: "deletePermanent", label: "Delete permanently", shortcut: "Shift+Del", danger: true, run: () => void deletePaths(paths, true) },
-          paths.length > 0 && { id: "rename", label: paths.length > 1 ? `Rename ${paths.length} items…` : "Rename", shortcut: "F2", icon: "rename", run: startRename },
+          { id: "delete", label: "Delete", shortcut: sk("delete"), icon: "trash", run: () => void deletePaths(paths) },
+          { id: "deletePermanent", label: "Delete permanently", shortcut: skShift("delete"), danger: true, run: () => void deletePaths(paths, true) },
+          paths.length > 0 && { id: "rename", label: paths.length > 1 ? `Rename ${paths.length} items…` : "Rename", shortcut: sk("rename"), icon: "rename", run: startRename },
           single?.isDir && !isRemote(dirForTerminal) && { id: "terminal", label: terminalLabel(false), icon: "terminal", separatorBefore: true, run: () => void terminal(dirForTerminal, "here") },
           single?.isDir && !isRemote(dirForTerminal) && { id: "terminalAdmin", label: terminalLabel(true), run: () => void terminal(dirForTerminal, "admin") },
           single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-terminal", label: "Unpack, then open terminal in it", icon: "terminal", run: () => void extractAndOpenTerminal(archiveUrl(fullPath(single.name)), "here") },
@@ -666,8 +667,8 @@ export function FileView({ path }: { path: string }) {
                 { id: "extractAll-here", label: "Extract all here", icon: "archive", run: () => void extractArchive(splitArchive(path)!.archive, true) } as MenuItem,
               ]
             : []),
-          { id: "paste", label: "Paste", shortcut: "Ctrl+V", icon: "paste", separatorBefore: !!splitArchive(path), run: paste },
-          { id: "newFolder", label: "New folder", shortcut: "Ctrl+Shift+N", icon: "folderOpen", separatorBefore: true, run: () => void create(true) },
+          { id: "paste", label: "Paste", shortcut: sk("paste"), icon: "paste", separatorBefore: !!splitArchive(path), run: paste },
+          { id: "newFolder", label: "New folder", shortcut: sk("newFolder"), icon: "folderOpen", separatorBefore: true, run: () => void create(true) },
           { id: "newFile", label: "New file", icon: "newItem", run: () => void create(false) },
           {
             id: "view",
@@ -818,43 +819,43 @@ export function FileView({ path }: { path: string }) {
     const mod = e.ctrlKey || e.metaKey;
     const paths = selectedPaths();
     const first = entries.find((x) => selected.has(x.name));
+    const extend = e.shiftKey;
     let handled = true;
-    // Shortcuts from Settings (the defaults are the keys below, so nothing changes unless they were).
-    const cmd = commandFor(settings, e.nativeEvent);
-    if (cmd === "open" && first) open(first);
-    else if (e.code === "NumpadAdd" && !e.ctrlKey && !e.altKey && !e.metaKey) setGroup("select");
-    else if (e.code === "NumpadSubtract" && !e.ctrlKey && !e.altKey && !e.metaKey) setGroup("deselect");
-    else if (e.code === "NumpadMultiply" && !e.ctrlKey && !e.altKey && !e.metaKey) setSelected(new Set(entries.filter((x) => !selected.has(x.name)).map((x) => x.name)));
-    else if (e.code === "NumpadDivide" && !e.ctrlKey && !e.altKey && !e.metaKey) restoreSelection();
-    else if (cmd === "view" && first && !first.isDir) viewFile(first, false);
-    else if (cmd === "rename" && first) startRename();
-    else if (cmd === "delete" && paths.length) void deletePaths(paths, e.shiftKey);
-    else if (cmd === "newFolder") void create(true);
-    else if (cmd === "properties" && paths.length) void showProperties(paths);
-    else if (e.key === "ArrowDown") moveCursor(columnsPerRow, e.shiftKey);
-    else if (e.key === "ArrowUp") moveCursor(-columnsPerRow, e.shiftKey);
-    else if (e.key === "ArrowRight" && !details) moveCursor(1, e.shiftKey);
-    else if (e.key === "ArrowLeft" && !details) moveCursor(-1, e.shiftKey);
-    else if (e.key === "Home") moveCursor(-entries.length, e.shiftKey);
-    else if (e.key === "End") moveCursor(entries.length, e.shiftKey);
-    else if (e.key === "PageDown") moveCursor(columnsPerRow * 15, e.shiftKey);
-    else if (e.key === "PageUp") moveCursor(-columnsPerRow * 15, e.shiftKey);
-    else if (checks && e.key === " " && entries[cursor.current]) selectIndex(cursor.current, { ctrlKey: false, metaKey: false, shiftKey: false });
-    else if (cmd === "quickLook" && first && !first.isDir) viewFile(first, true);
-    else if (e.key === "Enter" && first) open(first);
-    else if (e.key === "Backspace" && typeFind && findText) typeInto(e.key);
-    else if (e.key === "Backspace") {
+    // Every key here is a shortcut from Settings → Keyboard and mouse (the defaults are the usual keys).
+    const cmds = commandsFor(settings, e.nativeEvent);
+    const is = (id: string) => cmds.includes(id);
+    if (e.key === "Backspace" && typeFind && findText) typeInto(e.key);
+    else if (is("open") && first) open(first);
+    else if (is("openNewTab") && first?.isDir) newTab(fullPath(first.name), { background: true });
+    else if (is("selectGroup")) setGroup("select");
+    else if (is("deselectGroup")) setGroup("deselect");
+    else if (is("invertSelection")) setSelected(new Set(entries.filter((x) => !selected.has(x.name)).map((x) => x.name)));
+    else if (is("restoreSelection")) restoreSelection();
+    else if (is("view") && first && !first.isDir) viewFile(first, false);
+    else if (is("rename") && first) startRename();
+    else if (is("delete") && paths.length) void deletePaths(paths, e.shiftKey);
+    else if (is("newFolder")) void create(true);
+    else if (is("newFile")) void create(false);
+    else if (is("properties") && paths.length) void showProperties(paths);
+    else if (is("cursorDown")) moveCursor(columnsPerRow, extend);
+    else if (is("cursorUp")) moveCursor(-columnsPerRow, extend);
+    else if (is("cursorRight") && !details) moveCursor(1, extend);
+    else if (is("cursorLeft") && !details) moveCursor(-1, extend);
+    else if (is("cursorFirst")) moveCursor(-entries.length, extend);
+    else if (is("cursorLast")) moveCursor(entries.length, extend);
+    else if (is("pageDown")) moveCursor(columnsPerRow * 15, extend);
+    else if (is("pageUp")) moveCursor(-columnsPerRow * 15, extend);
+    else if (is("toggleCheck") && checks && entries[cursor.current]) selectIndex(cursor.current, { ctrlKey: false, metaKey: false, shiftKey: false });
+    else if (is("quickLook") && first && !first.isDir) viewFile(first, true);
+    else if (is("goUpList")) {
       const up = parentPath(path);
       if (up) navigate(up);
-    } else if (e.key === "Delete" && paths.length) void deletePaths(paths, e.shiftKey);
-    else if (e.key === "F2" && first) startRename();
-    else if (mod && e.key.toLowerCase() === "a") setSelected(new Set(entries.map((x) => x.name)));
-    else if (mod && e.key.toLowerCase() === "c" && paths.length) setClipboard({ paths, op: "copy" });
-    else if (mod && e.key.toLowerCase() === "x" && paths.length) setClipboard({ paths, op: "move" });
-    else if (mod && e.key.toLowerCase() === "v") paste();
-    else if (mod && e.shiftKey && e.key.toLowerCase() === "n") void create(true);
-    else if (e.altKey && e.key === "Enter" && paths.length) void showProperties(paths);
-    else if (e.key === "Escape") {
+    } else if (is("selectAll")) setSelected(new Set(entries.map((x) => x.name)));
+    else if (is("copy") && paths.length) setClipboard({ paths, op: "copy" });
+    else if (is("cut") && paths.length) setClipboard({ paths, op: "move" });
+    else if (is("paste")) paste();
+    else if (is("copyPath") && paths.length) void navigator.clipboard.writeText(paths.join("\n"));
+    else if (is("clearSelection")) {
       setSelected(new Set());
       setFindText("");
     } else if (typeFind && e.key.length === 1 && !mod && !e.altKey) typeInto(e.key);

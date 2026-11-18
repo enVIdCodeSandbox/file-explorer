@@ -1039,3 +1039,15 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .pack-svg svg { width: 22px; height: 22px; }
 .pack-size { white-space: nowrap; font-size: 12px; }
 .pack-manager .icons-row { grid-template-columns: 1fr auto auto; }
+
+/* Keyboard and mouse */
+.keys-tools { display: flex; gap: 10px; margin: 8px 0 12px; }
+.keys-tools .text-input { flex: 1; }
+.keys-group h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #888); }
+.key-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.key-row > .setting-text { flex: 1; min-width: 160px; }
+.key-row[data-off] .setting-label, .key-row[data-off] .key-capture { opacity: 0.5; }
+.key-picker { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 0 8px 52px; }
+.key-mod { display: inline-flex; align-items: center; gap: 4px; }
+.key-picker select { min-width: 150px; }
+.key-row .switch { flex: none; }

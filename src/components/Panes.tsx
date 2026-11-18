@@ -2,6 +2,7 @@
 //  - a second pane beside the file list (Total Commander style: copy and move between the two panes),
 //  - Miller columns (OneCommander / Finder style: one column per folder level, a preview at the end).
 
+import { commandsFor } from "../settings/keys";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type FileEntry } from "../api";
 import { deletePaths, openFile, useStore } from "../store";
@@ -121,20 +122,23 @@ export function SplitPane({ slot, leftFolder }: { slot: number; leftFolder: stri
       setAnchor(n.name);
       setPicked(e.shiftKey ? new Set([...picked, n.name]) : new Set([n.name]));
     };
-    if (e.key === "ArrowDown") move(1);
-    else if (e.key === "ArrowUp") move(-1);
-    else if (e.key === "Home") entries?.[0] && (setAnchor(entries[0].name), setPicked(new Set([entries[0].name])));
-    else if (e.key === "End" && entries?.length) (setAnchor(entries.at(-1)!.name), setPicked(new Set([entries.at(-1)!.name])));
-    else if (e.key === "Enter" && entries?.[i]) open(entries[i]);
-    else if (e.key === "Backspace") up();
-    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") setPicked(new Set((entries ?? []).map((x) => x.name)));
-    else if (e.key === "F5") transfer("copy", "this");
-    else if (e.key === "F6") transfer("move", "this");
-    else if (e.key === "Delete" && chosen.length) void deletePaths(chosen, e.shiftKey).then(() => store().bumpDirs([path]));
-    else if (e.key === "Tab" && !e.ctrlKey) cyclePane(slot, e.shiftKey ? -1 : 1);
-    else if (e.altKey && e.key === "ArrowLeft") stepPane(slot, -1);
-    else if (e.altKey && e.key === "ArrowRight") stepPane(slot, 1);
-    else if (e.key === "F3" && entries?.[i] && !entries[i].isDir) store().openViewer(full(entries[i].name), { siblings: entries.filter((x) => !x.isDir).map((x) => full(x.name)) });
+    const cmds = commandsFor(useStore.getState().settings, e.nativeEvent);
+    const is = (id: string) => cmds.includes(id);
+    if (is("cursorDown")) move(1);
+    else if (is("cursorUp")) move(-1);
+    else if (is("cursorFirst")) entries?.[0] && (setAnchor(entries[0].name), setPicked(new Set([entries[0].name])));
+    else if (is("cursorLast") && entries?.length) (setAnchor(entries.at(-1)!.name), setPicked(new Set([entries.at(-1)!.name])));
+    else if (is("open") && entries?.[i]) open(entries[i]);
+    else if (is("goUpList")) up();
+    else if (is("selectAll")) setPicked(new Set((entries ?? []).map((x) => x.name)));
+    else if (is("copyToOtherPane")) transfer("copy", "this");
+    else if (is("moveToOtherPane")) transfer("move", "this");
+    else if (is("delete") && chosen.length) void deletePaths(chosen, e.shiftKey).then(() => store().bumpDirs([path]));
+    else if (is("nextPane")) cyclePane(slot, 1);
+    else if (is("prevPane")) cyclePane(slot, -1);
+    else if (is("back")) stepPane(slot, -1);
+    else if (is("forward")) stepPane(slot, 1);
+    else if (is("view") && entries?.[i] && !entries[i].isDir) store().openViewer(full(entries[i].name), { siblings: entries.filter((x) => !x.isDir).map((x) => full(x.name)) });
     else return;
     e.preventDefault();
     e.stopPropagation();
@@ -247,18 +251,20 @@ export function MillerColumns({ path }: { path: string }) {
     if (!here) return;
     const list = (await api.listDir(here).catch(() => null))?.entries.filter((x) => useStore.getState().settings?.general.showHidden || !x.isHidden).sort(byName) ?? [];
     const i = list.findIndex((x) => x.name === chosen[here]);
-    if (ev.key === "ArrowDown" && list.length) pick(focusCol, list[Math.min(list.length - 1, i + 1)]);
-    else if (ev.key === "ArrowUp" && list.length) pick(focusCol, list[Math.max(0, i - 1)]);
-    else if (ev.key === "ArrowRight") {
+    const cmds = commandsFor(useStore.getState().settings, ev.nativeEvent);
+    const is = (id: string) => cmds.includes(id);
+    if (is("cursorDown") && list.length) pick(focusCol, list[Math.min(list.length - 1, i + 1)]);
+    else if (is("cursorUp") && list.length) pick(focusCol, list[Math.max(0, i - 1)]);
+    else if (is("cursorRight")) {
       const next = cols[focusCol + 1];
       if (next) {
         setFocusCol(focusCol + 1);
         const first = (await api.listDir(next).catch(() => null))?.entries.filter((x) => useStore.getState().settings?.general.showHidden || !x.isHidden).sort(byName)[0];
         if (first && !chosen[next]) pick(focusCol + 1, first);
       }
-    } else if (ev.key === "ArrowLeft" && focusCol > 0) setFocusCol(focusCol - 1);
-    else if (ev.key === "Enter" && list[i]) open(focusCol, list[i]);
-    else if (ev.key === "F3" && file) useStore.getState().openViewer(joinPath(here, file.name), { siblings: [joinPath(here, file.name)] });
+    } else if (is("cursorLeft") && focusCol > 0) setFocusCol(focusCol - 1);
+    else if (is("open") && list[i]) open(focusCol, list[i]);
+    else if (is("view") && file) useStore.getState().openViewer(joinPath(here, file.name), { siblings: [joinPath(here, file.name)] });
     else return;
     ev.preventDefault();
     ev.stopPropagation();

@@ -208,11 +208,11 @@ One item: type, size, size on disk, dates, permissions, SHA-256 and more. Severa
 
 Type in the search box. Results come from an index that is built in the background, so search is immediate. Filters: `ext:png`, `type:image`, `size:>10mb`, and wildcards like `report*.pdf`.
 
-**Where to look** is chosen by the shortcut as well as by the box next to the search field: **Ctrl+F** searches only the folder you are in (the items on that level, nothing deeper), **Ctrl+Shift+F** searches everywhere, and **Ctrl+R then F** searches the folder you are in and every folder inside it. Searching starts as you type, with no need to press Enter. The filters you set (type, date, size) are remembered when you leave or restart (Advanced > Files and lists > "Use the same filter in every folder", on by default). What the search box searches by default and whether Ctrl+R, F works are under Advanced > Search, and every shortcut can be changed under Advanced > Keyboard shortcuts. Right-clicking a search result gives the same menu as in a folder, including Pin to the navigation pane.
+**Where to look** is chosen by the shortcut as well as by the box next to the search field: **Ctrl+F** searches only the folder you are in (the items on that level, nothing deeper), **Ctrl+Shift+F** searches everywhere, and **Ctrl+R then F** searches the folder you are in and every folder inside it. Searching starts as you type, with no need to press Enter. The filters you set (type, date, size) are remembered when you leave or restart (Advanced > Files and lists > "Use the same filter in every folder", on by default). What the search box searches by default and whether Ctrl+R, F works are under Advanced > Search, and every shortcut can be changed under Advanced > Keyboard and mouse. Right-clicking a search result gives the same menu as in a folder, including Pin to the navigation pane.
 
 ## Type to find
 
-Off by default (Advanced > Files and lists > "Type to find", or give it a shortcut under Advanced > Keyboard shortcuts). With the file list focused, start typing and the selection jumps to the closest name alphabetically; after about 10 seconds without typing, the text resets (the time can be changed).
+Off by default (Advanced > Files and lists > "Type to find", or give it a shortcut under Advanced > Keyboard and mouse). With the file list focused, start typing and the selection jumps to the closest name alphabetically; after about 10 seconds without typing, the text resets (the time can be changed).
 
 ## Disk usage
 
@@ -373,7 +373,7 @@ Settings > Terminal also has the shell to use (blank = your default), font size,
 
 ## File viewer (F3) and quick look (Space)
 
-**F3** opens the selected file in the viewer, **Space** opens a quick look at it (turn off "Select with checkboxes" if Space ticks items instead; both keys can be changed under Keyboard shortcuts). The viewer shows any size of file: only the part on screen is read. Modes: **Text** (T), **Hex** (H), **Binary** (B) and **Preview** (I) for pictures, audio, video, PDF and HTML pages. Choose the encoding (automatic, UTF-8, Windows ANSI, DOS/OEM, UTF-16, Cyrillic, Japanese, Chinese, Korean…), the bytes per row (the "line width" of hex and binary), the text size (+ and −) and whether lines wrap. **Ctrl+F** searches (F3 and Shift+F3 for next and previous, also in hex and binary), **Ctrl+G** goes to an offset. N and P (or the arrow keys in a quick look) go to the next and previous file of the folder. Files inside archives open too; files on servers must be downloaded first. In hex, click a byte to see its value.
+**F3** opens the selected file in the viewer, **Space** opens a quick look at it (turn off "Select with checkboxes" if Space ticks items instead; both keys can be changed under Keyboard and mouse). The viewer shows any size of file: only the part on screen is read. Modes: **Text** (T), **Hex** (H), **Binary** (B) and **Preview** (I) for pictures, audio, video, PDF and HTML pages. Choose the encoding (automatic, UTF-8, Windows ANSI, DOS/OEM, UTF-16, Cyrillic, Japanese, Chinese, Korean…), the bytes per row (the "line width" of hex and binary), the text size (+ and −) and whether lines wrap. **Ctrl+F** searches (F3 and Shift+F3 for next and previous, also in hex and binary), **Ctrl+G** goes to an offset. N and P (or the arrow keys in a quick look) go to the next and previous file of the folder. Files inside archives open too; files on servers must be downloaded first. In hex, click a byte to see its value.
 
 Settings > Advanced > Files and lists > "Quick look (space bar) uses" can hand the quick look to QuickLook or Seer (Windows) or the system preview (macOS Quick Look, GNOME Sushi). If the program you choose is not installed the built-in viewer opens. F3 always uses the built-in viewer.
 
@@ -432,11 +432,11 @@ Opening a file goes in this order: the app set for that kind of file, then whate
 
 **Fonts.** Settings → Themes → Font picks the app's font from the built-in choices, the fonts you import, or any font installed on the computer. *Fonts for each part* gives the file list, the navigation pane, the tabs, address bar and toolbar, paths and code, and the terminal a font of their own (a drop-down of the installed and imported fonts; leave a part on the first entry to follow the app). Paths, code and the terminal list only fixed-width fonts.
 
-Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once, unless you turn that off (Advanced > Interface > "Save changes automatically"): then a **Save** bar appears at the bottom with Save and Discard, so a set of changes can be made and applied together. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard shortcuts, your own right-click actions, maintenance), Documentation and About.
+Settings (Ctrl+,) has a search box at the top. Each change applies and saves at once, unless you turn that off (Advanced > Interface > "Save changes automatically"): then a **Save** bar appears at the bottom with Save and Discard, so a set of changes can be made and applied together. Sections: General, Presets and profiles, Appearance, Themes, Layout, Navigation pane, Performance, Storage, Privacy and locks, File transfers, Search, Notifications, Right-click menu, Terminal, Advanced (keyboard and mouse, your own right-click actions, maintenance), Documentation and About.
 
 * **Performance** controls how much of the computer the app may use. Automatic adapts to CPU, memory and battery.
 * **Right-click menu:** every entry can be hidden, and you can add your own commands under Advanced.
-* **Keyboard shortcuts** can be changed under Advanced.
+* **Keyboard and mouse** (every shortcut, rebindable) is under Advanced.
 * Sizes can be shown as decimal (KB = 1000), binary (KiB = 1024) or Windows style (1024 labelled KB).
 
 ## Troubleshooting
@@ -534,3 +534,18 @@ While files are being copied, moved, deleted, packed or unpacked, or an automate
 ## If an update is blocked by Windows Security
 
 If *Could not download the update* says Windows Security blocked the installer (a virus or unwanted software, "os error 225"), your antivirus quarantined it the moment it was saved. Apps that are not code-signed are often flagged by mistake. Open Windows Security → Virus & threat protection → Protection history, find the entry for the installer, and choose *Allow on device* (or *Restore*), then check for updates again; or download the installer from the release page and run it yourself. The app cannot override your antivirus, and it only says "blocked" when Windows reported exactly that. Long file names and messages in notices now wrap inside the notice instead of running off the screen.
+
+## Keyboard and mouse
+
+Settings → Advanced → **Keyboard and mouse** lists every shortcut of the app, grouped (tabs and windows, moving between folders, moving around a list, selecting, files and folders, search, view and panels, split view, mouse buttons), with a box to find one by name or key. For each:
+
+* the **switch** turns the shortcut on or off (off: the key does nothing and the menus stop showing it);
+* click the **key box** and press the keys you want, or press a **side button of your mouse**; Esc cancels;
+* **Choose…** picks it from lists instead: tick Ctrl, Alt and Shift, then choose the key (letters, numbers, F keys, arrows, editing keys, symbols, number pad, mouse buttons), or *(none)* to leave it unset;
+* **Reset** brings back that shortcut's own key and turns it on; **Reset all** does it for every shortcut.
+
+A line says when a key is also used by another shortcut that is on. Holding Shift with the arrow, Home, End and Page keys extends the selection, and Shift with Delete deletes for good, whatever keys they are set to.
+
+**Mouse side buttons.** Most mice have two buttons on the side: *Mouse4* (back) and *Mouse5* (forward). By default they go back and forward in the tab's history, like Alt+Left and Alt+Right. They can be switched off, changed to another button, or given to other commands that go somewhere or change the app (up one level, new tab, next tab, refresh, hide the navigation pane…), also with Ctrl, Alt or Shift held. The window never navigates by itself when they are pressed.
+
+Added with this list, besides the ones that existed: Ctrl+1 to Ctrl+8 and Ctrl+9 (go to a tab, the last tab), F11 (full screen), F4 and Alt+D (edit the address), Ctrl+Enter (open the folder in a new tab), Ctrl+Alt+C (copy the path of the selected items), and keys for Select all, Copy, Cut, Paste, the cursor and page keys, Backspace (up one level), Escape (clear the selection), the number-pad selection keys and Ctrl and + / − / 0 (list size), which were fixed before. Not in the list because they belong to one place only: Esc and Enter in dialogs and menus, the arrow keys in menus and text boxes, F3 in the search box, Ctrl+R then F, and typing a name to jump to it.
