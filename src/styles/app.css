@@ -642,3 +642,9 @@ body[data-split-dragging="col"] { cursor: row-resize; }
 
 /* Details and List at a size other than the usual one: the text follows the rows. */
 .file-scroller[data-zoomed] .file-row .cell:not(.cell-name), .file-scroller[data-zoomed] .file-tile .file-name { font-size: calc(var(--font-size-small) * var(--view-zoom)); }
+
+/* Long file names and messages wrap inside notices instead of running off the screen. */
+.notice-block, .notice-detail, .transfer-detail, .transfer-issues, .transfer-issues details { min-width: 0; max-width: 100%; }
+.notice-detail { overflow-x: hidden; }
+.transfer-issues ul { overflow-x: hidden; }
+.transfer-issues li, .transfer-issues .path, .transfer-facts dd, .notice-names li { overflow-wrap: anywhere; word-break: break-word; }

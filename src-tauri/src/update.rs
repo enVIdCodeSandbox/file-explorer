@@ -463,8 +463,25 @@ fn download_url(latest: &Latest, repo: &str, token: &str) -> String {
     if latest.source == Source::Release || !token.is_empty() { latest.download_url.clone() } else { format!("https://nightly.link/{repo}/actions/artifacts/{}.zip", latest.artifact_id) }
 }
 
+/// Windows Security (or another antivirus) can quarantine a downloaded installer the moment it is written; Windows then
+/// refuses to open it ("os error 225", or 226 when it was already removed). Say that plainly, since it is not a fault
+/// of the download, and what can be done about it.
+pub fn explain_blocked(e: String) -> String {
+    let l = e.to_lowercase();
+    if l.contains("os error 225") || l.contains("os error 226") || l.contains("virus or potentially unwanted") {
+        "Windows Security blocked the downloaded installer and reported it as a virus or unwanted software. New apps that are not code-signed are often flagged by mistake. To go on: open Windows Security → Virus & threat protection → Protection history, find the entry for this installer, and choose Allow on device (or Restore); then check for updates again. You can also download the installer from the release page and run it yourself. This app cannot override your antivirus.".to_string()
+    } else {
+        e
+    }
+}
+
 #[cfg(desktop)]
 fn download_and_unpack(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready, String> {
+    download_and_unpack_inner(job, st, latest).map_err(explain_blocked)
+}
+
+#[cfg(desktop)]
+fn download_and_unpack_inner(job: &Job, st: &Shared, latest: &Latest) -> Result<Ready, String> {
     let (repo, token) = {
         let u = &st.settings.read().updates;
         (u.repo.trim().to_string(), u.token.clone())
@@ -855,5 +872,23 @@ mod download_tests {
         let (url, _) = serve(body.clone(), Server::Parts);
         let (r, _) = fetch(&url, body.len() as u64, &AtomicBool::new(true));
         assert_eq!(r.unwrap_err(), "cancelled");
+    }
+}
+
+#[cfg(test)]
+mod blocked_tests {
+    use super::explain_blocked;
+
+    #[test]
+    fn antivirus_refusals_are_explained() {
+        let raw = "C:\\x\\setup.exe: Operation did not complete successfully because the file contains a virus or potentially unwanted software. (os error 225)";
+        assert!(explain_blocked(raw.into()).starts_with("Windows Security blocked"));
+        assert!(explain_blocked("The system cannot find (os error 226)".into()).starts_with("Windows Security blocked"));
+    }
+
+    #[test]
+    fn other_errors_pass_through() {
+        assert_eq!(explain_blocked("the download stopped".into()), "the download stopped");
+        assert_eq!(explain_blocked("Access denied (os error 5)".into()), "Access denied (os error 5)");
     }
 }

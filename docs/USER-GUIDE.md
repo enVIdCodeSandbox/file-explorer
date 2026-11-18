@@ -530,3 +530,7 @@ Changing an icon (right-click it, or Settings → Interface → Icons) also offe
 ## Progress on the taskbar icon
 
 While files are being copied, moved, deleted, packed or unpacked, or an automated task runs, the app's icon in the taskbar (Windows), dock (macOS) or launcher (Linux desktops that show it) fills with progress: green while it runs, yellow when paused, red for a few seconds if a copy failed, and moving back and forth while the size is still being counted.
+
+## If an update is blocked by Windows Security
+
+If *Could not download the update* says Windows Security blocked the installer (a virus or unwanted software, "os error 225"), your antivirus quarantined it the moment it was saved. Apps that are not code-signed are often flagged by mistake. Open Windows Security → Virus & threat protection → Protection history, find the entry for the installer, and choose *Allow on device* (or *Restore*), then check for updates again; or download the installer from the release page and run it yourself. The app cannot override your antivirus, and it only says "blocked" when Windows reported exactly that. Long file names and messages in notices now wrap inside the notice instead of running off the screen.
