@@ -202,6 +202,7 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
   }),
   installed_apps: () => ["Adobe Acrobat", "Command Prompt", "Google Chrome", "HandBrake", "Microsoft Edge", "Notepad", "VLC media player", "Visual Studio Code", "Windows PowerShell"].map((name) => ({ id: `C:\\${name}.exe`, name, iconUrl: null })),
   open_with_app: () => null,
+  rename_item: (a) => String(a.path).replace(/[^\\/]+$/, String(a.newName)),
   trash_restore: () => 1,
   trash_purge: () => 1,
   trash_empty: () => 3,

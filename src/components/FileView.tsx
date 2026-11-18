@@ -534,6 +534,19 @@ export function FileView({ path }: { path: string }) {
     if (made) useStore.setState({ pendingSelect: made });
   };
 
+  // The rename box going away takes the keyboard focus with it; give it back so the arrow keys work straight away.
+  const wasRenaming = useRef(false);
+  useEffect(() => {
+    if (renaming === null && wasRenaming.current && !mobile) scroller.current?.focus({ preventScroll: true });
+    wasRenaming.current = renaming !== null;
+  }, [renaming]); // eslint-disable-line react-hooks/exhaustive-deps
+  // With one item selected the arrow keys start from it (a rename or a re-sort can move it to another row).
+  useEffect(() => {
+    if (selected.size !== 1) return;
+    const i = entries.findIndex((x) => selected.has(x.name));
+    if (i >= 0 && entries[cursor.current]?.name !== entries[i].name) cursor.current = i;
+  }, [entries, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const commitRename = async (oldName: string, newName: string) => {
     setRenaming(null);
     if (!newName || newName === oldName) return;
