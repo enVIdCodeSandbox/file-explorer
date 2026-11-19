@@ -48,6 +48,7 @@ export interface SettingDef {
 
 export const SECTIONS = [
   "General",
+  "Folder views",
   "Presets and profiles",
   "Appearance",
   "Themes",
@@ -78,7 +79,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "general.showHidden", section: "General", label: "Show hidden files and folders", control: toggle, keywords: "dotfiles" },
   { key: "general.showExtensions", section: "General", label: "Show file name extensions", control: toggle },
   { key: "general.liveRefresh", section: "General", label: "Refresh folders when they change", description: "A folder that is open updates by itself when another program adds, renames or deletes files in it.", control: toggle, keywords: "watch auto update live" },
-  { key: "general.foldersFirst", section: "General", label: "List folders before files", control: toggle, keywords: "sort" },
+  { key: "general.foldersFirst", section: "Folder views", label: "List folders before files", control: toggle, keywords: "sort" },
   {
     key: "general.deleteToTrash",
     section: "General",
@@ -208,9 +209,10 @@ export const SETTINGS: SettingDef[] = [
 ];
 
 /** Advanced options appear in Settings like any other entry (and in search). */
-const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes", "files.perFolderView"];
+const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes"];
+const SHOWN_IN_FOLDER_VIEWS = ["files.scope.sort", "files.scope.filter", "files.scope.columns", "files.scope.view", "files.sortKey", "files.sortAsc", "files.rememberSort", "files.keepFilter"];
 const sectionOf = (d: (typeof ADVANCED)[number]) =>
-  SHOWN_IN_GENERAL.includes(d.key) ? "General" : d.group === "Terminal panel" ? "Terminal" : d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+  SHOWN_IN_GENERAL.includes(d.key) ? "General" : SHOWN_IN_FOLDER_VIEWS.includes(d.key) ? "Folder views" : d.group === "Terminal panel" ? "Terminal" : d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
 
 for (const d of ADVANCED) {
   SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });

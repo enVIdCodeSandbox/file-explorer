@@ -28,6 +28,7 @@ import {
 } from "./api";
 import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
 import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
+import { isPerFolder, scopesSignature } from "./util/folderMemory";
 import { columnsPerFolder, loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
 import { describeItems, itemFacts, transferNotice, type Notice, type NoticeKind } from "./util/notices";
 import { adv, frequentPolicy } from "./settings/advanced";
@@ -1342,7 +1343,7 @@ export const useStore = create<State>((set, get) => ({
     set({ sort });
     // With views kept per folder, the order belongs to this folder alone.
     const loc = activeLocation();
-    if (loc && !isAppLocation(loc) && adv<boolean>(get().settings, "files.perFolderView")) {
+    if (loc && !isAppLocation(loc) && isPerFolder(get().settings, "sort")) {
       const folderViews = withView(get().folderViews, loc, { sort: isDefaultSort(sort, get().settings) ? null : sort });
       set({ folderViews });
       saveViews(folderViews);
@@ -1363,7 +1364,7 @@ export const useStore = create<State>((set, get) => ({
     const filter = patch ? { ...get().filter, ...patch } : NO_FILTER;
     set({ filter });
     const loc = activeLocation();
-    if (loc && !isAppLocation(loc) && adv<boolean>(get().settings, "files.perFolderView")) {
+    if (loc && !isAppLocation(loc) && isPerFolder(get().settings, "filter")) {
       const folderViews = withView(get().folderViews, loc, { filter: isFiltering(filter) ? { ...filter, subfolders: false } : null });
       set({ folderViews });
       saveViews(folderViews);
@@ -1380,9 +1381,15 @@ export const useStore = create<State>((set, get) => ({
 
   setViewLevel: (level) => {
     const next = Math.max(0, Math.min(VIEW_LEVELS.length - 1, level));
-    if (!adv<boolean>(get().settings, "files.rememberView")) {
-      // Only for this folder: it is forgotten when another folder is opened.
+    if (isPerFolder(get().settings, "view")) {
+      // This folder keeps its own view; one that is the same as the default is not stored.
+      const loc = activeLocation();
       if (next !== get().folderView) set({ folderView: next });
+      if (loc && !isAppLocation(loc)) {
+        const folderViews = withView(get().folderViews, loc, { view: next === (get().settings?.appearance.viewLevel ?? 0) ? null : next });
+        set({ folderViews });
+        saveViews(folderViews);
+      }
       return;
     }
     if (next === get().settings?.appearance.viewLevel) return;
@@ -2400,7 +2407,7 @@ function parentOf(path: string): string {
 // takes effect at once in the open folder.
 useStore.subscribe((s, prev) => {
   if (s.settings?.advanced === prev.settings?.advanced || !s.settings) return;
-  if (adv<boolean>(s.settings, "files.perFolderView")) return;
+  if (isPerFolder(s.settings, "sort")) return;
   if (!adv<boolean>(s.settings, "files.rememberSort")) return;
   const key = adv<string>(s.settings, "files.sortKey") as SortKey;
   const asc = adv<boolean>(s.settings, "files.sortAsc");
@@ -2423,19 +2430,30 @@ const isDefaultSort = (sort: { key: SortKey; asc: boolean }, settings: Settings 
 };
 
 let appliedFor: string | null = null;
-let appliedPerFolder = false;
+let appliedScopes = "";
 function applyFolderView() {
   const s = useStore.getState();
   const loc = activeLocation();
   if (!s.ready || !s.settings || !loc) return;
-  const per = adv<boolean>(s.settings, "files.perFolderView");
-  if (loc === appliedFor && per === appliedPerFolder) return;
+  const scopes = scopesSignature(s.settings);
+  if (loc === appliedFor && scopes === appliedScopes) return;
   appliedFor = loc;
-  appliedPerFolder = per;
-  if (!per || isAppLocation(loc)) return;
+  appliedScopes = scopes;
+  if (isAppLocation(loc)) return;
   const v = s.folderViews[loc];
-  const sort = v?.sort ?? defaultSortOf(s.settings);
-  const filter = v?.filter ?? NO_FILTER;
-  if (sort.key !== s.sort.key || sort.asc !== s.sort.asc || filter !== s.filter) useStore.setState({ sort, filter });
+  const patch: Partial<{ sort: { key: SortKey; asc: boolean }; filter: FilterState; folderView: number | null }> = {};
+  if (isPerFolder(s.settings, "sort")) {
+    const sort = v?.sort ?? defaultSortOf(s.settings);
+    if (sort.key !== s.sort.key || sort.asc !== s.sort.asc) patch.sort = sort;
+  }
+  if (isPerFolder(s.settings, "filter")) {
+    const filter = v?.filter ?? NO_FILTER;
+    if (filter !== s.filter) patch.filter = filter;
+  }
+  if (isPerFolder(s.settings, "view")) {
+    const view = v?.view ?? null;
+    if (view !== s.folderView) patch.folderView = view;
+  }
+  if (Object.keys(patch).length) useStore.setState(patch);
 }
 useStore.subscribe(applyFolderView);

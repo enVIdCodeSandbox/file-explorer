@@ -3,8 +3,8 @@
 // file itself on this computer's drives are greyed out for phones, servers and archives.
 
 import { useEffect, useMemo, useState } from "react";
-import { adv } from "../settings/advanced";
 import { columnsPerFolder } from "../folderViews";
+import { scopeKey, scopeOf } from "../util/folderMemory";
 import { activeLocation, useStore } from "../store";
 import { COLUMNS, COLUMN_GROUPS, DEFAULT_SET, canFill, columnDef, hideColumn, moveColumn, normalizeSet, showColumn, widthOf, type ColumnSet } from "../util/columns";
 import { isArchiveLoc, isRemote } from "../util/path";
@@ -31,8 +31,7 @@ export function ChooseDetails() {
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // With views kept per folder the box is offered; with them off, every folder shares one set already.
-  const perFolder = useStore((s) => adv<boolean>(s.settings, "files.perFolderView"));
-  const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase();
   const groups = useMemo(
     () =>
       COLUMN_GROUPS.map((g) => ({
@@ -49,10 +48,9 @@ export function ChooseDetails() {
   const apply = () => {
     const st = useStore.getState();
     // The choice is kept: while it is on, every later change to the columns (here or from a heading) is for all folders.
-    if (perFolder && adv<boolean>(st.settings, "files.columnsEverywhere") !== everywhere) {
-      st.updateSettings((x) => void (x.advanced = { ...(x.advanced ?? {}), "files.columnsEverywhere": everywhere }));
-    }
-    st.setColumns(normalizeSet(draft), everywhere || !perFolder ? "all" : "here");
+    const want = everywhere ? "shared" : "folder";
+    if (scopeOf(st.settings, "columns") !== want) st.updateSettings((x) => void (x.advanced = { ...(x.advanced ?? {}), [scopeKey("columns")]: want }));
+    st.setColumns(normalizeSet(draft), everywhere ? "all" : "here");
     close();
   };
   const toggle = (id: string) => {
@@ -117,12 +115,10 @@ export function ChooseDetails() {
             }}
           />
         </label>
-        {perFolder && (
-          <label className="choose-all">
-            <input type="checkbox" checked={everywhere} onChange={(e) => setEverywhere(e.target.checked)} />
-            <span>Use these columns in every folder, and keep doing so</span>
-          </label>
-        )}
+        <label className="choose-all">
+          <input type="checkbox" checked={everywhere} onChange={(e) => setEverywhere(e.target.checked)} />
+          <span>Use these columns in every folder, and keep doing so</span>
+        </label>
         <div className="dialog-buttons">
           <button onClick={() => setDraft(DEFAULT_SET)}>Reset</button>
           <span className="grow" />

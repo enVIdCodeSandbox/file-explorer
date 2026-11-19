@@ -3,7 +3,7 @@
 // without end. Pure functions, so they can be tested.
 
 import type { Settings } from "./api";
-import { adv } from "./settings/advanced";
+import { isPerFolder } from "./util/folderMemory";
 import type { FilterState, SortKey } from "./store";
 import type { ColumnSet } from "./util/columns";
 import { normalizeSet } from "./util/columns";
@@ -12,6 +12,8 @@ export interface FolderView {
   sort?: { key: SortKey; asc: boolean };
   filter?: FilterState;
   columns?: ColumnSet;
+  /** The view level (Details, List, icons…), where the view is kept for each folder. */
+  view?: number;
 }
 
 export type FolderViews = Record<string, FolderView>;
@@ -34,7 +36,8 @@ export function readViews(raw: string | null): FolderViews {
       if (s && typeof s.key === "string" && typeof s.asc === "boolean") view.sort = { key: s.key, asc: s.asc };
       if (r.filter && typeof r.filter === "object") view.filter = r.filter as FilterState;
       if (r.columns && typeof r.columns === "object") view.columns = normalizeSet(r.columns);
-      if (view.sort || view.filter || view.columns) out[loc] = view;
+      if (typeof r.view === "number" && Number.isInteger(r.view) && r.view >= 0 && r.view < 20) view.view = r.view;
+      if (view.sort || view.filter || view.columns || view.view !== undefined) out[loc] = view;
     }
     return out;
   } catch {
@@ -86,5 +89,5 @@ export function saveViews(views: FolderViews): void {
 
 /** Does each folder have its own columns? Not when one set is used everywhere. */
 export function columnsPerFolder(settings: Settings | null | undefined): boolean {
-  return adv<boolean>(settings, "files.perFolderView") && !adv<boolean>(settings, "files.columnsEverywhere");
+  return isPerFolder(settings, "columns");
 }

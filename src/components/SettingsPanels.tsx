@@ -5,7 +5,10 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { api, type CopyMethod, type MethodsReport, type DefaultFmStatus, type ForgetReport, type Asset, type AssetKind, type CacheEntry, type CustomAction, type UserCommand, type HistoryInfo, type CrashLog } from "../api";
 import { KEYS_OFF, KEY_COMMANDS, KEY_GROUPS, MOUSE_BINDABLE, PICKER_KEYS, clashesOf, comboFrom, comboOf, commandById, keyFor, mouseComboOf, offList, piecesOf, type KeyCommand, type Pieces } from "../settings/keys";
+import { adv } from "../settings/advanced";
 import { ask, useStore } from "../store";
+import { saveViews } from "../folderViews";
+import { MEMORY_ASPECTS, scopeKey, scopeOf, type MemoryScope } from "../util/folderMemory";
 import { formatCount, formatSize } from "../util/format";
 import { ALL_METHODS, METHOD_NAME, METHOD_NOTE, jobGroup } from "../util/methods";
 import { isMobileOs, openAppDefaults } from "../util/native";
@@ -768,6 +771,62 @@ function samePlace(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 // Advanced extras: shortcuts, custom actions, raw settings, maintenance
 // ---------------------------------------------------------------------------
+
+/** Folder views: set all four choices at once, take the open folder's sort as the default, forget what folders remember. */
+export function FolderViewsPanel() {
+  const settings = useStore((s) => s.settings)!;
+  const sort = useStore((s) => s.sort);
+  const count = useStore((s) => Object.keys(s.folderViews).length);
+  const { updateSettings } = useStore.getState();
+  const all = (v: MemoryScope) =>
+    updateSettings((s) => {
+      s.advanced = { ...s.advanced };
+      for (const a of MEMORY_ASPECTS) s.advanced[scopeKey(a)] = v;
+    });
+  const states = MEMORY_ASPECTS.map((a) => scopeOf(settings, a));
+  const perFolder = states.includes("folder");
+  const defaultsHere = adv<string>(settings, "files.sortKey") === sort.key && adv<boolean>(settings, "files.sortAsc") === sort.asc;
+  return (
+    <div className="setting" data-wide data-setting="folderViews.panel">
+      <div className="setting-text">
+        <span className="setting-label">All at once</span>
+        <span className="muted">
+          {perFolder
+            ? "A folder you have never opened starts with the defaults above (and the columns and view you have now); change them there and the folder remembers it."
+            : "Everything is the same in every folder."}
+        </span>
+      </div>
+      <div className="setting-buttons">
+        <button className="secondary" disabled={states.every((x) => x === "shared")} onClick={() => all("shared")}>
+          Same in every folder
+        </button>
+        <button className="secondary" disabled={states.every((x) => x === "folder")} onClick={() => all("folder")}>
+          Remembered for each folder
+        </button>
+        <button
+          className="secondary"
+          disabled={defaultsHere}
+          title="Make the sort of the folder that is open the default for folders you have never opened"
+          onClick={() => updateSettings((s) => void (s.advanced = { ...s.advanced, "files.sortKey": sort.key, "files.sortAsc": sort.asc }))}
+        >
+          Use the open folder's sort as the default
+        </button>
+        <button
+          className="secondary"
+          disabled={count === 0}
+          title="Every folder goes back to the defaults. Files are not touched."
+          onClick={() => {
+            useStore.setState({ folderViews: {}, folderView: null });
+            saveViews({});
+            useStore.getState().showToast("Folders no longer remember their own order, filter, columns or view.");
+          }}
+        >
+          Forget what {count} {count === 1 ? "folder remembers" : "folders remember"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function KeysPanel() {
   const settings = useStore((s) => s.settings)!;

@@ -1057,3 +1057,4 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .search-clear:hover { background: var(--hover, rgba(255,255,255,0.1)); color: inherit; }
 .search-summary { align-items: center; }
 .search-close { flex: none; margin-right: 6px; }
+.setting-buttons { display: flex; flex-wrap: wrap; gap: 8px; }

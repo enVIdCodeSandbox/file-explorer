@@ -70,3 +70,67 @@ describe("sort, filter and view memory", () => {
     expect(viewLevelOf(useStore.getState().settings, useStore.getState().folderView)).toBe(3);
   });
 });
+
+describe("shared or per folder, for each of sort, filter, columns and view", () => {
+  const fresh = async (advanced: Record<string, unknown>) => {
+    const { useStore } = await import("../store");
+    const base = { general: {}, appearance: { viewLevel: 0 }, advanced, profiles: [] } as never;
+    useStore.setState({ settings: base, folderViews: {}, folderView: null, ready: true, tabs: [{ id: "t", location: "/a", history: ["/a"], historyIndex: 0 }] as never, activeTab: "t" });
+    return useStore;
+  };
+
+  it("older options still decide until a choice is made", async () => {
+    const { scopeOf } = await import("./folderMemory");
+    const s = (advanced: Record<string, unknown>) => ({ advanced }) as never;
+    expect(scopeOf(s({}), "sort")).toBe("folder");
+    expect(scopeOf(s({}), "view")).toBe("shared");
+    expect(scopeOf(s({ "files.perFolderView": false }), "filter")).toBe("shared");
+    expect(scopeOf(s({ "files.rememberView": false }), "view")).toBe("folder");
+    expect(scopeOf(s({ "files.scope.sort": "shared", "files.perFolderView": true }), "sort")).toBe("shared");
+  });
+
+  it("each aspect can be chosen on its own: sort per folder, view shared", async () => {
+    const useStore = await fresh({ "files.scope.sort": "folder", "files.scope.view": "shared", "files.scope.filter": "shared" });
+    useStore.getState().setSort({ key: "size", asc: false });
+    useStore.getState().setViewLevel(4);
+    useStore.getState().navigate("/b");
+    // /b was never visited: it starts from the default sort (name, ascending), the view is shared.
+    expect(useStore.getState().sort).toEqual({ key: "name", asc: true });
+    expect(useStore.getState().settings!.appearance.viewLevel).toBe(4);
+    useStore.getState().navigate("/a");
+    expect(useStore.getState().sort).toEqual({ key: "size", asc: false });
+  });
+
+  it("a never-visited folder starts from the chosen default sort, which can still be changed", async () => {
+    const useStore = await fresh({ "files.scope.sort": "folder", "files.sortKey": "modified", "files.sortAsc": false });
+    useStore.getState().navigate("/new");
+    expect(useStore.getState().sort).toEqual({ key: "modified", asc: false });
+    useStore.getState().setSort({ key: "type", asc: true });
+    useStore.getState().navigate("/other");
+    expect(useStore.getState().sort).toEqual({ key: "modified", asc: false });
+    useStore.getState().navigate("/new");
+    expect(useStore.getState().sort).toEqual({ key: "type", asc: true });
+  });
+
+  it("the view is remembered for each folder when chosen, and falls back to the default view", async () => {
+    const { viewLevelOf } = await import("./viewLevel");
+    const useStore = await fresh({ "files.scope.view": "folder" });
+    useStore.getState().setViewLevel(5);
+    useStore.getState().navigate("/b");
+    expect(viewLevelOf(useStore.getState().settings, useStore.getState().folderView)).toBe(0);
+    useStore.getState().setViewLevel(2);
+    useStore.getState().navigate("/a");
+    expect(viewLevelOf(useStore.getState().settings, useStore.getState().folderView)).toBe(5);
+    useStore.getState().navigate("/b");
+    expect(viewLevelOf(useStore.getState().settings, useStore.getState().folderView)).toBe(2);
+  });
+
+  it("changing a choice takes effect at once for the open folder", async () => {
+    const useStore = await fresh({ "files.scope.sort": "folder" });
+    useStore.getState().setSort({ key: "size", asc: true });
+    useStore.getState().updateSettings((s) => void (s.advanced["files.scope.sort"] = "shared"));
+    useStore.getState().setSort({ key: "modified", asc: true });
+    useStore.getState().navigate("/b");
+    expect(useStore.getState().sort.key).toBe("modified");
+  });
+});

@@ -17,7 +17,7 @@ import { Icon } from "./Icons";
 import { LocksPanel } from "./Locks";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
-import { CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontAreasPanel, FontPicker, FontSelect, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
+import { FolderViewsPanel, CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontAreasPanel, FontPicker, FontSelect, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
   const t = useT();
@@ -329,6 +329,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
               })}
             </section>
           ))}
+          {!q && section === "Folder views" && <FolderViewsPanel />}
           {!q && section === "Advanced" && (
             <>
               <section>
