@@ -1051,3 +1051,9 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .key-mod { display: inline-flex; align-items: center; gap: 4px; }
 .key-picker select { min-width: 150px; }
 .key-row .switch { flex: none; }
+
+/* Leaving a search */
+.search-clear { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted, #999); cursor: pointer; flex: none; }
+.search-clear:hover { background: var(--hover, rgba(255,255,255,0.1)); color: inherit; }
+.search-summary { align-items: center; }
+.search-close { flex: none; margin-right: 6px; }

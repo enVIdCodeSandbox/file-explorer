@@ -297,6 +297,8 @@ interface State {
   bootFromCache: () => boolean;
   navigate: (location: string, opts?: { tabId?: string; replace?: boolean }) => void;
   back: () => void;
+  /** Leave a search and show the folder it was started from again (a search of everywhere goes back to where it began). */
+  closeSearch: () => void;
   forward: () => void;
   newTab: (location?: string, opts?: { background?: boolean; groupId?: string | null }) => void;
   closeTab: (id: string) => void;
@@ -734,6 +736,19 @@ export const useStore = create<State>((set, get) => ({
   },
 
   back: () => step(-1),
+  closeSearch: () => {
+    const s = get();
+    const tab = s.tabs.find((t) => t.id === s.activeTab);
+    if (!tab) return;
+    const here = parseLocation(tab.location);
+    if (here.kind !== "search") return;
+    const before = tab.history[tab.historyIndex - 1];
+    const wasSearch = (l: string | undefined) => !l || parseLocation(l).kind === "search";
+    // Usually the folder is the entry just before the search in this tab's history: step back to it.
+    if (before && !wasSearch(before) && (!here.scope || before === here.scope)) return get().back();
+    const from = [...tab.history.slice(0, tab.historyIndex)].reverse().find((l) => !wasSearch(l));
+    get().navigate(here.scope ?? from ?? HOME, { replace: true });
+  },
   forward: () => step(1),
 
   newTab: (location, opts) => {

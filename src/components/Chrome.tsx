@@ -496,12 +496,23 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
     if (query.trim()) navigate(searchLocation(query, scope, m), { replace: loc.kind === "search" });
   };
 
+  /** Empty the box and, if a search is showing, go back to the folder. */
+  const leaveSearch = () => {
+    clearTimeout(timer.current);
+    setQuery("");
+    if (loc.kind === "search") useStore.getState().closeSearch();
+  };
+
   const chord = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const onSearch = (text: string) => {
     setQuery(text);
     clearTimeout(timer.current);
-    if (!text.trim()) return;
+    // Nothing typed: no search, so the folder shows as it was.
+    if (!text.trim()) {
+      if (loc.kind === "search") useStore.getState().closeSearch();
+      return;
+    }
     // Search as you type; the same tab is reused so history stays clean.
     timer.current = setTimeout(() => {
       navigate(searchLocation(text, scopeRef.current, modeRef.current), { replace: loc.kind === "search" });
@@ -752,7 +763,10 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
           onChange={(e) => onSearch(e.target.value)}
           onFocus={() => setBoxFocused(true)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") setBoxFocused(false);
+            if (e.key === "Escape") {
+              setBoxFocused(false);
+              if (loc.kind === "search" || query) leaveSearch();
+            }
             if (e.key === "Enter" && query.trim()) {
               clearTimeout(timer.current);
               useStore.getState().addSearch(query);
@@ -762,6 +776,11 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
             e.stopPropagation();
           }}
         />
+        {(query || loc.kind === "search") && (
+          <button type="button" className="search-clear" aria-label="Close search" title="Close search (Esc)" onMouseDown={(e) => e.preventDefault()} onClick={leaveSearch}>
+            <Icon name="close" size={11} />
+          </button>
+        )}
         {base && (
           <button
             type="button"

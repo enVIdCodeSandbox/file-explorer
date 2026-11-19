@@ -711,6 +711,9 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
   return (
     <div className="file-view search-view">
       <div className="search-summary">
+        <button className="icon-button search-close" aria-label="Close search" title="Close search and show the folder" onClick={() => useStore.getState().closeSearch()}>
+          <Icon name="close" size={12} />
+        </button>
         <span>{summary}</span>
         <span className="muted">
           {scope ? `in ${scope}` : "everywhere indexed"}
