@@ -67,6 +67,25 @@ pub struct Preview {
     pub total: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub id: String,
+    /// How many icons of that collection match.
+    pub total: usize,
+    /// A few of them, in the same form as `icon_pack_read`.
+    pub pack: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    /// Collections with at least one match, the ones with most matches first.
+    pub hits: Vec<SearchHit>,
+    /// Why some collection could not be searched (no network, for example), if any.
+    pub failed: Option<String>,
+}
+
 #[cfg(desktop)]
 mod net {
     use super::*;
@@ -128,6 +147,25 @@ mod net {
         // Same reduction as an install, so a preview can only show what could be installed.
         let (pack, _) = packs::reduce(&text).map_err(|e| e.to_string())?;
         Ok(Preview { pack, total })
+    }
+
+    /// Look in several collections at once (one thread each), for the icon picker's search across everything.
+    /// A collection that cannot be reached is left out; the first reason is returned beside what was found.
+    pub fn search(ids: &[String], query: &str, per: usize) -> SearchResults {
+        let found: Vec<(String, Result<Preview, String>)> = std::thread::scope(|scope| {
+            let jobs: Vec<_> = ids.iter().map(|id| scope.spawn(move || (id.clone(), preview(id, query, per)))).collect();
+            jobs.into_iter().filter_map(|j| j.join().ok()).collect()
+        });
+        let mut out = SearchResults { hits: Vec::new(), failed: None };
+        for (id, r) in found {
+            match r {
+                Ok(p) if p.total > 0 => out.hits.push(SearchHit { id, total: p.total, pack: p.pack }),
+                Ok(_) => {}
+                Err(e) => out.failed = out.failed.or(Some(e)),
+            }
+        }
+        out.hits.sort_by(|a, b| b.total.cmp(&a.total).then(a.id.cmp(&b.id)));
+        out
     }
 
     /// How far a download is, for the progress bar.
@@ -238,6 +276,9 @@ mod net {
     pub fn preview(_: &str, _: &str, _: usize) -> Result<Preview, String> {
         Err(NO.into())
     }
+    pub fn search(_: &[String], _: &str, _: usize) -> SearchResults {
+        SearchResults { hits: Vec::new(), failed: Some(NO.into()) }
+    }
     pub fn install(_: &tauri::AppHandle, _: &Shared, _: &str) -> Result<(), String> {
         Err(NO.into())
     }
@@ -247,6 +288,16 @@ mod net {
 #[tauri::command]
 pub async fn icon_pack_preview(id: String, query: String, count: usize) -> CmdResult<Preview> {
     blocking(move || net::preview(&id, &query, count)).await
+}
+
+/// Search several collections that are not installed, over the network, for the icon picker.
+#[tauri::command]
+pub async fn icon_packs_search(ids: Vec<String>, query: String, per: usize) -> CmdResult<SearchResults> {
+    blocking(move || {
+        let ids: Vec<String> = ids.into_iter().filter(|i| packs::info(i).is_some()).collect();
+        Ok(net::search(&ids, &query, per.clamp(1, 60)))
+    })
+    .await
 }
 
 /// Download and keep a collection.

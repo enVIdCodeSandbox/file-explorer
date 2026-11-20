@@ -37,6 +37,142 @@ pub fn invoke(id: u32) -> crate::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Remembering menus
+// ---------------------------------------------------------------------------
+// Building the system's menu is the slow part of a right-click (programs add their entries one by one). The answer for
+// a selection is kept for `max_age`; one that is getting old is returned at once and rebuilt in the background, so the
+// next right-click is fresh again. An entry chosen from a remembered menu is run by building the menu again first when
+// the one alive in the system is for something else.
+
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+/// How many selections are remembered.
+const KEEP: usize = 64;
+
+struct Kept {
+    at: Instant,
+    items: Vec<ShellItem>,
+}
+
+#[derive(Default)]
+struct State {
+    menus: HashMap<String, Kept>,
+    /// What the menu alive in the system (the one `invoke` runs entries of) was built for; empty when unknown.
+    live: String,
+    refreshing: HashSet<String>,
+}
+
+static STATE: Mutex<Option<State>> = Mutex::new(None);
+/// Building and invoking take turns, so what `live` says is always what is alive.
+static TURNS: Mutex<()> = Mutex::new(());
+
+fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
+    let mut g = STATE.lock();
+    f(g.get_or_insert_with(State::default))
+}
+
+pub fn key_of(paths: &[PathBuf], background: bool) -> String {
+    let mut k = String::from(if background { "bg:" } else { "it:" });
+    for p in paths {
+        k.push_str(&p.to_string_lossy());
+        k.push('\u{1f}');
+    }
+    k
+}
+
+/// How old a remembered menu is, if there is one.
+fn age_of(key: &str) -> Option<Duration> {
+    with_state(|s| s.menus.get(key).map(|k| k.at.elapsed()))
+}
+
+fn remember(key: &str, items: &[ShellItem]) {
+    with_state(|s| {
+        if s.menus.len() >= KEEP && !s.menus.contains_key(key) {
+            if let Some(oldest) = s.menus.iter().min_by_key(|(_, k)| k.at).map(|(k, _)| k.clone()) {
+                s.menus.remove(&oldest);
+            }
+        }
+        s.menus.insert(key.to_string(), Kept { at: Instant::now(), items: items.to_vec() });
+    });
+}
+
+/// Build for real (never from memory) and note that this menu is the live one. Call with `TURNS` held.
+fn build_now(paths: &[PathBuf], background: bool) -> crate::Result<Vec<ShellItem>> {
+    let key = key_of(paths, background);
+    with_state(|s| s.live.clear());
+    let items = imp::build(paths.to_vec(), background)?;
+    with_state(|s| s.live = key.clone());
+    remember(&key, &items);
+    Ok(items)
+}
+
+/// Like [`build`], but a menu built within `max_age` is returned from memory. With a zero `max_age` nothing is
+/// remembered or reused.
+pub fn build_cached(paths: Vec<PathBuf>, background: bool, max_age: Duration) -> crate::Result<Vec<ShellItem>> {
+    if max_age.is_zero() {
+        let _turn = TURNS.lock();
+        return build_now(&paths, background);
+    }
+    let key = key_of(&paths, background);
+    if let Some(age) = age_of(&key) {
+        if age < max_age {
+            let items = with_state(|s| s.menus.get(&key).map(|k| k.items.clone())).unwrap_or_default();
+            // Getting old: give this answer now and make the next one fresh.
+            if age > max_age / 2 && with_state(|s| s.refreshing.insert(key.clone())) {
+                let paths = paths.clone();
+                std::thread::spawn(move || {
+                    {
+                        let _turn = TURNS.lock();
+                        let _ = build_now(&paths, background);
+                    }
+                    with_state(|s| s.refreshing.remove(&key));
+                });
+            }
+            return Ok(items);
+        }
+    }
+    let _turn = TURNS.lock();
+    build_now(&paths, background)
+}
+
+/// The id of the entry called `label` in a menu, looking through submenus (`want` is preferred when several match).
+pub fn find_by_label(items: &[ShellItem], label: &str, want: u32) -> Option<u32> {
+    fn walk(items: &[ShellItem], label: &str, out: &mut Vec<u32>) {
+        for i in items {
+            if i.children.is_empty() {
+                if i.label == label {
+                    out.push(i.id);
+                }
+            } else {
+                walk(&i.children, label, out);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(items, label, &mut found);
+    if found.contains(&want) {
+        Some(want)
+    } else {
+        found.first().copied()
+    }
+}
+
+/// Run an entry of the menu that was shown for `paths`. If the live menu is for something else (the answer came from
+/// memory), it is built again first and the entry is found by its name.
+pub fn invoke_for(paths: Vec<PathBuf>, background: bool, id: u32, label: &str) -> crate::Result<()> {
+    let _turn = TURNS.lock();
+    let key = key_of(&paths, background);
+    if with_state(|s| s.live == key) {
+        return imp::invoke(id);
+    }
+    let items = build_now(&paths, background)?;
+    let id = find_by_label(&items, label, id).unwrap_or(id);
+    imp::invoke(id)
+}
+
+// ---------------------------------------------------------------------------
 // Windows
 // ---------------------------------------------------------------------------
 #[cfg(windows)]
@@ -730,5 +866,48 @@ mod tests {
         assert_eq!(super::imp::command_for("gimp %U", &f), vec!["gimp", "/tmp/a b.png"]);
         assert_eq!(super::imp::command_for("\"/opt/My App/run\" --new %f %i", &f), vec!["/opt/My App/run", "--new", "/tmp/a b.png"]);
         assert_eq!(super::imp::command_for("viewer", &f), vec!["viewer", "/tmp/a b.png"]);
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    fn item(id: u32, label: &str, children: Vec<ShellItem>) -> ShellItem {
+        ShellItem { id, label: label.into(), children, ..Default::default() }
+    }
+
+    #[test]
+    fn an_entry_is_found_again_by_its_name_even_when_ids_moved() {
+        let menu = vec![item(1, "Open", vec![]), item(0, "Open with", vec![item(7, "Code", vec![]), item(8, "Notepad", vec![])])];
+        assert_eq!(find_by_label(&menu, "Code", 99), Some(7));
+        // the same name twice: the id that was asked for wins
+        let twice = vec![item(2, "Edit", vec![]), item(5, "Edit", vec![])];
+        assert_eq!(find_by_label(&twice, "Edit", 5), Some(5));
+        assert_eq!(find_by_label(&twice, "Edit", 9), Some(2));
+        assert_eq!(find_by_label(&menu, "Missing", 1), None);
+        // a submenu's own heading is not an entry
+        assert_eq!(find_by_label(&menu, "Open with", 0), None);
+    }
+
+    #[test]
+    fn selections_have_their_own_keys_and_a_folder_background_is_not_its_items() {
+        let a = vec![PathBuf::from("/x/a"), PathBuf::from("/x/b")];
+        let b = vec![PathBuf::from("/x/a/b")];
+        assert_ne!(key_of(&a, false), key_of(&b, false));
+        assert_ne!(key_of(&a, false), key_of(&a, true));
+        assert_eq!(key_of(&a, false), key_of(&a, false));
+    }
+
+    #[test]
+    fn remembered_menus_are_capped_and_age() {
+        let key = "test-key-age";
+        remember(key, &[item(1, "One", vec![])]);
+        assert!(age_of(key).unwrap() < Duration::from_secs(5));
+        for n in 0..(KEEP + 10) {
+            remember(&format!("test-key-{n}"), &[]);
+        }
+        let count = with_state(|s| s.menus.len());
+        assert!(count <= KEEP, "{count}");
     }
 }

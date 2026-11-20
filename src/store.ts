@@ -326,6 +326,16 @@ interface State {
   savedSettings: Settings | null;
   saveSettings: () => void;
   discardSettings: () => void;
+  /** How many steps Undo and Redo have while Settings is open (the history ends when it is closed). */
+  settingsUndoDepth: number;
+  settingsRedoDepth: number;
+  beginSettingsSession: () => void;
+  /** Settings was closed: the changes are final. With "Save changes automatically" they are written now. */
+  endSettingsSession: () => void;
+  undoSettings: () => void;
+  redoSettings: () => void;
+  /** Back to what the settings were when they were opened. */
+  undoAllSettings: () => void;
   togglePin: (path: string, isFile?: boolean) => void;
   /** Pin at a position (moving it if already pinned). */
   pinAt: (path: string, index: number, isFile?: boolean) => void;
@@ -527,6 +537,63 @@ function beep() {
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+// ---- Settings: changes apply and save as they are made, and can be undone until Settings is closed ----
+
+const history = { active: false, undo: [] as Settings[], redo: [] as Settings[], lastAt: 0, opened: null as Settings | null };
+/** Changes made within this many milliseconds of each other (typing a number, dragging a slider) are one step. */
+const STEP_GAP_MS = 800;
+
+function publishDepths() {
+  useStore.setState({ settingsUndoDepth: history.undo.length, settingsRedoDepth: history.redo.length });
+}
+
+/** Remember what the settings were before a change, so Undo can bring it back. */
+function recordSettingsStep(before: Settings, after: Settings) {
+  if (!history.active || JSON.stringify(before) === JSON.stringify(after)) return;
+  const now = Date.now();
+  if (!(history.undo.length && now - history.lastAt < STEP_GAP_MS)) {
+    history.undo.push(before);
+    if (history.undo.length > 100) history.undo.shift();
+  }
+  history.lastAt = now;
+  history.redo = [];
+  publishDepths();
+}
+
+function stepSettings(dir: "undo" | "redo") {
+  const cur = useStore.getState().settings;
+  const from = dir === "undo" ? history.undo : history.redo;
+  const to = dir === "undo" ? history.redo : history.undo;
+  const target = from.pop();
+  if (!cur || !target) return;
+  to.push(cur);
+  history.lastAt = 0;
+  commitSettings(cur, target);
+  publishDepths();
+}
+
+/** Put new settings in place (shown at once) and write them, unless the person turned automatic saving off. */
+function commitSettings(current: Settings, next: Settings) {
+  const set = useStore.setState;
+  const get = useStore.getState;
+  syncDetailsPane(current, next);
+  // While a profile of your own is active, what you change is saved into it.
+  const active = next.profiles?.find((p) => p.id === next.activeProfile && !p.builtIn);
+  if (active && JSON.stringify(current.profiles) === JSON.stringify(next.profiles) && current.activeProfile === next.activeProfile) {
+    active.snapshot = snapshotOf(next);
+  }
+  set({ settings: next });
+  // Changes show at once either way. They are written to disk right away unless the person
+  // turned "Save changes automatically" off; the Save button then writes them.
+  const auto = adv<boolean>(next, "ui.autoSave");
+  if (auto || adv<boolean>(current, "ui.autoSave") !== auto) {
+    set({ unsaved: false, savedSettings: null });
+    void api.setSettings(next).catch((e) => get().showToast(String(e)));
+  } else {
+    set({ unsaved: true, savedSettings: get().savedSettings ?? current });
+  }
+}
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -911,22 +978,8 @@ export const useStore = create<State>((set, get) => ({
     if (!current) return;
     const next: Settings = structuredClone(current);
     mutate(next);
-    syncDetailsPane(current, next);
-    // While a profile of your own is active, what you change is saved into it.
-    const active = next.profiles?.find((p) => p.id === next.activeProfile && !p.builtIn);
-    if (active && JSON.stringify(current.profiles) === JSON.stringify(next.profiles) && current.activeProfile === next.activeProfile) {
-      active.snapshot = snapshotOf(next);
-    }
-    set({ settings: next });
-    // Changes show at once either way. They are written to disk right away unless the person
-    // turned "Save changes automatically" off; the Save button then writes them.
-    const auto = adv<boolean>(next, "ui.autoSave");
-    if (auto || adv<boolean>(current, "ui.autoSave") !== auto) {
-      set({ unsaved: false, savedSettings: null });
-      void api.setSettings(next).catch((e) => get().showToast(String(e)));
-    } else {
-      set({ unsaved: true, savedSettings: get().savedSettings ?? current });
-    }
+    recordSettingsStep(current, next);
+    commitSettings(current, next);
   },
   searchMode: null,
   setSearchMode: (m) => set({ searchMode: m }),
@@ -947,6 +1000,42 @@ export const useStore = create<State>((set, get) => ({
     const back = get().savedSettings;
     if (back) set({ settings: back });
     set({ unsaved: false, savedSettings: null });
+    history.undo = [];
+    history.redo = [];
+    publishDepths();
+  },
+  settingsUndoDepth: 0,
+  settingsRedoDepth: 0,
+  beginSettingsSession: () => {
+    history.active = true;
+    history.undo = [];
+    history.redo = [];
+    history.lastAt = 0;
+    history.opened = get().settings;
+    publishDepths();
+  },
+  endSettingsSession: () => {
+    const wasActive = history.active;
+    history.active = false;
+    history.undo = [];
+    history.redo = [];
+    history.opened = null;
+    publishDepths();
+    // The changes are final now. With automatic saving they are written, so nothing is left only in memory.
+    const cur = get().settings;
+    if (wasActive && cur && adv<boolean>(cur, "ui.autoSave")) void api.setSettings(cur).catch((e) => get().showToast(String(e)));
+  },
+  undoSettings: () => stepSettings("undo"),
+  redoSettings: () => stepSettings("redo"),
+  undoAllSettings: () => {
+    const first = history.undo[0];
+    const cur = get().settings;
+    if (!first || !cur) return;
+    history.redo = [];
+    history.undo = [];
+    history.lastAt = 0;
+    commitSettings(cur, first);
+    publishDepths();
   },
 
   togglePin: (path, isFile = false) => {

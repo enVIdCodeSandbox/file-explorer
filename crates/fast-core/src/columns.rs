@@ -112,6 +112,11 @@ pub fn values(path: &Path, keys: &[String]) -> BTreeMap<String, String> {
         }
     }
 
+    // The program a file opens with (looked up once per kind of file, not per file).
+    if asked("openWith") && !is_dir {
+        out.insert("openWith".into(), crate::openwith::default_opener(path, false).text());
+    }
+
     // Read from the file system or from the file's contents.
     if wants_any(x::FS_KEYS) {
         x::file_system(path, &|k| asked(k), &mut out);

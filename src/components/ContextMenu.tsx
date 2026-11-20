@@ -9,6 +9,8 @@ export interface MenuItem {
   id: string;
   label: string;
   shortcut?: string;
+  /** Quiet extra words after the label (the program "Open" will use). */
+  hint?: string;
   disabled?: boolean;
   danger?: boolean;
   separatorBefore?: boolean;
@@ -134,7 +136,10 @@ function Panel({
                   <Icon name="check" size={14} />
                 ) : null}
               </span>
-              <span className="menu-label">{item.label}</span>
+              <span className="menu-label">
+                {item.label}
+                {item.hint && <span className="menu-hint">{item.hint}</span>}
+              </span>
               {item.shortcut && <kbd>{item.shortcut}</kbd>}
               {item.children && <Icon name="chevron" size={10} />}
             </button>

@@ -256,7 +256,7 @@ mod platform {
         pub terminal: bool,
     }
 
-    fn app_dirs() -> Vec<PathBuf> {
+    pub(super) fn app_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         if let Some(d) = dirs::data_dir() {
             dirs.push(d.join("applications"));
@@ -331,7 +331,7 @@ mod platform {
         it.next()
     }
 
-    fn mime_of(path: &Path) -> Option<String> {
+    pub(super) fn mime_of(path: &Path) -> Option<String> {
         let out = Command::new("xdg-mime").args(["query", "filetype"]).arg(path).output().ok()?;
         let m = String::from_utf8_lossy(&out.stdout).trim().to_string();
         (out.status.success() && !m.is_empty()).then_some(m)
@@ -348,7 +348,7 @@ mod platform {
         matches!(mime, "application/x-executable" | "application/x-pie-executable" | "application/x-sharedlib" | "inode/directory")
     }
 
-    fn icon_for(name: &str) -> Option<String> {
+    pub(super) fn icon_for(name: &str) -> Option<String> {
         if name.is_empty() {
             return None;
         }
@@ -773,7 +773,379 @@ mod platform {
     }
 }
 
-pub use platform::{check, open_with};
+/// Open `path` with the program `id` (see `Choices`). With `always`, that program also becomes the one used from
+/// now on where the system lets that be set.
+pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
+    let done = platform::open_with(path, id, always);
+    if always && done.is_ok() {
+        forget_openers();
+    }
+    done
+}
+
+pub use platform::check;
+
+// ===========================================================================
+// Which program a file opens with (shown next to it, without asking the system for a whole chooser)
+// ===========================================================================
+
+/// What happens when a file is opened, for showing next to it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Opener {
+    /// "app": a program is set to open it. "runs": it is a program or script the system runs itself.
+    /// "missing": a program is set but it is gone. "none": nothing is set.
+    pub kind: String,
+    pub name: String,
+    /// The program: a desktop entry id, or a program path. Empty when there is none.
+    pub id: String,
+    pub icon_url: Option<String>,
+}
+
+impl Opener {
+    fn of(kind: &str, name: &str, id: &str) -> Self {
+        Opener { kind: kind.into(), name: name.into(), id: id.into(), icon_url: None }
+    }
+
+    /// The words shown in a column.
+    pub fn text(&self) -> String {
+        match self.kind.as_str() {
+            "app" => self.name.clone(),
+            "runs" => "Runs itself".into(),
+            "missing" if self.name.is_empty() => "Program missing".into(),
+            "missing" => format!("{} (missing)", self.name),
+            _ => "No program set".into(),
+        }
+    }
+}
+
+/// What the system found for a kind of file, before it is dressed up.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Found {
+    App { id: String, name: String, icon: String },
+    Missing { name: String },
+    Runs,
+    Nothing,
+}
+
+const OPENER_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+const OPENER_KEEP: usize = 2048;
+
+type OpenerMemory = std::collections::HashMap<String, (std::time::Instant, Opener, String)>;
+
+fn memory() -> &'static std::sync::Mutex<OpenerMemory> {
+    static M: std::sync::OnceLock<std::sync::Mutex<OpenerMemory>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Throw away what is remembered about which program opens what (after the default was changed).
+pub fn forget_openers() {
+    if let Ok(mut m) = memory().lock() {
+        m.clear();
+    }
+}
+
+/// What a file opens with, remembered per extension (a file without one is looked at by name), for two minutes.
+/// `with_icon` adds the program's small picture where the system gives one.
+pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
+    let ext = extension_of(path);
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    #[cfg(unix)]
+    if ext.is_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        // A file without an extension that is marked as runnable is run, whatever it is.
+        if std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
+            return Opener::of("runs", "", "");
+        }
+    }
+    let key = if ext.is_empty() { format!("n:{name}") } else { ext };
+    let hit = memory().lock().ok().and_then(|m| m.get(&key).filter(|(at, _, _)| at.elapsed() < OPENER_TTL).map(|(_, o, icon)| (o.clone(), icon.clone())));
+    let (mut opener, icon) = match hit {
+        Some(h) => h,
+        None => {
+            let (o, icon) = match defaults::found(path) {
+                Found::App { id, name, icon } => (Opener::of("app", &name, &id), icon),
+                Found::Missing { name } => (Opener::of("missing", &name, ""), String::new()),
+                Found::Runs => (Opener::of("runs", "", ""), String::new()),
+                Found::Nothing => (Opener::of("none", "", ""), String::new()),
+            };
+            if let Ok(mut m) = memory().lock() {
+                if m.len() >= OPENER_KEEP {
+                    m.clear();
+                }
+                m.insert(key, (std::time::Instant::now(), o.clone(), icon.clone()));
+            }
+            (o, icon)
+        }
+    };
+    if let Some(n) = friendly(&opener.name, &opener.id) {
+        opener.name = n.to_string();
+    }
+    if with_icon && opener.kind == "app" {
+        opener.icon_url = defaults::icon(&opener.id, &icon);
+    }
+    opener
+}
+
+mod defaults {
+    use super::*;
+
+    pub(super) fn icon(id: &str, icon: &str) -> Option<String> {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+        {
+            let _ = id;
+            return platform::icon_for(icon);
+        }
+        #[allow(unreachable_code)]
+        {
+            let _ = (id, icon);
+            None
+        }
+    }
+
+    // ---- Linux and other Unix with desktop entries ----
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+    pub(super) mod unix {
+        use super::super::*;
+        use std::collections::HashMap;
+
+        /// One line of the shared MIME database's `globs2`: weight, type, pattern.
+        #[derive(Debug, PartialEq)]
+        pub struct Glob {
+            pub weight: i32,
+            pub mime: String,
+            pub suffix: Option<String>,
+            pub literal: Option<String>,
+        }
+
+        pub fn parse_globs(text: &str) -> Vec<Glob> {
+            let mut out = Vec::new();
+            for line in text.lines() {
+                if line.starts_with('#') {
+                    continue;
+                }
+                let mut parts = line.splitn(4, ':');
+                let (Some(w), Some(mime), Some(pat)) = (parts.next(), parts.next(), parts.next()) else { continue };
+                let Ok(weight) = w.trim().parse::<i32>() else { continue };
+                let pat = pat.to_lowercase();
+                if let Some(rest) = pat.strip_prefix('*') {
+                    if !rest.is_empty() && !rest.contains(['*', '?', '[']) {
+                        out.push(Glob { weight, mime: mime.into(), suffix: Some(rest.into()), literal: None });
+                    }
+                } else if !pat.contains(['*', '?', '[']) {
+                    out.push(Glob { weight, mime: mime.into(), suffix: None, literal: Some(pat) });
+                }
+            }
+            out
+        }
+
+        /// The type a file name has: the longest matching pattern wins, then the heaviest.
+        pub fn mime_for_name(globs: &[Glob], file_name: &str) -> Option<String> {
+            let name = file_name.to_lowercase();
+            let mut best: Option<(usize, i32, &str)> = None;
+            for g in globs {
+                let len = match (&g.literal, &g.suffix) {
+                    (Some(l), _) if *l == name => name.len() + 1,
+                    (_, Some(sfx)) if name.ends_with(sfx.as_str()) && name.len() > sfx.len() => sfx.len(),
+                    _ => continue,
+                };
+                if best.is_none_or(|(bl, bw, _)| (len, g.weight) > (bl, bw)) {
+                    best = Some((len, g.weight, &g.mime));
+                }
+            }
+            best.map(|(_, _, m)| m.to_string())
+        }
+
+        fn data_dirs() -> Vec<std::path::PathBuf> {
+            let mut dirs = Vec::new();
+            if let Some(d) = dirs::data_dir() {
+                dirs.push(d);
+            }
+            let system = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+            dirs.extend(system.split(':').filter(|d| !d.is_empty()).map(std::path::PathBuf::from));
+            dirs
+        }
+
+        fn globs() -> &'static Vec<Glob> {
+            static G: std::sync::OnceLock<Vec<Glob>> = std::sync::OnceLock::new();
+            G.get_or_init(|| data_dirs().iter().filter_map(|d| std::fs::read_to_string(d.join("mime/globs2")).ok()).flat_map(|t| parse_globs(&t)).collect())
+        }
+
+        /// `mimeapps.list` and `mimeinfo.cache` contents: type -> desktop entry ids, in order.
+        #[derive(Default, Debug, PartialEq)]
+        pub struct Associations {
+            pub default: HashMap<String, Vec<String>>,
+            pub added: HashMap<String, Vec<String>>,
+            pub removed: HashMap<String, Vec<String>>,
+        }
+
+        pub fn parse_associations(text: &str) -> Associations {
+            let mut a = Associations::default();
+            let mut section = "";
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    section = match line {
+                        "[Default Applications]" => "d",
+                        "[Added Associations]" | "[MIME Cache]" => "a",
+                        "[Removed Associations]" => "r",
+                        _ => "",
+                    };
+                    continue;
+                }
+                let Some((mime, ids)) = line.split_once('=') else { continue };
+                let ids: Vec<String> = ids.split(';').map(str::trim).filter(|i| !i.is_empty()).map(str::to_string).collect();
+                let map = match section {
+                    "d" => &mut a.default,
+                    "a" => &mut a.added,
+                    "r" => &mut a.removed,
+                    _ => continue,
+                };
+                map.entry(mime.trim().to_string()).or_default().extend(ids);
+            }
+            a
+        }
+
+        /// The user's and the system's association files, most specific first, and the systems' lists of what can open each type.
+        fn association_files() -> (Vec<Associations>, Vec<Associations>) {
+            let mut paths = Vec::new();
+            let config_home = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".config")));
+            let mut config_dirs: Vec<std::path::PathBuf> = config_home.into_iter().collect();
+            let system = std::env::var("XDG_CONFIG_DIRS").unwrap_or_else(|_| "/etc/xdg".into());
+            config_dirs.extend(system.split(':').filter(|d| !d.is_empty()).map(std::path::PathBuf::from));
+            let desktops: Vec<String> = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').filter(|d| !d.is_empty()).map(str::to_lowercase).collect();
+            for dir in &config_dirs {
+                paths.extend(desktops.iter().map(|d| dir.join(format!("{d}-mimeapps.list"))));
+                paths.push(dir.join("mimeapps.list"));
+            }
+            for dir in data_dirs() {
+                paths.extend(desktops.iter().map(|d| dir.join(format!("applications/{d}-mimeapps.list"))));
+                paths.push(dir.join("applications/mimeapps.list"));
+            }
+            let lists = paths.iter().filter_map(|p| std::fs::read_to_string(p).ok()).map(|t| parse_associations(&t)).collect();
+            let caches = data_dirs().iter().filter_map(|d| std::fs::read_to_string(d.join("applications/mimeinfo.cache")).ok()).map(|t| parse_associations(&t)).collect();
+            (lists, caches)
+        }
+
+        /// The desktop entry that opens `mime`, by the freedesktop rules: a chosen default, then anything added for it,
+        /// then whatever the systems' caches list for the type; entries that are not installed, or were removed for the
+        /// type, are skipped.
+        pub fn pick(mime: &str, files: &[Associations], caches: &[Associations], installed: &dyn Fn(&str) -> bool) -> Option<String> {
+            let removed = |id: &str| files.iter().any(|f| f.removed.get(mime).is_some_and(|r| r.iter().any(|x| x == id)));
+            let usable = |id: &&String| !removed(id) && installed(id);
+            files
+                .iter()
+                .filter_map(|f| f.default.get(mime))
+                .flatten()
+                .find(usable)
+                .or_else(|| files.iter().filter_map(|f| f.added.get(mime)).flatten().find(usable))
+                .or_else(|| caches.iter().filter_map(|f| f.added.get(mime)).flatten().find(usable))
+                .cloned()
+        }
+
+        fn entry_for(id: &str) -> Option<platform::Entry> {
+            for dir in platform::app_dirs() {
+                if let Ok(text) = std::fs::read_to_string(dir.join(id)) {
+                    if let Some(e) = platform::parse_entry(id, &text) {
+                        return Some(e);
+                    }
+                }
+            }
+            None
+        }
+
+        fn mime_of(path: &Path) -> Option<String> {
+            let name = path.file_name()?.to_string_lossy();
+            mime_for_name(globs(), &name).or_else(|| platform::mime_of(path))
+        }
+
+        pub fn found(path: &Path) -> Found {
+            let Some(mime) = mime_of(path) else { return Found::Nothing };
+            if matches!(mime.as_str(), "application/x-executable" | "application/x-pie-executable") {
+                return Found::Runs;
+            }
+            let (files, caches) = association_files();
+            let installed = |id: &str| entry_for(id).is_some();
+            let id = pick(&mime, &files, &caches, &installed).or_else(|| {
+                // Text of every kind falls back to what opens plain text.
+                (mime.starts_with("text/") && mime != "text/plain").then(|| pick("text/plain", &files, &caches, &installed)).flatten()
+            });
+            let Some(id) = id else { return Found::Nothing };
+            match entry_for(&id) {
+                None => Found::Missing { name: String::new() },
+                Some(e) if platform::program_of(&e.exec).is_some_and(|p| program_exists(&p)) => Found::App { id: e.id, name: e.name, icon: e.icon },
+                Some(e) => Found::Missing { name: e.name },
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+    pub(super) use unix::found;
+
+    // ---- Windows: ask the shell, which knows about Store apps and per-user choices ----
+
+    #[cfg(windows)]
+    pub(super) fn found(path: &Path) -> Found {
+        use windows_sys::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_NONE, ASSOCSTR_EXECUTABLE, ASSOCSTR_FRIENDLYAPPNAME};
+        let ext = extension_of(path);
+        if ext.is_empty() {
+            return Found::Nothing;
+        }
+        if matches!(ext.as_str(), ".exe" | ".com" | ".bat" | ".cmd" | ".scr" | ".lnk") {
+            return Found::Runs;
+        }
+        let ask = |what: i32| -> Option<String> {
+            let wext: Vec<u16> = ext.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut buf = [0u16; 520];
+            let mut len = buf.len() as u32;
+            // SAFETY: the extension is NUL-terminated, the buffer is as long as `len` says, and nothing outlives the call.
+            let hr = unsafe { AssocQueryStringW(ASSOCF_NONE, what, wext.as_ptr(), std::ptr::null(), buf.as_mut_ptr(), &mut len) };
+            if hr != 0 {
+                return None;
+            }
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let text = String::from_utf16_lossy(&buf[..n]);
+            (!text.trim().is_empty()).then_some(text)
+        };
+        match ask(ASSOCSTR_FRIENDLYAPPNAME) {
+            Some(name) => Found::App { id: ask(ASSOCSTR_EXECUTABLE).unwrap_or_default(), name, icon: String::new() },
+            None => Found::Nothing,
+        }
+    }
+
+    // ---- macOS: Launch Services ----
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn found(path: &Path) -> Found {
+        use core_foundation::base::TCFType;
+        use core_foundation::url::{CFURL, CFURLRef};
+        #[link(name = "CoreServices", kind = "framework")]
+        extern "C" {
+            fn LSCopyDefaultApplicationURLForURL(url: CFURLRef, role_mask: u32, error: *mut std::ffi::c_void) -> CFURLRef;
+        }
+        const ALL_ROLES: u32 = 0xFFFF_FFFF;
+        let Some(url) = CFURL::from_path(path, false) else { return Found::Nothing };
+        // SAFETY: `url` is a live CFURL; the call returns a new reference (or null), which is wrapped to be released.
+        let app = unsafe { LSCopyDefaultApplicationURLForURL(url.as_concrete_TypeRef(), ALL_ROLES, std::ptr::null_mut()) };
+        if app.is_null() {
+            return Found::Nothing;
+        }
+        // SAFETY: non-null, returned under the Create rule.
+        let app = unsafe { CFURL::wrap_under_create_rule(app) };
+        match app.to_path() {
+            Some(p) => Found::App { name: p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), id: p.to_string_lossy().into_owned(), icon: String::new() },
+            None => Found::Nothing,
+        }
+    }
+
+    // ---- Phones and anything else ----
+
+    #[cfg(any(target_os = "android", target_os = "ios", not(any(unix, windows))))]
+    pub(super) fn found(_: &Path) -> Found {
+        Found::Nothing
+    }
+}
 
 /// The programs that could open a file, with readable names, the system's helper programs left out, and the editors
 /// and terminals that suit any file picked out.
@@ -1159,6 +1531,82 @@ mod tests {
             assert_eq!(argv, vec!["env", "FOO=1", "viewer", "--open", "/tmp/a b.png"]);
             let bare = parse_entry("b.desktop", "[Desktop Entry]\nType=Application\nName=B\nExec=b -x\n").unwrap();
             assert_eq!(command_for(&bare, Path::new("/f")), vec!["b", "-x", "/f"]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod opener_tests {
+    use super::*;
+
+    #[test]
+    fn opener_words() {
+        assert_eq!(Opener::of("app", "VLC media player", "vlc.desktop").text(), "VLC media player");
+        assert_eq!(Opener::of("runs", "", "").text(), "Runs itself");
+        assert_eq!(Opener::of("none", "", "").text(), "No program set");
+        assert_eq!(Opener::of("missing", "Gone", "").text(), "Gone (missing)");
+        assert_eq!(Opener::of("missing", "", "").text(), "Program missing");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_runnable_file_without_an_extension_runs_itself() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(default_opener(&tool, false).kind, "runs");
+        let plain = dir.path().join("notes");
+        std::fs::write(&plain, "x").unwrap();
+        assert_ne!(default_opener(&plain, false).kind, "runs");
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+    mod unix {
+        use super::super::defaults::unix::*;
+
+        const GLOBS: &str = "# comment\n50:text/plain:*.txt\n50:image/png:*.png\n50:application/gzip:*.gz\n50:application/x-compressed-tar:*.tar.gz\n10:text/x-makefile:Makefile\n50:text/markdown:*.md\n50:image/jpeg:*.jpg:cs\n20:application/x-foo:*.f?o\n";
+
+        #[test]
+        fn names_become_types() {
+            let g = parse_globs(GLOBS);
+            assert_eq!(mime_for_name(&g, "notes.TXT").as_deref(), Some("text/plain"));
+            assert_eq!(mime_for_name(&g, "Makefile").as_deref(), Some("text/x-makefile"));
+            assert_eq!(mime_for_name(&g, "photo.JPG").as_deref(), Some("image/jpeg"));
+            // The longest pattern wins over a shorter one that also fits.
+            assert_eq!(mime_for_name(&g, "src.tar.gz").as_deref(), Some("application/x-compressed-tar"));
+            assert_eq!(mime_for_name(&g, "file.gz").as_deref(), Some("application/gzip"));
+            // Patterns with wildcards inside are not guessed at; a bare ".txt" is a name, not an extension.
+            assert_eq!(mime_for_name(&g, "x.foo"), None);
+            assert_eq!(mime_for_name(&g, ".txt"), None);
+            assert_eq!(mime_for_name(&g, "README"), None);
+        }
+
+        #[test]
+        fn defaults_come_from_the_most_specific_list_that_names_an_installed_app() {
+            let user = parse_associations("[Default Applications]\nimage/png=gone.desktop;viewer.desktop;\n[Removed Associations]\ntext/plain=bad.desktop;\n");
+            let system = parse_associations("[Default Applications]\nimage/png=other.desktop;\ntext/plain=bad.desktop;edit.desktop;\n[Added Associations]\nimage/jpeg=viewer.desktop;\n");
+            let cache = parse_associations("[MIME Cache]\nimage/gif=gif.desktop;\ntext/plain=bad.desktop;\n");
+            let have = |id: &str| matches!(id, "viewer.desktop" | "other.desktop" | "edit.desktop" | "bad.desktop" | "gif.desktop");
+            let files = [user, system];
+            let caches = [cache];
+            // The user's own first choice is gone, so their next one is used before the system's.
+            assert_eq!(pick("image/png", &files, &caches, &have).as_deref(), Some("viewer.desktop"));
+            // Removed for this type by the user: skipped everywhere.
+            assert_eq!(pick("text/plain", &files, &caches, &have).as_deref(), Some("edit.desktop"));
+            // Added, and what the cache lists, count when no default is named.
+            assert_eq!(pick("image/jpeg", &files, &caches, &have).as_deref(), Some("viewer.desktop"));
+            assert_eq!(pick("image/gif", &files, &caches, &have).as_deref(), Some("gif.desktop"));
+            assert_eq!(pick("video/mp4", &files, &caches, &have), None);
+        }
+
+        #[test]
+        fn association_lists_parse() {
+            let a = parse_associations("[Default Applications]\na/b=x.desktop;y.desktop;\n\n[Other]\na/b=z.desktop\n[Removed Associations]\na/b=q.desktop\n");
+            assert_eq!(a.default["a/b"], vec!["x.desktop", "y.desktop"]);
+            assert_eq!(a.removed["a/b"], vec!["q.desktop"]);
+            assert!(a.added.is_empty());
         }
     }
 }

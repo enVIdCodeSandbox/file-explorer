@@ -111,6 +111,7 @@ function Picker({ target }: { target: IconTarget }) {
           />
         </div>
         {error && <div className="dialog-error" role="alert">{error}</div>}
+        {filter.trim().length >= 2 && <h4 className="icon-section-title">App icons{names.length ? ` · ${names.length} ${names.length === 1 ? "match" : "matches"}` : ""}</h4>}
         <div className="icon-grid" role="listbox" aria-label="App icons">
           {names.map((n) => (
             <button key={n} className="icon-cell" title={prettyName(n)} aria-label={prettyName(n)} onClick={() => apply({ app: n })}>

@@ -2031,6 +2031,12 @@ pub async fn open_choices(path: String) -> CmdResult<fast_core::openwith::Choice
     blocking(move || Ok(fast_core::openwith::choices(Path::new(&path)))).await
 }
 
+/// The program a file opens with when double-clicked (remembered per kind of file for a couple of minutes).
+#[tauri::command]
+pub async fn default_app(path: String, icon: bool) -> CmdResult<fast_core::openwith::Opener> {
+    blocking(move || Ok(fast_core::openwith::default_opener(Path::new(&path), icon))).await
+}
+
 /// Every program on this computer that could be chosen to open a file, by name.
 #[tauri::command]
 pub async fn installed_apps(path: String) -> CmdResult<Vec<fast_core::openwith::App>> {
@@ -3227,17 +3233,25 @@ pub async fn drive_eject(app: AppHandle, state: State<'_, Shared>, mount: String
 /// Entries other programs add to the right-click menu for these items (or for
 /// a folder's background). Slow, so the app shows its own menu first.
 #[tauri::command]
-pub async fn shell_menu(paths: Vec<String>, background: bool) -> CmdResult<Vec<fast_core::shellmenu::ShellItem>> {
+pub async fn shell_menu(paths: Vec<String>, background: bool, max_age_secs: Option<u64>) -> CmdResult<Vec<fast_core::shellmenu::ShellItem>> {
     blocking(move || {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        fast_core::shellmenu::build(paths, background).map_err(err)
+        // A menu built within `max_age_secs` is reused (0 or none: always built fresh).
+        let max_age = std::time::Duration::from_secs(max_age_secs.unwrap_or(0));
+        fast_core::shellmenu::build_cached(paths, background, max_age).map_err(err)
     })
     .await
 }
 
+/// Run an entry of the menu shown for `paths`. The menu is built again first if the one alive in the system is for
+/// something else (the menu shown came from memory).
 #[tauri::command]
-pub async fn shell_invoke(id: u32) -> CmdResult<()> {
-    blocking(move || fast_core::shellmenu::invoke(id).map_err(err)).await
+pub async fn shell_invoke(paths: Vec<String>, background: bool, id: u32, label: String) -> CmdResult<()> {
+    blocking(move || {
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        fast_core::shellmenu::invoke_for(paths, background, id, &label).map_err(err)
+    })
+    .await
 }
 
 /// Make a shortcut next to an item: a symbolic link on Linux and macOS, a

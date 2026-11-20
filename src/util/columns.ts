@@ -119,6 +119,7 @@ export const COLUMNS: ColumnDef[] = [
   d("inode", "Inode", "File system", "number", 110, "The file's number on its drive. macOS and Linux."),
   d("links", "Hard links", "File system", "number", 90, "How many names the same file has. macOS and Linux."),
   d("mime", "Content type", "File system", "text", 150, "From the file name."),
+  d("openWith", "Opens with", "File system", "text", 170, "The program that opens the file when you double-click it, as the system has it set (Windows, macOS and Linux). Programs and scripts show Runs itself. Change it from Open with in the right-click menu."),
   d("linkTarget", "Link target", "File system", "text", 220, "Where a shortcut or symbolic link points."),
 
   // ---- Permissions and flags

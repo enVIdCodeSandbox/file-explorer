@@ -1,5 +1,6 @@
 // Floating UI: modal dialogs, toasts and the in-app Properties window.
 
+import { forgetOpeners } from "../util/opener";
 import { useEffect, useRef, useState } from "react";
 import { useDragView } from "../dnd";
 import { api, type OpenApp, type OpenChoices } from "../api";
@@ -208,6 +209,7 @@ export function OpenWithDialog() {
     setBusy(true);
     try {
       await api.openWithApp(path, picked, always);
+      if (always) forgetOpeners();
       close();
     } catch (e) {
       setError(String(e));

@@ -186,6 +186,14 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     { name: "Consolas", fixedWidth: true },
     { name: "DejaVu Serif", fixedWidth: false },
   ],
+  default_app: (a) => {
+    const name = String(a.path).split(/[\\/]/).pop() ?? "";
+    const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+    const apps: Record<string, string> = { txt: "Notepad", md: "Visual Studio Code", png: "Photos", jpg: "Photos", mp4: "VLC media player", pdf: "Microsoft Edge", docx: "Word" };
+    if (ext === "exe" || ext === "sh") return { kind: "runs", name: "", id: "", iconUrl: null };
+    if (apps[ext]) return { kind: "app", name: apps[ext], id: `C:\\Apps\\${apps[ext]}.exe`, iconUrl: null };
+    return { kind: "none", name: "", id: "", iconUrl: null };
+  },
   open_choices: (a) => ({
     extension: String(a.path).includes(".") ? "." + String(a.path).split(".").pop() : "",
     default: null,
@@ -229,6 +237,7 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
           if (d.kind === "size") return [[k, String(1000 * (i + 1) ** 3)]];
           if (d.kind === "number") return [[k, String((i * 37) % 11 + 1)]];
           const choices = ["Canon EOS R5", "Nikon Z6", "Sony A7", "-rw-r--r--", "-rwxr-xr-x"];
+          if (k === "openWith") return [[k, ["Notepad", "Photos", "VLC media player", "Runs itself", "No program set"][i % 5]]];
           return [[k, k === "mime" ? ["image/jpeg", "text/plain"][i % 2] : k.startsWith("sha") || k === "md5" ? "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".slice(0, k === "md5" ? 32 : 40) : `${choices[i % choices.length]}`]];
         }),
       ),
@@ -334,6 +343,13 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     const q = String(a.query ?? "").trim().toLowerCase();
     const json = fakePackJson(q);
     return { pack: json, total: Object.keys(JSON.parse(json).icons).length };
+  },
+  icon_packs_search: async (a) => {
+    await new Promise((r) => setTimeout(r, 250));
+    const q = String(a.query ?? "").trim().toLowerCase();
+    const json = fakePackJson(q);
+    const total = Object.keys(JSON.parse(json).icons).length;
+    return { hits: total ? (a.ids as string[]).map((id, i) => ({ id, total: total + i, pack: json })) : [], failed: null };
   },
   icon_pack_install: async (a) => {
     const id = String(a.id);

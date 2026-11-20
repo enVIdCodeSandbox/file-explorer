@@ -11,6 +11,7 @@ import { formatCount, formatDate, formatDuration, formatSize, kindOf, typeLabel 
 import { baseName, isArchiveLoc, isRemote, maskAddresses, parentPath, parseLocation } from "../util/path";
 import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
+import { loadOpener, openerApplies, peekOpener, showOpener } from "../util/opener";
 
 function Row({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   if (value == null || value === "") return null;
@@ -19,6 +20,40 @@ function Row({ label, value, mono }: { label: string; value: React.ReactNode; mo
       <dt>{label}</dt>
       <dd className={mono ? "mono" : undefined}>{value}</dd>
     </div>
+  );
+}
+
+/** "Opens with": the program a double-click starts, with its picture, and a way to change it. */
+function OpensWith({ path, isDir }: { path: string; isDir: boolean }) {
+  const [opener, setOpener] = useState(() => peekOpener(path, true));
+  useEffect(() => {
+    let alive = true;
+    setOpener(peekOpener(path, true));
+    if (!isDir) void loadOpener(path, true).then((o) => alive && setOpener(o)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [path, isDir]);
+  const change = () => useStore.getState().chooseApp(path);
+  if (isDir) return <Row label="Opens in" value="This window" />;
+  if (!opener) return null;
+  const words = opener.kind === "app" ? opener.name : opener.kind === "runs" ? "Runs itself" : opener.kind === "missing" ? `${opener.name || "The program"} is missing` : "No program set";
+  const icon = opener.iconUrl ? <img src={opener.iconUrl} width={16} height={16} alt="" draggable={false} /> : null;
+  return (
+    <Row
+      label="Opens with"
+      value={
+        <span className="opens-with" data-kind={opener.kind} title={opener.id || undefined}>
+          {icon}
+          <span className="opens-with-name">{words}</span>
+          {opener.kind !== "runs" && (
+            <button className="link-btn" onClick={change}>
+              {opener.kind === "app" ? "Change…" : "Choose…"}
+            </button>
+          )}
+        </span>
+      }
+    />
   );
 }
 
@@ -303,6 +338,7 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
         <Row label="Created" value={formatDate(d.created)} />
         <Row label="Accessed" value={formatDate(d.accessed)} />
         <Row label="Content type" value={d.mime} />
+        {showOpener(settings) && openerApplies(d.path) && <OpensWith path={d.path} isDir={isDir} />}
         <Row label="Dimensions" value={d.image ? `${d.image[0]} × ${d.image[1]} px` : null} />
         {d.media.map((f) => (
           <Row key={f.label} label={f.label} value={f.value} />

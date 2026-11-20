@@ -179,13 +179,26 @@ function clampOffset(x: number, y: number, w: number, h: number) {
 function SaveBar() {
   const unsaved = useStore((s) => s.unsaved);
   const auto = useStore((s) => adv<boolean>(s.settings, "ui.autoSave"));
-  const { saveSettings, discardSettings, updateSettings } = useStore.getState();
+  const undoDepth = useStore((s) => s.settingsUndoDepth);
+  const redoDepth = useStore((s) => s.settingsRedoDepth);
+  const { saveSettings, discardSettings, updateSettings, undoSettings, redoSettings, undoAllSettings } = useStore.getState();
   return (
     <div className="save-bar" data-unsaved={unsaved || undefined}>
+      <span className="save-undo">
+        <button className="secondary" disabled={!undoDepth} onClick={undoSettings} title="Undo the last change (Ctrl+Z). You can undo until you close Settings.">
+          Undo
+        </button>
+        <button className="secondary" disabled={!redoDepth} onClick={redoSettings} title="Redo (Ctrl+Shift+Z)">
+          Redo
+        </button>
+        <button className="secondary" disabled={!undoDepth} onClick={undoAllSettings} title="Put every setting back to what it was when you opened Settings">
+          Undo all{undoDepth ? ` (${undoDepth})` : ""}
+        </button>
+      </span>
       <label className="save-auto">
         <input type="checkbox" checked={auto} onChange={(e) => updateSettings((s) => void (s.advanced["ui.autoSave"] = e.target.checked))} /> Save changes automatically
       </label>
-      <span className="muted grow">{unsaved ? "You have changes that are applied but not saved." : auto ? "Every change is saved as you make it." : "Everything is saved."}</span>
+      <span className="muted grow">{unsaved ? "You have changes that are applied but not saved." : auto ? "Saved as you go. Undo works until you close Settings." : "Everything is saved."}</span>
       <button className="secondary" disabled={!unsaved} onClick={discardSettings}>Discard</button>
       <button className="primary" onClick={saveSettings}>Save</button>
     </div>
@@ -209,6 +222,30 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
   // (forgotten after mounting, not inside the initializer above, which React may run twice)
   useEffect(() => {
     if (useStore.getState().settingsSection) useStore.setState({ settingsSection: "" });
+  }, []);
+  // Changes can be undone until Settings is closed; closing makes them final.
+  useEffect(() => {
+    useStore.getState().beginSettingsSession();
+    // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo and redo settings changes, wherever focus is inside the window (a button
+    // that was just pressed may have lost it), except while typing in a box, which keeps its own undo.
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== "z" && k !== "y") return;
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && /^(text|search|number|email|url|password)?$/.test((t as HTMLInputElement).type)) || t.isContentEditable);
+      if (typing) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const st = useStore.getState();
+      if (k === "y" || e.shiftKey) st.redoSettings();
+      else st.undoSettings();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      useStore.getState().endSettingsSession();
+    };
   }, []);
   const pos = useStore((s) => s.settingsPos);
   const panel = useRef<HTMLDivElement>(null);

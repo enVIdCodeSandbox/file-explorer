@@ -47,7 +47,9 @@ import { usePulse } from "../util/pulse";
 import { COLUMN_MAX_WIDTH } from "../util/limits";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Thumb } from "./Thumb";
-import { useShellItems } from "./shellMenu";
+import { prefetchShell, sameShell, useShellItems } from "./shellMenu";
+import { shellPrefetch } from "../util/shellCache";
+import { loadOpener, openerApplies, openerHint, peekOpener, showOpener } from "../util/opener";
 import { Icon } from "./Icons";
 import { shareOutside, useMobile } from "../util/device";
 
@@ -127,7 +129,7 @@ export function FileView({ path }: { path: string }) {
   const [findText, setFindText] = useState("");
   const findTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const menuTicket = useRef(0);
-  const { fetchFor } = useShellItems();
+  const { fetchFor, peek } = useShellItems();
 
   // ---- Loading ------------------------------------------------------------
   const progressive = adv<boolean>(settings, "files.progressiveLoad");
@@ -498,6 +500,21 @@ export function FileView({ path }: { path: string }) {
   const fullPath = useCallback((name: string) => joinPath(path, name), [path]);
   const selectedPaths = () => entries.filter((e) => selected.has(e.name)).map((e) => fullPath(e.name));
 
+  // With the setting on, the system's right-click entries for what is selected (or for the folder itself) are asked
+  // for as soon as the selection settles, so the first right-click is as quick as the second.
+  const prefetchOn = settings.general.shellExtras && !noDiskDetails && shellPrefetch(settings);
+  useEffect(() => {
+    if (!prefetchOn || loading) return;
+    const timer = window.setTimeout(() => {
+      const paths = selectedPaths();
+      if (paths.length > 50) return;
+      if (paths.length) prefetchShell(paths, false);
+      else prefetchShell([path], true);
+    }, 400);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefetchOn, loading, selected, path, entries]);
+
   const open = (e: FileEntry) => {
     if (e.isDir) {
       if (adv<boolean>(settings, "files.foldersInNewTab")) newTab(fullPath(e.name));
@@ -591,6 +608,8 @@ export function FileView({ path }: { path: string }) {
     const dirForTerminal = single?.isDir ? fullPath(single.name) : path;
     const pinned = single ? pins.some((p) => p.path === fullPath(single.name)) : pins.some((p) => p.path === path);
     const sendTo = sendToItems(paths);
+    // The program Open will use, when it is known (it is asked for as the menu opens and drawn in when it arrives).
+    const openHint = single && !single.isDir && showOpener(settings) && openerApplies(fullPath(single.name)) ? openerHint(peekOpener(fullPath(single.name))) : undefined;
     const picked = entries.filter((e) => paths.includes(fullPath(e.name)));
     const custom: MenuItem[] = settings.customActions
       .filter((a) => {
@@ -603,7 +622,7 @@ export function FileView({ path }: { path: string }) {
       .map((a) => ({ id: `custom-${a.id}`, label: a.label, icon: "newItem", run: () => void api.runCustomAction(a.id, paths).catch((err) => showToast(String(err))) }));
     const items: (MenuItem | false | null | undefined)[] = target
       ? [
-          single && { id: "open", label: "Open", shortcut: sk("open"), run: () => open(single) },
+          single && { id: "open", label: "Open", hint: openHint, shortcut: sk("open"), run: () => open(single) },
           picked.length > 0 && { id: "fileTools", label: "File tools", children: fileToolsItems(picked.map((x) => fullPath(x.name))) },
           single && !single.isDir && { id: "view", label: "View", shortcut: sk("view"), run: () => viewFile(single, false) },
           single && !single.isDir && { id: "quickLook", label: "Quick look", shortcut: sk("quickLook"), run: () => viewFile(single, true) },
@@ -717,12 +736,22 @@ export function FileView({ path }: { path: string }) {
    */
   const showMenu = (x: number, y: number, target: FileEntry | null) => {
     const ticket = ++menuTicket.current;
-    const first = buildMenu(target);
-    setMenu({ x, y, items: first });
-    if (!settings.general.shellExtras || isRemote(path) || isArchiveLoc(path)) return;
+    const wantsShell = settings.general.shellExtras && !isRemote(path) && !isArchiveLoc(path);
     const paths = target ? selectedPathsWith(target) : [path];
+    // What the system added last time for this selection is in the very first paint; the answer below refreshes it.
+    const remembered = wantsShell ? peek(paths, !target) : null;
+    let latest: MenuItem[] | undefined = remembered ?? undefined;
+    setMenu({ x, y, items: buildMenu(target, latest) });
+    // Which program Open uses: from memory it is already in the menu above, otherwise it is drawn in a moment later.
+    if (target && !target.isDir && paths.length === 1 && showOpener(settings) && openerApplies(paths[0]) && !peekOpener(paths[0])) {
+      void loadOpener(paths[0]).then(() => {
+        if (ticket === menuTicket.current) setMenu({ x, y, items: buildMenu(target, latest) });
+      }).catch(() => {});
+    }
+    if (!wantsShell) return;
     void fetchFor(paths, !target).then((shell) => {
-      if (ticket !== menuTicket.current || shell.length === 0) return;
+      if (ticket !== menuTicket.current || shell.length === 0 || sameShell(remembered, shell)) return;
+      latest = shell;
       setMenu({ x, y, items: buildMenu(target, shell) });
     });
   };

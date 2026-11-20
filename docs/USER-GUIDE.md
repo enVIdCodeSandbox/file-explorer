@@ -513,6 +513,16 @@ The last state of every finished job is kept in memory until you close the app, 
 
 
 
+## Which program opens a file (0.24.0)
+
+Each file can show the program that double-clicking it starts, as your system has it set:
+
+* **Details pane:** an **Opens with** row with the program's picture (where the system gives one), its name and **Change…**, which opens the Open with window. A folder says **Opens in: This window**. Programs and scripts say **Runs itself**; a kind of file nothing is set for says **No program set**, and a program that was set but has been uninstalled says **(missing)**.
+* **Right-click menu:** **Open · Program name**, so you know what Open will do before you click it.
+* **File list column:** add **Opens with** (Columns → File system) to the Details view. It can be sorted and shown for every folder or for just one. Folders are left blank.
+
+The answer is asked of the system once per kind of file and remembered for two minutes, so a folder of a thousand .txt files costs one question. On Windows it comes from the shell itself, so Store apps (Photos, Media Player) are named as Windows names them; on Linux it follows your `mimeapps.list` and the installed desktop entries; on macOS it asks Launch Services. Choosing **Always use this app** in the Open with window refreshes it at once. Nothing is shown for phones, servers or archives. Settings → Interface → *Show which program a file opens with* turns the details row and the menu hint off (the column is up to you).
+
 ## Zooming the folder view
 
 Ctrl + scroll, Ctrl + and Ctrl - make the **Details** and **List** views bigger or smaller a step at a time (70% to 175%, rows and text together). Only when a view is as big as it goes does the next step switch to the next kind of view: Details, then List, then the icon sizes; zooming out goes back the same way. Ctrl + 0 puts the view in use back to 100%. Each of the two views remembers its own size (Settings → Interface → Details view size, List view size).
@@ -571,3 +581,15 @@ Things that can be resized now have a smallest and a largest size, so the layout
 - In a narrow details pane the labels sit above their values instead of being squeezed beside them, and the button fills the width.
 - Columns are at most 1200 px wide; floating panels 200 to 1400 by 60 to 1000 px and stay on screen; the second pane takes at most 75% of the width; dialogs are never taller than the window and scroll instead.
 - Double-click a panel's edge to put it back to its normal size.
+
+## Undo in Settings, and searching every icon collection (0.23.0)
+
+**Undo in Settings.** Changes still apply at once and, with "Save changes automatically", are saved as you make them. Until you close Settings you can take them back: **Undo** and **Redo** at the bottom (or Ctrl+Z and Ctrl+Shift+Z / Ctrl+Y, except while typing in a box, which keeps its own undo), and **Undo all** to put every setting back to how it was when you opened Settings. Changes made close together, such as typing a number, are one step. Closing Settings makes the changes final and clears the history. With automatic saving off, Save and Discard work as before.
+
+**Icon search.** In the icon picker, typing in "Find an icon" now looks in the app's own icons and in every collection at once. Results are grouped under a heading for each collection ("Lucide · 12 matches · installed"), the collection with most matches first. Installed collections are searched on your computer; the others over the internet, showing a few matches and how many there are, with an Install button (and its size) on the heading. If there is no network the installed ones still work and a note says the rest could not be searched. Choose one collection in the "More icons" list to browse just that one.
+
+## Right-click menu speed (0.24.0)
+
+The entries other programs add to the right-click menu (7-Zip, Open with, Share, Edit with…) are slow to collect, so they are now remembered for each selection. The next right-click on the same thing shows them in the very first frame while the list quietly refreshes in the background (an open menu is only redrawn if something actually changed). Choosing an entry that came from memory is safe: the system builds the menu again to run it, and finds the entry by name even if the list changed meanwhile.
+
+Settings → Performance: *Remember the right-click menu's system entries* (Automatic, Never, 1 minute, 5 minutes, 30 minutes; Automatic follows the performance level's cache size) and *Get the system entries ready before you right-click* (Automatic, Always, Never), which asks for them as soon as you select something or stop in a folder, so even the first right-click is quick. With Never, nothing is remembered or fetched ahead. The menu itself never waits for the system entries.

@@ -9,7 +9,7 @@ import { mergeHits } from "../util/searchHits";
 import { levelHits } from "../util/levelSearch";
 import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
 import { ask, compressPaths, deletePaths, extractArchive, isArchiveName, openFile, promptText, renamePath, thisPcLabel, useStore } from "../store";
-import { useShellItems } from "./shellMenu";
+import { sameShell, useShellItems } from "./shellMenu";
 import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
 import { iconMenuItems } from "./IconPicker";
 import { driveSlot } from "../util/customIcons";
@@ -587,7 +587,7 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
   // The same entries as the menu in a folder (pin, share, send to, compress, rename, terminal,
   // custom actions, the system's own entries...), plus the ones that only make sense here.
   const menuTicket = useRef(0);
-  const { fetchFor } = useShellItems();
+  const { fetchFor, peek } = useShellItems();
   const buildMenu = (picked: Hit[], shell: MenuItem[] = []): MenuItem[] => {
     const paths = picked.map((p) => p.path);
     const one = picked.length === 1 ? picked[0] : null;
@@ -669,11 +669,13 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
       setSelected(new Set([h.path]));
     }
     const ticket = ++menuTicket.current;
-    setMenu({ x, y, items: buildMenu(picked) });
+    const wantsShell = settings.general.shellExtras && !picked.some((p) => isRemote(p.path));
+    const remembered = wantsShell ? peek(picked.map((p) => p.path), false) : null;
+    setMenu({ x, y, items: buildMenu(picked, remembered ?? undefined) });
     // The system's own entries arrive a moment later; the menu never waits for them.
-    if (!settings.general.shellExtras || picked.some((p) => isRemote(p.path))) return;
+    if (!wantsShell) return;
     void fetchFor(picked.map((p) => p.path), false).then((shell) => {
-      if (ticket !== menuTicket.current || shell.length === 0) return;
+      if (ticket !== menuTicket.current || shell.length === 0 || sameShell(remembered, shell)) return;
       setMenu({ x, y, items: buildMenu(picked, shell) });
     });
   };

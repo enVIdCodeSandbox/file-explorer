@@ -139,6 +139,14 @@ export interface OpenApp {
   iconUrl: string | null;
 }
 
+/** What double-clicking a file does: "app" a program opens it, "runs" it is a program or script, "missing" the program set is gone, "none" nothing is set. */
+export interface Opener {
+  kind: "app" | "runs" | "missing" | "none";
+  name: string;
+  id: string;
+  iconUrl: string | null;
+}
+
 export interface OpenChoices {
   extension: string;
   default: OpenApp | null;
@@ -849,6 +857,8 @@ export const api = {
   /** Icon collections: what can be installed (with sizes), an installed one's icons, a look over the network, and removing. */
   iconPacksList: () => invoke<PackList>("icon_packs_list"),
   iconPackRead: (id: string) => invoke<string>("icon_pack_read", { id }),
+  /** Search collections that are not installed, over the network: a few matches and the number of matches for each. */
+  iconPacksSearch: (ids: string[], query: string, per: number) => invoke<{ hits: { id: string; total: number; pack: string }[]; failed: string | null }>("icon_packs_search", { ids, query, per }),
   iconPackPreview: (id: string, query: string, count: number) => invoke<{ pack: string; total: number }>("icon_pack_preview", { id, query, count }),
   iconPackInstall: (id: string) => invoke<PackList>("icon_pack_install", { id }),
   iconPackRemove: (id: string) => invoke<PackList>("icon_pack_remove", { id }),
@@ -919,6 +929,7 @@ export const api = {
   /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */
   openItem: (path: string) => invoke<string | null>("open_item", { path }),
   openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
+  defaultApp: (path: string, icon: boolean) => invoke<Opener>("default_app", { path, icon }),
   installedApps: (path: string) => invoke<OpenApp[]>("installed_apps", { path }),
   openWithApp: (path: string, app: string, always: boolean) => invoke<void>("open_with_app", { path, app, always }),
   openSystemChooser: (path: string) => invoke<void>("open_system_chooser", { path }),
@@ -933,8 +944,8 @@ export const api = {
   takeLaunch: () => invoke<Launch[]>("take_launch"),
   defaultFmStatus: () => invoke<DefaultFmStatus>("default_fm_status"),
   defaultFmSet: (on: boolean) => invoke<DefaultFmStatus>("default_fm_set", { on }),
-  shellMenu: (paths: string[], background: boolean) => invoke<ShellItem[]>("shell_menu", { paths, background }),
-  shellInvoke: (id: number) => invoke<void>("shell_invoke", { id }),
+  shellMenu: (paths: string[], background: boolean, maxAgeSecs?: number) => invoke<ShellItem[]>("shell_menu", { paths, background, maxAgeSecs }),
+  shellInvoke: (paths: string[], background: boolean, id: number, label: string) => invoke<void>("shell_invoke", { paths, background, id, label }),
   createShortcut: (path: string) => invoke<string>("create_shortcut", { path }),
   importAsset: (kind: AssetKind, path: string) => invoke<string>("import_asset", { kind, path }),
   listFonts: () => invoke<{ name: string; fixedWidth: boolean }[]>("list_fonts"),

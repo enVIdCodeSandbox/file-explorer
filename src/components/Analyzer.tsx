@@ -26,7 +26,7 @@ import { analyzeLocation, baseName, isInside, parentPath } from "../util/path";
 import { colorFor, layoutNested, typeColor, type Tile } from "../util/treemap";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileIcon, Icon } from "./Icons";
-import { useShellItems } from "./shellMenu";
+import { sameShell, useShellItems } from "./shellMenu";
 
 type Tab = "types" | "largest" | "folders";
 
@@ -66,7 +66,7 @@ export function AnalyzerView({ path }: { path: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const menuTicket = useRef(0);
-  const { fetchFor } = useShellItems();
+  const { fetchFor, peek } = useShellItems();
 
   // Show the last saved result at once, then refresh it in the background.
   useEffect(() => {
@@ -273,10 +273,11 @@ export function AnalyzerView({ path }: { path: string }) {
   /** Show the built-in menu at once; add the system's entries when they arrive. */
   const openMenu = (x: number, y: number, t: Target) => {
     const ticket = ++menuTicket.current;
-    setMenu({ x, y, items: menuFor(t) });
+    const remembered = shellExtras ? peek([t.path], false) : null;
+    setMenu({ x, y, items: menuFor(t, remembered ?? undefined) });
     if (!shellExtras) return;
     void fetchFor([t.path], false).then((shell) => {
-      if (ticket === menuTicket.current && shell.length) setMenu({ x, y, items: menuFor(t, shell) });
+      if (ticket === menuTicket.current && shell.length && !sameShell(remembered, shell)) setMenu({ x, y, items: menuFor(t, shell) });
     });
   };
 

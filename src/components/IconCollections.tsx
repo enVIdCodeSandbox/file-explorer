@@ -119,6 +119,153 @@ export const sizeNote = (p: PackState) => (p.installed ? `uses ${formatSize(p.di
 
 const EXPLAIN = "Once installed they work with no network, and icons you have already chosen keep working even if a collection is removed later.";
 
+/** Installed collections, read from the computer once and kept for the run (dropped again when one is removed). */
+const readCache = new Map<string, Promise<PackIcon[]>>();
+const readInstalled = (id: string) => {
+  let r = readCache.get(id);
+  if (!r) {
+    r = api.iconPackRead(id).then(parsePack, () => {
+      readCache.delete(id);
+      return [] as PackIcon[];
+    });
+    readCache.set(id, r);
+  }
+  return r;
+};
+
+/** How many icons a collection shows under its heading before "Show all". */
+const PER_SECTION = 36;
+
+interface Section {
+  id: string;
+  label: string;
+  about: string;
+  installed: boolean;
+  total: number;
+  icons: { name: string; svg: string }[];
+}
+
+/**
+ * What was typed, looked for in every collection. Installed ones are searched on this computer, the others over the
+ * network (a few matches each, with how many there are in all). Each collection has a heading, so you can see where an
+ * icon is from, and one that is not installed can be installed from its heading.
+ */
+export function AllCollections({ query, packs, onPick }: { query: string; packs: Packs; onPick: (svg: string) => void }) {
+  const list = packs.list?.packs ?? [];
+  const installedKey = list.filter((p) => p.installed).map((p) => p.id).join(",");
+  const openKey = list.filter((p) => !p.installed).map((p) => p.id).join(",");
+  const [local, setLocal] = useState<Record<string, { name: string; svg: string }[]>>({});
+  const [remote, setRemote] = useState<{ hits: { id: string; total: number; pack: string }[]; failed: string | null } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setExpanded(new Set()), [query]);
+
+  // Installed collections: on this computer, at once.
+  useEffect(() => {
+    let alive = true;
+    const ids = installedKey ? installedKey.split(",") : [];
+    for (const k of [...readCache.keys()]) if (!ids.includes(k)) readCache.delete(k);
+    Promise.all(ids.map(async (id) => [id, await readInstalled(id)] as const)).then((all) => {
+      if (!alive) return;
+      const out: Record<string, { name: string; svg: string }[]> = {};
+      for (const [id, icons] of all) {
+        const hit: { name: string; svg: string }[] = [];
+        for (const i of icons) if (matchesQuery(i.name, query)) hit.push(i);
+        if (hit.length) out[id] = hit;
+      }
+      setLocal(out);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [installedKey, query]);
+
+  // The rest: over the network, after a short pause in typing.
+  useEffect(() => {
+    const ids = openKey ? openKey.split(",") : [];
+    if (!ids.length) {
+      setRemote({ hits: [], failed: null });
+      setSearching(false);
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api.iconPacksSearch(ids, query, PER_SECTION).then(
+        (r) => alive && (setRemote(r), setSearching(false)),
+        (e) => alive && (setRemote({ hits: [], failed: String(e).replace(/^Error: /, "") }), setSearching(false)),
+      );
+    }, 400);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [openKey, query]);
+
+  const sections = useMemo(() => {
+    const out: Section[] = [];
+    const ready = (icons: { name: string; svg: string }[]) => {
+      const clean: { name: string; svg: string }[] = [];
+      for (const i of icons) {
+        const svg = safeSvg(i.svg);
+        if (svg) clean.push({ name: i.name, svg });
+      }
+      return clean;
+    };
+    for (const p of list) {
+      if (p.installed && local[p.id]) {
+        const all = local[p.id];
+        out.push({ id: p.id, label: p.label, about: p.about, installed: true, total: all.length, icons: ready(expanded.has(p.id) ? all : all.slice(0, PER_SECTION)) });
+      }
+    }
+    out.sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+    const net: Section[] = [];
+    for (const h of remote?.hits ?? []) {
+      const p = list.find((x) => x.id === h.id);
+      if (p && !p.installed) net.push({ id: p.id, label: p.label, about: p.about, installed: false, total: h.total, icons: ready(parsePack(h.pack)) });
+    }
+    return [...out, ...net];
+  }, [list, local, remote, expanded]);
+
+  const matches = sections.reduce((n, s) => n + s.total, 0);
+  return (
+    <div className="icon-all" aria-label="Icons from every collection">
+      <div className="muted icon-packs-count">
+        {searching ? "Searching every collection…" : sections.length ? `${matches}${remote?.hits.length ? "+" : ""} icons in ${sections.length} ${sections.length === 1 ? "collection" : "collections"}` : "No icon in any collection matches."}
+        {remote?.failed && !searching ? ` Collections that are not installed could not be searched (${remote.failed.replace(/^Could not reach the internet to get the icons /, "no network ").replace(/[()]/g, "")}).` : ""}
+      </div>
+      {sections.map((s) => (
+        <section key={s.id} className="icon-section" aria-label={s.label}>
+          <h4 className="icon-section-head">
+            <span>
+              {s.label} <span className="muted">· {s.total} {s.total === 1 ? "match" : "matches"} · {s.installed ? "installed" : "preview from the internet"}</span>
+            </span>
+            {!s.installed && (
+              <button className="secondary" disabled={packs.downloading.has(s.id) || packs.removing} onClick={() => void packs.install(s.id)}>
+                {installLabel(packs, s.id, `Install (${formatSize(list.find((p) => p.id === s.id)?.download ?? 0)})`)}
+              </button>
+            )}
+          </h4>
+          {!s.installed && <DownloadBar packs={packs} id={s.id} />}
+          <div className="icon-grid icon-grid-pack" role="listbox" aria-label={`${s.label} icons`}>
+            {s.icons.map((i) => (
+              <button key={i.name} className="icon-cell" title={`${packIconLabel(i.name)} (${s.label})`} aria-label={`${packIconLabel(i.name)} from ${s.label}`} onClick={() => onPick(i.svg)}>
+                <PackSvg svg={i.svg} />
+              </button>
+            ))}
+            {s.installed && s.total > s.icons.length && (
+              <button className="secondary icon-more" onClick={() => setExpanded((e) => new Set(e).add(s.id))}>
+                Show all {s.total}
+              </button>
+            )}
+            {!s.installed && s.total > s.icons.length && <span className="muted icon-more">and {s.total - s.icons.length} more. Install to browse them all.</span>}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 /** Inside the icon picker: choose a collection, see its icons (a preview from the internet until it is installed) and install it. */
 export function PackPicker({ filter, packs, onPick }: { filter: string; packs: Packs; onPick: (svg: string) => void }) {
   const [id, setId] = useState("");
@@ -181,7 +328,7 @@ export function PackPicker({ filter, packs, onPick }: { filter: string; packs: P
       <div className="icon-packs-bar">
         <label htmlFor="icon-pack">More icons</label>
         <select id="icon-pack" className="text-input" value={id} onChange={(e) => setId(e.target.value)}>
-          <option value="">Choose a collection…</option>
+          <option value="">Search every collection</option>
           {(packs.list?.packs ?? []).map((p) => (
             <option key={p.id} value={p.id}>
               {p.label} — {p.about} ({p.installed ? "installed, " : ""}{sizeNote(p)})
@@ -189,7 +336,8 @@ export function PackPicker({ filter, packs, onPick }: { filter: string; packs: P
           ))}
         </select>
       </div>
-      {!id && <p className="muted icon-packs-note">Extra collections are not part of the app, so it stays small. Pick one to see a preview from the internet, then install it if you like. {EXPLAIN}</p>}
+      {!id && wanted.length >= 2 && packs.list && <AllCollections query={wanted} packs={packs} onPick={onPick} />}
+      {!id && wanted.length < 2 && <p className="muted icon-packs-note">Type in "Find an icon" to look in every collection at once, with a heading for each one. Or pick a collection here to browse it. Extra collections are not part of the app, so it stays small: the ones you have not installed show as a preview from the internet, and you can install them if you like. {EXPLAIN}</p>}
       {state && !installed && (
         <div className="icon-packs-install">
           <span className="muted">
