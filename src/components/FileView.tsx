@@ -41,7 +41,9 @@ import { taskFromSelection } from "./tasksUtil";
 import { LockedCard } from "./Locks";
 import { commandsFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
-import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
+import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
+import { takeSelection } from "../util/unload";
+import { usePulse } from "../util/pulse";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Thumb } from "./Thumb";
 import { useShellItems } from "./shellMenu";
@@ -171,10 +173,12 @@ export function FileView({ path }: { path: string }) {
   }, [path, version, settings.general.showHidden, progressive]);
 
   useEffect(() => {
-    setSelected(new Set());
+    // Coming back after the window was out of sight: the selection and place in the list are kept.
+    const resumed = takeSelection(path, parentPath, baseName);
+    setSelected(new Set(resumed ?? []));
     setRenaming(null);
     useStore.setState({ selecting: false });
-    scroller.current?.scrollTo({ top: 0 });
+    if (!resumed) scroller.current?.scrollTo({ top: 0 });
     // On a phone, focusing would do nothing useful and can bring up the keyboard's accessory bar.
     if (!mobile) scroller.current?.focus();
   }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -317,13 +321,7 @@ export function FileView({ path }: { path: string }) {
 
   // A refresh you asked for shows: a bar across the top of the list and the list dips for a moment.
   const refreshedAt = useStore((st) => st.refreshedAt);
-  const [refreshing, setRefreshing] = useState(false);
-  useEffect(() => {
-    if (!refreshedAt) return;
-    setRefreshing(true);
-    const t = setTimeout(() => setRefreshing(false), 900);
-    return () => clearTimeout(t);
-  }, [refreshedAt]);
+  const refreshing = usePulse(refreshedAt, 900);
 
   // Videos and documents are slow to picture: in the background, make the ones in this folder ahead of the scrolling.
   const prewarmMode = adv<string>(settings, "thumbs.videoPrewarm");
@@ -1328,9 +1326,10 @@ export function FileView({ path }: { path: string }) {
       <div
         ref={scroller}
         className="file-scroller"
+        data-scroll-keep="files"
         data-zoomed={zoom !== 1 || undefined}
         style={zoom !== 1 ? ({ fontSize: `calc(var(--font-size) * ${zoom})`, "--view-zoom": zoom } as React.CSSProperties) : undefined}
-        data-refreshing={refreshing || undefined}
+        data-refreshing={refreshing}
         data-drop="folder"
         data-drop-path={path}
         tabIndex={0}

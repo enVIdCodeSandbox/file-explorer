@@ -43,6 +43,16 @@ function remember(key: string, url: string) {
   }
 }
 
+/** Let go of every picture that is not on screen (the window is out of sight, so none is). */
+export function dropThumbCache() {
+  for (const [k, url] of cache) {
+    if (showing.has(k)) continue;
+    URL.revokeObjectURL(url);
+    cache.delete(k);
+  }
+  failed.clear();
+}
+
 function giveUp(key: string) {
   failed.set(key, Date.now());
   if (failed.size > MAX_FAILED) failed.delete(failed.keys().next().value as string);

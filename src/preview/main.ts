@@ -336,7 +336,14 @@ const answers: Record<string, (a: Record<string, unknown>) => unknown> = {
     return { pack: json, total: Object.keys(JSON.parse(json).icons).length };
   },
   icon_pack_install: async (a) => {
-    await new Promise((r) => setTimeout(r, 400));
+    const id = String(a.id);
+    await emit("icon-pack-progress", { id, phase: "connecting", done: 0, total: 674000 });
+    await new Promise((r) => setTimeout(r, 500));
+    for (let i = 1; i <= 8; i++) {
+      await emit("icon-pack-progress", { id, phase: "downloading", done: i * 80000, total: 674000 });
+      await new Promise((r) => setTimeout(r, (window as unknown as { __slow?: number }).__slow ?? 60));
+    }
+    await emit("icon-pack-progress", { id, phase: "saving", done: 674000, total: 674000 });
     installedPacks.add(String(a.id));
     return fakePacks();
   },

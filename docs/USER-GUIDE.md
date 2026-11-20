@@ -549,3 +549,15 @@ A line says when a key is also used by another shortcut that is on. Holding Shif
 **Mouse side buttons.** Most mice have two buttons on the side: *Mouse4* (back) and *Mouse5* (forward). By default they go back and forward in the tab's history, like Alt+Left and Alt+Right. They can be switched off, changed to another button, or given to other commands that go somewhere or change the app (up one level, new tab, next tab, refresh, hide the navigation pane…), also with Ctrl, Alt or Shift held. The window never navigates by itself when they are pressed.
 
 Added with this list, besides the ones that existed: Ctrl+1 to Ctrl+8 and Ctrl+9 (go to a tab, the last tab), F11 (full screen), F4 and Alt+D (edit the address), Ctrl+Enter (open the folder in a new tab), Ctrl+Alt+C (copy the path of the selected items), and keys for Select all, Copy, Cut, Paste, the cursor and page keys, Backspace (up one level), Escape (clear the selection), the number-pad selection keys and Ctrl and + / − / 0 (list size), which were fixed before. Not in the list because they belong to one place only: Esc and Enter in dialogs and menus, the arrow keys in menus and text boxes, F3 in the search box, Ctrl+R then F, and typing a name to jump to it.
+
+## Downloading icon collections (0.22.0)
+
+Installing a collection shows a bar that fills as it downloads ("320 KB of about 674 KB"), on the Install button and in the list under Settings > Appearance > Icons. Several collections can download at the same time; each has its own bar. Removing and "Clear icon cache" wait until no download is running. The download is also faster: the two public addresses it can come from now race, so if the first is slow or fails the second takes over within a couple of seconds instead of after a long wait, and a download that stops sending data gives up after 20 seconds.
+
+## Unloading the interface while it is out of sight (0.22.0)
+
+When the window is minimized, covered by other windows or on another desktop for long enough, the app takes down its heavy interface (the file list and its pictures, the navigation pane, toolbars) to give memory back, and puts it back the moment you return, with the same tabs, selection and scroll place. Running transfers and settings are not touched. Settings > Performance > "Take the interface down while out of sight" chooses how soon: Never, Light (5 minutes), Balanced (1 minute) or Aggressive (10 seconds). **Automatic** follows the performance level: the heavy levels (a cache of 2 GB or more) never unload, Performance unloads after 5 minutes, the middle levels after 1 minute and Barebones, Feather and Reduced after 10 seconds. On phones, Automatic is never "Never". From 1 minute up, pictures held for the file list are let go too.
+
+## Refresh animation
+
+Refreshing again while the blue bar is still sweeping across the list now starts the whole animation again, instead of cutting it short.

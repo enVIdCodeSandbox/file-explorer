@@ -71,15 +71,17 @@ pub struct Preview {
 mod net {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{mpsc, Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
 
     fn agent() -> &'static ureq::Agent {
         static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
         AGENT.get_or_init(|| {
             ureq::Agent::config_builder()
                 .timeout_connect(Some(Duration::from_secs(6)))
-                .timeout_global(Some(Duration::from_secs(90)))
+                .timeout_global(Some(Duration::from_secs(120)))
+                .timeout_recv_body(Some(Duration::from_secs(20)))
                 .user_agent("FAST-File-Explorer-icons")
                 .build()
                 .into()
@@ -128,20 +130,104 @@ mod net {
         Ok(Preview { pack, total })
     }
 
-    /// Download a whole collection, reduce it and keep it.
-    pub fn install(st: &Shared, id: &str) -> Result<(), String> {
-        packs::info(id).ok_or_else(|| "Unknown icon collection.".to_string())?;
-        let mut last = String::new();
-        for base in ["https://cdn.jsdelivr.net/npm/@iconify-json", "https://unpkg.com/@iconify-json"] {
-            match get_text(&format!("{base}/{id}/icons.json"), packs::MAX_DOWNLOAD) {
-                Ok(text) => {
+    /// How far a download is, for the progress bar.
+    #[derive(Serialize, Clone)]
+    #[serde(rename_all = "camelCase")]
+    struct Progress<'a> {
+        id: &'a str,
+        /// "connecting", "downloading" or "saving".
+        phase: &'a str,
+        done: u64,
+        /// What the whole download is expected to be (the catalog's figure), so a bar can be drawn.
+        total: u64,
+    }
+
+    /// How long the first address gets before the second one is tried alongside it.
+    const HEAD_START: Duration = Duration::from_millis(2500);
+
+    /// Fetch `url` into memory, reporting the bytes so far. Gives up quietly once another address has won.
+    fn fetch(url: &str, limit: u64, won: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let mut resp = agent().get(url).call().map_err(offline)?;
+        let mut reader = resp.body_mut().with_config().limit(limit).reader();
+        let mut out = Vec::with_capacity(512 * 1024);
+        let mut buf = [0u8; 32 * 1024];
+        loop {
+            if won.load(Ordering::Relaxed) {
+                return Err("another address was faster".into());
+            }
+            let n = reader.read(&mut buf).map_err(offline)?;
+            if n == 0 {
+                return Ok(out);
+            }
+            out.extend_from_slice(&buf[..n]);
+            progress(out.len() as u64);
+        }
+    }
+
+    /// Download a whole collection, reduce it and keep it. The two addresses race: the second starts if the first
+    /// has not finished (or has failed) shortly after, and whichever completes first is used.
+    pub fn install(app: &tauri::AppHandle, st: &Shared, id: &str) -> Result<(), String> {
+        use tauri::Emitter;
+        let info = packs::info(id).ok_or_else(|| "Unknown icon collection.".to_string())?;
+        let total = info.download;
+        let send = {
+            let app = app.clone();
+            let id = id.to_string();
+            move |phase: &str, done: u64| {
+                let _ = app.emit("icon-pack-progress", Progress { id: &id, phase, done, total });
+            }
+        };
+        send("connecting", 0);
+        let urls = [format!("https://cdn.jsdelivr.net/npm/@iconify-json/{id}/icons.json"), format!("https://unpkg.com/@iconify-json/{id}/icons.json")];
+        let won = Arc::new(AtomicBool::new(false));
+        let first_failed = Arc::new(AtomicBool::new(false));
+        let best = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
+        for (i, url) in urls.into_iter().enumerate() {
+            let (won, first_failed, best, tx) = (won.clone(), first_failed.clone(), best.clone(), tx.clone());
+            let send = send.clone();
+            std::thread::spawn(move || {
+                if i > 0 {
+                    let from = Instant::now();
+                    while from.elapsed() < HEAD_START && !won.load(Ordering::Relaxed) && !first_failed.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(40));
+                    }
+                    if won.load(Ordering::Relaxed) {
+                        return;
+                    }
+                }
+                let mut last = Instant::now();
+                let r = fetch(&url, packs::MAX_DOWNLOAD, &won, &mut |n| {
+                    // The bar follows whichever address is furthest, and only moves forward.
+                    let top = best.fetch_max(n, Ordering::Relaxed).max(n);
+                    if n >= top && last.elapsed() >= Duration::from_millis(60) {
+                        last = Instant::now();
+                        send("downloading", n.min(total.saturating_sub(1).max(1)));
+                    }
+                });
+                if r.is_err() && i == 0 {
+                    first_failed.store(true, Ordering::Relaxed);
+                }
+                let _ = tx.send(r);
+            });
+        }
+        drop(tx);
+        let mut last_err = String::from("No answer from the internet.");
+        while let Ok(r) = rx.recv() {
+            match r {
+                Ok(bytes) => {
+                    won.store(true, Ordering::Relaxed);
+                    send("saving", total);
+                    let text = String::from_utf8(bytes).map_err(|_| "The icon file was not text.".to_string())?;
                     let (reduced, _) = packs::reduce(&text).map_err(|e| e.to_string())?;
                     return packs::store(&st.paths.icon_packs, id, &reduced).map_err(|e| e.to_string());
                 }
-                Err(e) => last = e,
+                Err(e) if e.contains("another address") => {}
+                Err(e) => last_err = e,
             }
         }
-        Err(last)
+        Err(last_err)
     }
 }
 
@@ -152,7 +238,7 @@ mod net {
     pub fn preview(_: &str, _: &str, _: usize) -> Result<Preview, String> {
         Err(NO.into())
     }
-    pub fn install(_: &Shared, _: &str) -> Result<(), String> {
+    pub fn install(_: &tauri::AppHandle, _: &Shared, _: &str) -> Result<(), String> {
         Err(NO.into())
     }
 }
@@ -165,10 +251,10 @@ pub async fn icon_pack_preview(id: String, query: String, count: usize) -> CmdRe
 
 /// Download and keep a collection.
 #[tauri::command]
-pub async fn icon_pack_install(state: State<'_, Shared>, id: String) -> CmdResult<PackList> {
+pub async fn icon_pack_install(app: tauri::AppHandle, state: State<'_, Shared>, id: String) -> CmdResult<PackList> {
     let st = state.inner().clone();
     blocking(move || {
-        net::install(&st, &id)?;
+        net::install(&app, &st, &id)?;
         Ok(list(&st))
     })
     .await

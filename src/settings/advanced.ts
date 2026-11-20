@@ -100,6 +100,7 @@ export const ADVANCED: AdvDef[] = [
   yn(true, "cache.predictions", "Privacy and caches", "Learn which folders you open next", "Used to prepare folders early. Off: nothing is recorded."),
   yn(true, "cache.hardware", "Privacy and caches", "Save this computer's hardware details", "About opens at once from the saved copy instead of reading the hardware and drives every time."),
   num(24, "cache.hardwareMaxAgeHours", "Privacy and caches", "Saved hardware details count as current for", 0, 8760, "hours", "After this About reads them again. 0 never expires them (use Read again now)."),
+  sel("auto", "perf.uiUnload", "Speed and memory", "Take the interface down while out of sight", [["auto", "Automatic: follows the performance level"], ["off", "Never"], ["light", "Light: after 5 minutes"], ["balanced", "Balanced: after 1 minute"], ["aggressive", "Aggressive: after 10 seconds"]], "When the window is minimized, covered or on another desktop for this long, the file list, pictures, navigation pane and toolbars are unloaded to free memory, and put back the moment you return, at the same place. Tabs, selection and running transfers are not affected. Automatic is Never on the heaviest performance levels, and gets stricter as the level's cache gets smaller."),
   yn(false, "perf.compactWhenIdle", "Speed and memory", "Give back memory when the window is in the background", "Drops cached folder listings and returns free memory to the system two minutes after you switch away."),
 
   // ---- Files and lists ----

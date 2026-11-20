@@ -1,5 +1,7 @@
 import { useT } from "./i18n";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { onSuspendChange, isSuspended, startUnloader, rememberScrolls, restoreScrolls, keepSelection } from "./util/unload";
+import { dropThumbCache } from "./components/Thumb";
+import { Suspense, lazy, useEffect, useState, useSyncExternalStore } from "react";
 import { api, on } from "./api";
 import { adv } from "./settings/advanced";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
@@ -189,6 +191,24 @@ function AppInner() {
   const mobile = useMobile();
 
   useAppearance();
+
+  // Out of sight (minimized, covered, another desktop) for long enough: the heavy interface comes down and returns
+  // when the window shows again. How long depends on the performance level, or the choice in Settings > Performance.
+  const suspended = useSyncExternalStore(onSuspendChange, isSuspended);
+  useEffect(
+    () =>
+      startUnloader({
+        settings: () => useStore.getState().settings,
+        mobile: () => isMobileOs(useStore.getState().info?.os),
+        before: () => {
+          rememberScrolls();
+          keepSelection(useStore.getState().selection);
+        },
+        after: restoreScrolls,
+        dropPictures: dropThumbCache,
+      }),
+    [],
+  );
 
   // Tell the backend which folders are open, so it can watch them and refresh
   // the listing when another program changes one. The key is a string so the
@@ -405,7 +425,7 @@ function AppInner() {
   // The Finder-like and GNOME-like windows put the window buttons in the header row.
   const headerOwnsControls = chrome !== "windows" && topFirst === "address" && !layout.address.collapsed;
 
-  const render = (id: PanelId, dock: string) => {
+  const renderLive = (id: PanelId, dock: string) => {
     const vertical = dock === "left" || dock === "right";
     switch (id) {
       case "tabs":
@@ -429,13 +449,18 @@ function AppInner() {
     }
   };
 
+  const render = suspended ? () => null : renderLive;
+
   return (
-    <div className="app" data-os={os}>
+    <div className="app" data-os={os} data-suspended={suspended || undefined}>
       {!(tabsOwnWindowButtons && layout.tabs.dock === "top" && !layout.tabs.collapsed) && !headerOwnsControls && <CaptionStrip />}
       <PickBar />
       <Shell
         render={render}
         content={
+          suspended ? (
+            <div className="content-inner" key="suspended" />
+          ) : (
           <div className="content-inner" key={activeTab}>
             {loc.kind === "folder" && <ButtonBar />}
             <SplitArea
@@ -457,6 +482,7 @@ function AppInner() {
             {/* Finder shows the path of the folder along the bottom, under the item count. */}
             {chrome === "macos" && loc.kind === "folder" && <Toolbar parts={["address"]} />}
           </div>
+          )
         }
       />
       <Transfers />

@@ -1120,6 +1120,8 @@ export interface BackendEvents {
   "task-progress": { id: string; progress: TaskProgress };
   "task-finished": RunRecord;
   "task-notice": string;
+  /** An icon collection is being downloaded. */
+  "icon-pack-progress": { id: string; phase: "connecting" | "downloading" | "saving"; done: number; total: number };
 }
 
 export function on<K extends keyof BackendEvents>(

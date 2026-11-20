@@ -8,7 +8,8 @@
 //   samsung  My Files: one home page with a large title, categories and cards
 //   apple    Files: large titles, grouped lists, Recents / Browse along the bottom
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { isSuspended, onSuspendChange } from "../util/unload";
 import { api } from "../api";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { adv } from "../settings/advanced";
@@ -372,6 +373,8 @@ function stepBack(roots: Root[]): boolean {
 
 export function MobileApp({ location, overlays }: { location: string; overlays: ReactNode }) {
   const chrome = usePhoneChrome();
+  // The page is out of sight for long enough (see util/unload): the list comes down and returns with the window.
+  const suspended = useSyncExternalStore(onSuspendChange, isSuspended);
   const settings = useStore((s) => s.settings)!;
   const os = useStore((s) => s.info?.os);
   const clipboard = useStore((s) => s.clipboard);
@@ -611,8 +614,8 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
         </header>
       )}
 
-      <main className="m-content" key={location}>
-        {atRoot ? (
+      <main className="m-content" key={location} data-scroll-keep="m-content">
+        {suspended ? null : atRoot ? (
           <div className="m-page">
             <AccessCard />
             {chrome === "samsung" ? (

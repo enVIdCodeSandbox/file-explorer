@@ -2,21 +2,36 @@
 // and installed on request, and the space it takes is shown beside it, with a way to remove it again.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { api, on } from "../api";
 import { safeSvg } from "../util/customIcons";
 import { formatSize } from "../util/format";
-import { matchesQuery, packIconLabel, parsePack, type PackIcon, type PackList, type PackState } from "../util/iconPacks";
+import { matchesQuery, packIconLabel, parsePack, packFraction, packProgressText, type PackIcon, type PackList, type PackProgress, type PackState } from "../util/iconPacks";
 
 /** Draw one already-checked icon. */
 export function PackSvg({ svg }: { svg: string }) {
   return <span className="pack-svg" aria-hidden dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
-/** What is installed, and the actions that change it. */
+/**
+ * What is installed, and the actions that change it. Several collections can download at the same time (each is small),
+ * so every one has its own progress; removing waits until none is downloading.
+ */
 export function usePacks() {
   const [list, setList] = useState<PackList | null>(null);
-  const [busy, setBusy] = useState("");
+  const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState<Record<string, PackProgress>>({});
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let alive = true;
+    on("icon-pack-progress", (p) => alive && setProgress((all) => ({ ...all, [p.id]: p }))).then((u) => (alive ? (off = u) : u()), () => {});
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
+  const reload = useCallback(() => api.iconPacksList().then(setList, () => setList((l) => l ?? { packs: [], disk: 0 })), []);
   useEffect(() => {
     let alive = true;
     api.iconPacksList().then((l) => alive && setList(l), () => alive && setList({ packs: [], disk: 0 }));
@@ -24,30 +39,81 @@ export function usePacks() {
       alive = false;
     };
   }, []);
-  const run = useCallback(async (key: string, job: () => Promise<PackList>) => {
-    setBusy(key);
-    setError("");
-    try {
-      setList(await job());
-      return true;
-    } catch (e) {
-      setError(String(e).replace(/^Error: /, ""));
-      return false;
-    } finally {
-      setBusy("");
-    }
-  }, []);
+  const install = useCallback(
+    async (id: string) => {
+      setDownloading((d) => new Set(d).add(id));
+      setProgress((all) => ({ ...all, [id]: { id, phase: "connecting", done: 0, total: 0 } }));
+      setError("");
+      try {
+        await api.iconPackInstall(id);
+        return true;
+      } catch (e) {
+        setError(String(e).replace(/^Error: /, ""));
+        return false;
+      } finally {
+        setDownloading((d) => {
+          const n = new Set(d);
+          n.delete(id);
+          return n;
+        });
+        setProgress(({ [id]: _gone, ...rest }) => rest);
+        // Other downloads may have finished meanwhile, so the list is read again instead of trusting this answer.
+        void reload();
+      }
+    },
+    [reload],
+  );
+  const exclusive = useCallback(
+    async (job: () => Promise<PackList>) => {
+      setRemoving(true);
+      setError("");
+      try {
+        setList(await job());
+        return true;
+      } catch (e) {
+        setError(String(e).replace(/^Error: /, ""));
+        return false;
+      } finally {
+        setRemoving(false);
+      }
+    },
+    [],
+  );
   return {
     list,
-    busy,
+    downloading,
+    /** Something is being removed, or anything is downloading: removing is then not offered. */
+    locked: removing || downloading.size > 0,
+    removing,
+    progress,
     error,
     setError,
-    install: (id: string) => run(id, () => api.iconPackInstall(id)),
-    remove: (id: string) => run(id, () => api.iconPackRemove(id)),
-    clear: () => run("clear", () => api.iconPacksClear()),
+    install,
+    remove: (id: string) => exclusive(() => api.iconPackRemove(id)),
+    clear: () => exclusive(() => api.iconPacksClear()),
   };
 }
 export type Packs = ReturnType<typeof usePacks>;
+
+/** What a download shows: a bar that fills, and words for the stage it is in. */
+export function DownloadBar({ packs, id }: { packs: Packs; id: string }) {
+  if (!packs.downloading.has(id)) return null;
+  const p = packs.progress[id] ?? null;
+  const fraction = p ? packFraction(p) : null;
+  return (
+    <div className="pack-progress" role="progressbar" aria-label="Downloading" aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === null ? undefined : Math.round(fraction * 100)}>
+      <div className="pack-progress-bar" data-indeterminate={fraction === null ? "" : undefined} style={fraction === null ? undefined : { width: `${fraction * 100}%` }} />
+      <span className="muted pack-progress-text">{p ? packProgressText(p) : "Starting…"}</span>
+    </div>
+  );
+}
+
+/** Label for an install button while it works. */
+export const installLabel = (packs: Packs, id: string, idle: string) => {
+  if (!packs.downloading.has(id)) return idle;
+  const p = packs.progress[id] ?? null;
+  return p && p.phase === "downloading" ? `Downloading ${Math.round(packFraction(p) * 100)}%` : p?.phase === "saving" ? "Saving…" : "Connecting…";
+};
 
 export const sizeNote = (p: PackState) => (p.installed ? `uses ${formatSize(p.disk)}` : `about ${formatSize(p.download)} to install`);
 
@@ -129,15 +195,16 @@ export function PackPicker({ filter, packs, onPick }: { filter: string; packs: P
           <span className="muted">
             A preview from the internet. Installing downloads about <b>{formatSize(state.download)}</b> once and keeps it in this app's cache folder. {EXPLAIN} Remove it any time here or under Settings → Storage.
           </span>
-          <button className="primary" disabled={!!packs.busy} onClick={() => void packs.install(state.id)}>
-            {packs.busy === state.id ? "Downloading…" : `Install (${formatSize(state.download)})`}
+          <button className="primary" disabled={packs.downloading.has(state.id) || packs.removing} onClick={() => void packs.install(state.id)}>
+            {installLabel(packs, state.id, `Install (${formatSize(state.download)})`)}
           </button>
         </div>
       )}
+      {state && !installed && <DownloadBar packs={packs} id={state.id} />}
       {state && installed && (
         <div className="icon-packs-install">
           <span className="muted">Installed: uses <b>{formatSize(state.disk)}</b> on this computer. Works with no network.</span>
-          <button className="secondary" disabled={!!packs.busy} onClick={() => void packs.remove(state.id).then(() => setId(state.id))}>
+          <button className="secondary" disabled={packs.locked} onClick={() => void packs.remove(state.id).then(() => setId(state.id))}>
             Remove (frees {formatSize(state.disk)})
           </button>
         </div>
@@ -162,7 +229,7 @@ export function PackPicker({ filter, packs, onPick }: { filter: string; packs: P
       {packs.list && packs.list.disk > 0 && (
         <div className="icon-packs-foot">
           <span className="muted">Installed collections use {formatSize(packs.list.disk)}.</span>
-          <button className="secondary" disabled={!!packs.busy} onClick={() => void packs.clear().then(() => setId((x) => x))}>
+          <button className="secondary" disabled={packs.locked} onClick={() => void packs.clear().then(() => setId((x) => x))}>
             Clear icon cache
           </button>
         </div>
@@ -189,16 +256,17 @@ export function PackManager() {
             </span>
             <span className="muted pack-size">{sizeNote(p)}</span>
             {p.installed ? (
-              <button className="secondary" disabled={!!packs.busy} onClick={() => void packs.remove(p.id)}>Remove</button>
+              <button className="secondary" disabled={packs.locked} onClick={() => void packs.remove(p.id)}>Remove</button>
             ) : (
-              <button className="secondary" disabled={!!packs.busy} onClick={() => void packs.install(p.id)}>{packs.busy === p.id ? "Downloading…" : "Install"}</button>
+              <button className="secondary" disabled={packs.downloading.has(p.id) || packs.removing} onClick={() => void packs.install(p.id)}>{installLabel(packs, p.id, "Install")}</button>
             )}
+            {packs.downloading.has(p.id) && <div className="pack-row-progress"><DownloadBar packs={packs} id={p.id} /></div>}
           </div>
         ))}
       </div>
       <div className="icon-packs-foot">
         <span className="muted">{list && list.disk > 0 ? `Installed collections use ${formatSize(list.disk)}.` : "No collections installed, so nothing is using space."}</span>
-        <button className="secondary" disabled={!list || list.disk === 0 || !!packs.busy} onClick={() => void packs.clear()}>Clear icon cache</button>
+        <button className="secondary" disabled={!list || list.disk === 0 || packs.locked} onClick={() => void packs.clear()}>Clear icon cache</button>
       </div>
     </div>
   );

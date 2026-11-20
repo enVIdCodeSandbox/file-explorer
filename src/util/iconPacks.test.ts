@@ -38,3 +38,16 @@ describe("icon collections", () => {
     expect(matchesQuery("anything", "  ")).toBe(true);
   });
 });
+
+describe("download progress", () => {
+  it("fills toward the estimate, waits at 99% and is full only when saving", async () => {
+    const { packFraction, packProgressText } = await import("./iconPacks");
+    const p = (phase: "connecting" | "downloading" | "saving", done: number) => ({ id: "x", phase, done, total: 1000 });
+    expect(packFraction(p("connecting", 0))).toBe(0);
+    expect(packFraction(p("downloading", 250))).toBe(0.25);
+    expect(packFraction(p("downloading", 5000))).toBe(0.99);
+    expect(packFraction(p("saving", 1000))).toBe(1);
+    expect(packProgressText(p("downloading", 500))).toMatch(/of about/);
+    expect(packProgressText(p("connecting", 0))).toBe("Connecting…");
+  });
+});

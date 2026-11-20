@@ -53,6 +53,7 @@ import { beginDrag, sidebarOrder, type DragPayload } from "../dnd";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { usePathMenu, type MenuTarget } from "./pathMenu";
 import { iconMenuItems } from "./IconPicker";
+import { usePulse } from "../util/pulse";
 import { splitMenuItems } from "./Split";
 import { dropOnPanes, endHover, hoverPanes } from "../split/state";
 import { driveSlot } from "../util/customIcons";
@@ -466,13 +467,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
   const folder = loc.kind === "folder" ? loc.path : null;
   // The refresh button turns for a moment after a refresh, so it is clear it happened.
   const refreshedAt = useStore((st) => st.refreshedAt);
-  const [spinning, setSpinning] = useState(false);
-  useEffect(() => {
-    if (!refreshedAt) return;
-    setSpinning(true);
-    const t = setTimeout(() => setSpinning(false), 900);
-    return () => clearTimeout(t);
-  }, [refreshedAt]);
+  const spinning = usePulse(refreshedAt, 900);
   const up = folder ? (parentPath(folder) ?? THIS_PC) : null;
 
   // The search box mirrors the query when a search tab is showing.
@@ -647,7 +642,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
         <button aria-label="Up" data-nav="up" title="Up (Alt+Up)" disabled={!up} onClick={() => up && navigate(up)}>
           <Icon name="up" />
         </button>
-        <button aria-label="Refresh" data-nav="refresh" data-spinning={spinning || undefined} title={`Refresh (${[keyFor(settings, "refresh"), keyFor(settings, "refreshAlt")].filter(Boolean).join(" or ")})`} onClick={() => useStore.getState().refreshTab()}>
+        <button aria-label="Refresh" data-nav="refresh" data-spinning={spinning} title={`Refresh (${[keyFor(settings, "refresh"), keyFor(settings, "refreshAlt")].filter(Boolean).join(" or ")})`} onClick={() => useStore.getState().refreshTab()}>
           <Icon name="refresh" />
         </button>
       </div>
