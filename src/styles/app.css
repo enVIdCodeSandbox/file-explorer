@@ -189,12 +189,20 @@ p { margin: 0 0 8px; }
 .icon-button.danger:hover { color: var(--danger); }
 
 /* ---- Details pane ------------------------------------------------------- */
-.details-pane { width: var(--details-width); flex: none; overflow-y: auto; padding: 14px; border-left: 1px solid var(--border); user-select: text; -webkit-user-select: text; }
+.details-pane { container: details / inline-size; width: var(--details-width); flex: none; min-width: 0; overflow-y: auto; padding: 14px; border-left: 1px solid var(--border); user-select: text; -webkit-user-select: text; }
 .details-preview { display: grid; place-items: center; height: 170px; margin-bottom: 10px; background: var(--bg); border-radius: var(--radius); }
 .details-title { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; word-break: break-word; }
 .details-list { display: grid; grid-template-columns: 96px 1fr; gap: 5px 10px; margin: 0; font-size: var(--font-size-small); }
 .details-list dt { color: var(--text-muted); }
 .details-list dd { margin: 0; min-width: 0; word-break: break-word; }
+/* In a narrow pane the label goes above its value instead of the two being squeezed side by side. */
+@container details (max-width: 255px) {
+  .details-list { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .details-list dt { margin-top: 8px; font-size: 11px; }
+  .details-list dt:first-child { margin-top: 0; }
+  .details-pane .secondary, .details-pane .primary { width: 100%; height: auto; min-height: 30px; padding: 6px 10px; white-space: normal; }
+}
+.details-list dd { overflow-wrap: anywhere; }
 .details-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .type-row { display: flex; align-items: center; gap: 8px; height: 22px; font-size: var(--font-size-small); }
 .type-name { width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -261,13 +269,11 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 
 /* ---- Narrow windows (and, later, phones) -------------------------------- */
 @media (max-width: 900px) {
-  .details-pane { display: none; }
   .search-box { width: 170px; }
   .settings-button span { display: none; }
   .largest-list { width: 260px; }
 }
 @media (max-width: 640px) {
-  .sidebar { display: none; }
   .file-view { --columns: minmax(120px, 1fr) 90px; }
   .file-header .column-header:nth-child(2), .file-header .column-header:nth-child(3), .cell-date, .cell-type, .cell-path { display: none; }
   .analyzer-body { flex-direction: column; }
@@ -541,7 +547,7 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 /* ---- Second pane and Miller columns ---------------------------------------------- */
 .pane-row { flex: 1; min-height: 0; display: flex; }
 .pane-row > .file-view, .pane-row > .miller { flex: 1; min-width: 0; }
-.second-pane { width: 46%; min-width: 260px; display: flex; flex-direction: column; border-left: 1px solid var(--border); outline: none; }
+.second-pane { width: 46%; min-width: 260px; max-width: 75%; display: flex; flex-direction: column; border-left: 1px solid var(--border); outline: none; }
 .second-pane:focus-within { box-shadow: inset 2px 0 0 var(--accent); }
 .second-pane-bar, .second-pane-actions { display: flex; align-items: center; gap: 4px; padding: 3px 6px; flex: none; }
 .second-pane-path { flex: 1; min-width: 0; }

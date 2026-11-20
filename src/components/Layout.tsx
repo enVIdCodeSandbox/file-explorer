@@ -6,6 +6,7 @@ import { DOCK_LABEL, PANELS, PRESETS, RESIZABLE, moveTo, nudge, panelsAt, resolv
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { useStore } from "../store";
+import { NARROW_WINDOW, SIDEBAR_LIMITS, clampFloat, clampPanelSize, panelRange } from "../util/limits";
 
 export function useLayout(): [Layout, (next: Layout) => void] {
   const saved = useStore((s) => s.settings?.appearance.layout);
@@ -61,8 +62,7 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
   const saveSize = () => {
     const el = ref.current;
     if (!el || !floating) return;
-    const w = Math.round(el.offsetWidth);
-    const h = Math.round(el.offsetHeight);
+    const { w, h } = clampFloat(el.offsetWidth, el.offsetHeight);
     if (w !== state.w || h !== state.h) setLayout(patchPanel(layout, id, { w, h }));
   };
 
@@ -72,6 +72,17 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
   const resizable = RESIZABLE.includes(id) && edgeDock && !collapsed;
   const [dragSize, setDragSize] = useState<number | null>(null);
   const size = dragSize ?? state.size;
+  // Its smallest and largest size, kept by the stylesheet too: a window made smaller shrinks the panel down to its
+  // smallest size before the files are squeezed, and a size saved on a bigger screen cannot take over a small one.
+  const range = RESIZABLE.includes(id) && edgeDock ? panelRange(id, state.dock) : null;
+  const sidebarFolded = useStore((st) => !!st.settings?.appearance.sidebarCollapsed);
+  const limits: React.CSSProperties | undefined = range
+    ? sideDock
+      ? { minWidth: range[0], maxWidth: `min(${range[1]}px, 60vw)` }
+      : { minHeight: range[0], maxHeight: `min(${range[1]}px, 60vh)` }
+    : id === "sidebar" && sideDock
+      ? { minWidth: sidebarFolded ? SIDEBAR_LIMITS.collapsed : SIDEBAR_LIMITS.min }
+      : undefined;
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -84,10 +95,10 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
     // Dragging towards the middle of the window makes the panel bigger.
     const sign = state.dock === "right" || state.dock === "bottom" ? -1 : 1;
     const room = (el.closest(".shell") as HTMLElement | null)?.getBoundingClientRect();
-    const max = Math.max(160, Math.round((sideDock ? room?.width ?? 1200 : room?.height ?? 800) * 0.8));
+    const roomAlong = sideDock ? room?.width ?? 1200 : room?.height ?? 800;
     let latest = start;
     const move = (m: PointerEvent) => {
-      latest = Math.max(120, Math.min(max, Math.round(start + sign * ((sideDock ? m.clientX : m.clientY) - at))));
+      latest = clampPanelSize(id, state.dock, start + sign * ((sideDock ? m.clientX : m.clientY) - at), roomAlong);
       setDragSize(latest);
     };
     const up = () => {
@@ -111,12 +122,12 @@ function Frame({ id, layout, setLayout, children, onGrab }: FrameProps) {
       data-edit={edit || undefined}
       style={
         floating
-          ? { left: state.x, top: state.y, width: state.w, height: collapsed ? undefined : state.h }
+          ? { left: `min(${state.x}px, calc(100% - 120px))`, top: `min(${state.y}px, calc(100% - 40px))`, width: state.w, height: collapsed ? undefined : state.h }
           : resizable && size
             ? sideDock
-              ? { width: size }
-              : { height: size }
-            : undefined
+              ? { width: size, ...limits }
+              : { height: size, ...limits }
+            : limits
       }
       onPointerUp={floating ? saveSize : undefined}
     >
@@ -164,10 +175,24 @@ interface ShellProps {
   content: React.ReactNode;
 }
 
+/** True while the window is too narrow for panels beside the files (see MIN_CONTENT in limits.ts). */
+function useNarrowWindow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_WINDOW);
+  useEffect(() => {
+    const q = window.matchMedia(`(max-width: ${NARROW_WINDOW - 1}px)`);
+    const on = () => setNarrow(q.matches);
+    on();
+    q.addEventListener("change", on);
+    return () => q.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
 export function Shell({ render, content }: ShellProps) {
   const [layout, setLayout] = useLayout();
   const edit = useStore((s) => s.layoutEdit);
   const popout = useStore((s) => s.popout);
+  const sidebarCollapsed = useStore((s) => !!s.settings?.appearance.sidebarCollapsed);
   const [drag, setDrag] = useState<{ id: PanelId; x: number; y: number; zone: Dock } | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
@@ -207,11 +232,18 @@ export function Shell({ render, content }: ShellProps) {
     );
   };
 
+  const narrow = useNarrowWindow();
   const dock = (d: Dock) => {
-    const ids = panelsAt(layout, d).filter(visible);
+    // In a very small window the details pane and terminal at the side step aside, so the files keep their room.
+    const ids = panelsAt(layout, d).filter(visible).filter((id) => !(narrow && (d === "left" || d === "right") && (id === "details" || id === "terminal")));
     if (!ids.length && !(edit && drag)) return null;
+    // The least a dock may be squeezed to: what its panels need at their smallest. Below that the files give way
+    // (they keep a minimum of their own), and a panel at the side steps aside in a very small window (shell.css).
+    const side = d === "left" || d === "right";
+    const least = ids.reduce((sum, id) => sum + (panelRange(id, d)?.[0] ?? (id === "sidebar" && side ? (sidebarCollapsed ? SIDEBAR_LIMITS.collapsed : SIDEBAR_LIMITS.min) : 0)), 0);
+    const style: React.CSSProperties | undefined = least && side ? { minWidth: least } : least ? { minHeight: least } : undefined;
     return (
-      <div className={`dock dock-${d}`} data-dock={d} data-empty={ids.length === 0 || undefined}>
+      <div className={`dock dock-${d}`} data-dock={d} data-empty={ids.length === 0 || undefined} style={style}>
         {ids.map(frame)}
       </div>
     );

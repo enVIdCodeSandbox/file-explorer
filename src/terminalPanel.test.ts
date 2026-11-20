@@ -15,7 +15,8 @@ describe("terminal panel in the layout", () => {
     const saved = (size: unknown) => resolveLayout({ terminal: { dock: "bottom", order: 0, collapsed: false, x: 0, y: 0, w: 500, h: 300, size } });
     expect(saved(350).terminal.size).toBe(350);
     expect(saved(5).terminal.size).toBeUndefined();
-    expect(saved(99999).terminal.size).toBe(4000);
+    expect(saved(99999).terminal.size).toBe(640);
+    expect(saved(20 * 5).terminal.size).toBe(110);
     expect(saved("wide").terminal.size).toBeUndefined();
   });
 });

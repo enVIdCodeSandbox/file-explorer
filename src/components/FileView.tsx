@@ -44,6 +44,7 @@ import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
 import { takeSelection } from "../util/unload";
 import { usePulse } from "../util/pulse";
+import { COLUMN_MAX_WIDTH } from "../util/limits";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Thumb } from "./Thumb";
 import { useShellItems } from "./shellMenu";
@@ -1109,7 +1110,7 @@ export function FileView({ path }: { path: string }) {
     const start = colWidth(def.id);
     let latest = start;
     const move = (m: PointerEvent) => {
-      latest = Math.max(def.min, Math.round(start + (m.clientX - startX)));
+      latest = Math.max(def.min, Math.min(COLUMN_MAX_WIDTH, Math.round(start + (m.clientX - startX))));
       setLiveWidths({ [def.id]: latest });
     };
     const up = () => {

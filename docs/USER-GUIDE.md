@@ -561,3 +561,13 @@ When the window is minimized, covered by other windows or on another desktop for
 ## Refresh animation
 
 Refreshing again while the blue bar is still sweeping across the list now starts the whole animation again, instead of cutting it short.
+
+## Resizing limits (0.22.1)
+
+Things that can be resized now have a smallest and a largest size, so the layout cannot be broken by dragging, by making the window small, or by a size saved on a bigger screen.
+
+- **Details pane:** 240 to 640 px wide at the side (120 to 420 px tall at the top or bottom). **Terminal:** 300 to 960 px wide, 110 to 640 px tall. **Navigation pane:** 150 to 480 px (or folded to icons). A panel takes at most 60% of the window.
+- **Making the window smaller** shrinks the panels towards their smallest size first; the file list always keeps at least 280 px of width and 160 px of height. In a window narrower than 760 px the details pane and terminal at the side step aside, and come back when the window is wider.
+- In a narrow details pane the labels sit above their values instead of being squeezed beside them, and the button fills the width.
+- Columns are at most 1200 px wide; floating panels 200 to 1400 by 60 to 1000 px and stay on screen; the second pane takes at most 75% of the width; dialogs are never taller than the window and scroll instead.
+- Double-click a panel's edge to put it back to its normal size.

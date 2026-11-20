@@ -1,6 +1,8 @@
 // The window is made of panels that can be docked, floated, popped out,
 // collapsed or hidden. This file holds the model; Layout.tsx draws it.
 
+import { clampFloat, clampPanelSize } from "./limits";
+
 export type PanelId = "tabs" | "address" | "commands" | "sidebar" | "details" | "terminal";
 export type Dock = "top" | "bottom" | "left" | "right" | "float" | "popout" | "hidden";
 
@@ -140,7 +142,9 @@ export function resolveLayout(saved: unknown): Layout {
     if (typeof s.dock === "string" && info.docks.includes(s.dock as Dock)) cur.dock = s.dock as Dock;
     for (const k of ["order", "x", "y", "w", "h"] as const) if (typeof s[k] === "number" && Number.isFinite(s[k])) cur[k] = s[k] as number;
     if (typeof s.collapsed === "boolean") cur.collapsed = s.collapsed;
-    if (typeof s.size === "number" && Number.isFinite(s.size) && s.size >= 80) cur.size = Math.min(4000, Math.round(s.size));
+    // A saved size is kept within what that panel allows on the side it is on.
+    if (typeof s.size === "number" && Number.isFinite(s.size) && s.size >= 80) cur.size = clampPanelSize(info.id, cur.dock, s.size);
+    if (typeof s.w === "number" || typeof s.h === "number") Object.assign(cur, clampFloat(cur.w, cur.h));
   }
   return out;
 }

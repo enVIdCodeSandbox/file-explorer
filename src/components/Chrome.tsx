@@ -54,6 +54,7 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { usePathMenu, type MenuTarget } from "./pathMenu";
 import { iconMenuItems } from "./IconPicker";
 import { usePulse } from "../util/pulse";
+import { SIDEBAR_LIMITS } from "../util/limits";
 import { splitMenuItems } from "./Split";
 import { dropOnPanes, endHover, hoverPanes } from "../split/state";
 import { driveSlot } from "../util/customIcons";
@@ -1153,9 +1154,9 @@ export function FilterPanel({ anchor, onClose }: { anchor: DOMRect; onClose: () 
 // Sidebar: resizable, collapsible to icons, sections can be hidden in Settings
 // ---------------------------------------------------------------------------
 
-const COLLAPSED_WIDTH = 52;
-const MIN_WIDTH = 150;
-const MAX_WIDTH = 480;
+const COLLAPSED_WIDTH = SIDEBAR_LIMITS.collapsed;
+const MIN_WIDTH = SIDEBAR_LIMITS.min;
+const MAX_WIDTH = SIDEBAR_LIMITS.max;
 
 /** The address a saved server opens at. */
 export function serverUrl(s: SavedServer): string {
@@ -1521,7 +1522,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   };
 
   return (
-    <div className="sidebar-wrap" data-horizontal={horizontal || undefined} style={horizontal ? undefined : { width }}>
+    <div className="sidebar-wrap" data-horizontal={horizontal || undefined} style={horizontal ? undefined : { width, minWidth: collapsed ? COLLAPSED_WIDTH : MIN_WIDTH, maxWidth: collapsed ? COLLAPSED_WIDTH : `min(${MAX_WIDTH}px, 45vw)` }}>
     <nav className="sidebar" aria-label="Places" data-collapsed={(!horizontal && collapsed) || undefined} data-horizontal={horizontal || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
       <div className="side-top" data-nav-zone="top">
         <button
