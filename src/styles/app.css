@@ -297,6 +297,11 @@ input[type="color"] { width: 44px; height: 30px; padding: 2px; background: var(-
 .search-history-x:hover { background: var(--surface-active); }
 
 .loading-notice { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; margin-bottom: 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); font-size: 12px; }
+.loading-bar { height: 3px; margin-top: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.loading-bar > i { display: block; height: 100%; background: var(--accent); transition: width .25s ease-out; }
+.loading-bar[data-indeterminate] > i { width: 35%; animation: loading-slide 1.2s ease-in-out infinite; transition: none; }
+@keyframes loading-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .loading-bar[data-indeterminate] > i { animation: none; width: 100%; opacity: .5; } }
 .notice-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); font-size: 12px; }
 
 .save-bar { flex: none; margin: 0; padding: 10px 26px; display: flex; align-items: center; gap: 10px; background: var(--panel, var(--bg)); border-top: 1px solid var(--border, rgba(128,128,128,.3)); z-index: 2; font-size: 12px; }

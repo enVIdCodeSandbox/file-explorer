@@ -593,3 +593,20 @@ Things that can be resized now have a smallest and a largest size, so the layout
 The entries other programs add to the right-click menu (7-Zip, Open with, Share, Edit with…) are slow to collect, so they are now remembered for each selection. The next right-click on the same thing shows them in the very first frame while the list quietly refreshes in the background (an open menu is only redrawn if something actually changed). Choosing an entry that came from memory is safe: the system builds the menu again to run it, and finds the entry by name even if the list changed meanwhile.
 
 Settings → Performance: *Remember the right-click menu's system entries* (Automatic, Never, 1 minute, 5 minutes, 30 minutes; Automatic follows the performance level's cache size) and *Get the system entries ready before you right-click* (Automatic, Always, Never), which asks for them as soon as you select something or stop in a folder, so even the first right-click is quick. With Never, nothing is remembered or fetched ahead. The menu itself never waits for the system entries.
+
+
+## Moving between phones and servers without a copy here (0.25.0)
+
+Copying or moving from a phone or server to another server or phone now sends the bytes straight through, in small pieces: what the source gives is written to the destination at once, and nothing is stored on this computer. A 60 GB file moves 60 GB, not 120. Cancelling stops both ends, and a file that did not arrive whole is removed from the destination rather than left short. If the source and destination are the *same* phone (it can only be talked to over one connection), the app falls back to the older route through a temporary folder.
+
+**Copy no longer downloads by itself.** Pressing Copy on a phone or server item used to fetch it so that other programs could paste it. Now this is limited: *Settings → Transfers → When you copy files from a server or phone, also fetch them for other programs* is **Only small files** (default; the limit is *Largest copy fetched for other programs*, 50 MB), **Everything**, or **Never**. Pasting back into this app never needs the fetch: it goes straight from the source. A big item is copied without being fetched and the app says so.
+
+**Dragging out.** Phone and server items can be dragged out of the window into another program or another copy of the app. When the pointer reaches the edge, the app fetches the items while you hold the button (the ghost reads "Getting the files to hand over…") and hands them over when they are ready. Move back inside the window, or let go early, to cancel. Folders are fetched whole. Items above *Largest file fetched for a drag out of the window from a server or phone* (default 2 GB) are refused with advice to copy and paste between the two places instead, because that goes straight through.
+
+## Folders that load as you watch (0.25.0)
+
+Folders on **servers** (FTP, SFTP, WebDAV) now fill in while they are being read, as local folders and USB phones on macOS and Linux do: the first files appear at once and more arrive as the server sends them. While a folder is still loading, the details pane shows *Still loading this folder* with the count so far, a progress bar, and an estimate of the time left. When the server does not say how many items there are, the count and time are taken from the last time you opened that folder.
+
+**Phones on Windows send a folder in one piece.** Windows only gives a whole folder at once, so a large folder such as DCIM cannot be shown file by file. The details pane now says *Reading this folder* straight away (after a quarter of a second), with a moving bar, and how long it took last time, so a wait of several seconds is not mistaken for a hang.
+
+*Settings → Performance → How often a loading folder redraws*: Automatic follows the performance level; or Often, Normal, Gently. The pace also slows down by itself when drawing a long list is taking time. *Show files as they load* (Files and lists) turns the whole thing off.

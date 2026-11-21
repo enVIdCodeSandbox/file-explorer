@@ -240,6 +240,9 @@ function LoadingNotice() {
     <div className="loading-notice" role="status">
       <strong>{n.title}</strong>
       <span>{n.detail}</span>
+      <div className="loading-bar" data-indeterminate={n.fraction == null ? "" : undefined} aria-hidden="true">
+        <i style={n.fraction == null ? undefined : { width: `${Math.round(n.fraction * 100)}%` }} />
+      </div>
     </div>
   );
 }

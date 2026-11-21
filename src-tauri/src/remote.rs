@@ -646,6 +646,35 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
                             }
                         }
                         out.result = dloc.url();
+                    } else if let Some((mut src, mut dst)) = direct_pair(&st, &sources, &dloc)? {
+                        // Both ends can pass files straight through: they are read and written at the same time, and
+                        // nothing is kept on this computer, so a big file is moved once, not twice.
+                        let mut items: Vec<(Location, bool, u64)> = Vec::new();
+                        for s in &sources {
+                            let sloc = Location::parse(s).map_err(err)?;
+                            let (is_dir, size) = stat_remote(src.get(), &sloc).map_err(err)?;
+                            items.push((sloc, is_dir, size));
+                        }
+                        let (mut files, mut bytes) = (0, 0);
+                        for (sloc, is_dir, size) in &items {
+                            let (f, b) = remote::measure_tree(src.get(), &sloc.path, *is_dir, *size, &ctl).map_err(err)?;
+                            files += f;
+                            bytes += b;
+                            rep.scanning(files);
+                        }
+                        total.fetch_add(bytes, Ordering::Relaxed);
+                        for (sloc, is_dir, size) in &items {
+                            let name = sloc.name().to_string();
+                            *current.lock() = name.clone();
+                            let unique = remote::free_name(&name, |n| remote_taken(dst.get(), &dloc.path, n));
+                            remote::relay_tree_as(src.get(), &sloc.path, *is_dir, *size, dst.get(), &dloc.path, &unique, false, &ctl, &mut tally).map_err(err)?;
+                        }
+                        if mv && tally.failed.is_empty() {
+                            for (sloc, is_dir, _) in &items {
+                                remote::remove_tree(src.get(), &sloc.path, *is_dir, &ctl).map_err(err)?;
+                            }
+                        }
+                        out.result = dloc.url();
                     } else {
                         let tmp = stage.clone().expect("staging folder");
                         download_all(&st, rep, &sources, &tmp, false, &ctl, &total, &current, &mut tally, &mut out)?;
@@ -688,6 +717,21 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
         out.failed = tally.failed;
         Ok(out)
     })
+}
+
+/// Two connections that can hand files from one to the other without this computer keeping them: one to where all the
+/// `sources` are, and one to `dest`. `None` when they cannot (a kind of connection that cannot pass files through, or
+/// both ends on one phone, which allows only one connection at a time): the caller then copies by way of a temporary
+/// folder.
+fn direct_pair(st: &Shared, sources: &[String], dest: &Location) -> CmdResult<Option<(Lease, Lease)>> {
+    let first = Location::parse(&sources[0]).map_err(err)?;
+    let one_place = sources.iter().all(|s| Location::parse(s).map(|l| l.key() == first.key()).unwrap_or(false));
+    if !one_place || (first.protocol == Protocol::Mtp && first.key() == dest.key()) {
+        return Ok(None);
+    }
+    let mut src = Lease::new(st, &first.key(), true)?;
+    let mut dst = Lease::new(st, &dest.key(), true)?;
+    Ok((src.get().streams() && dst.get().streams()).then_some((src, dst)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1065,13 +1109,50 @@ pub async fn archive_stage(state: State<'_, Shared>, sources: Vec<String>) -> Cm
     .await
 }
 
+/// What `remote_stage_start` answers when the items are over the limit it was given (the interface does not show it as a failure).
+pub const TOO_BIG_TO_STAGE: &str = "too-big-to-stage";
+// (the answer carries the size in MB after a colon, for the message)
+
+/// The size of the files among these items together, and whether any of them is a folder (or could not be found). Each
+/// folder is listed once, however many of its items are asked about.
+fn file_sizes(st: &Shared, sources: &[String]) -> CmdResult<(u64, bool)> {
+    let mut listings: std::collections::HashMap<String, Vec<remote::Entry>> = std::collections::HashMap::new();
+    let (mut total, mut folder) = (0u64, false);
+    for s in sources {
+        let loc = Location::parse(s).map_err(err)?;
+        let Some(parent) = loc.parent() else {
+            folder = true;
+            continue;
+        };
+        let key = parent.url();
+        if !listings.contains_key(&key) {
+            let mut lease = Lease::new(st, &loc.key(), false)?;
+            listings.insert(key.clone(), lease.get().list(&parent.path).map_err(err)?);
+        }
+        match listings[&key].iter().find(|e| e.name == loc.name()) {
+            Some(e) if !e.is_dir => total += e.size,
+            _ => folder = true,
+        }
+    }
+    Ok((total, folder))
+}
+
 /// Fetch items from a server or phone into real files, so they can go on the system clipboard and be pasted in other
 /// programs. Each item gets its own folder (like `archive_stage`), and the job's result lists the files, one per line.
 #[tauri::command]
-pub async fn remote_stage_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>) -> CmdResult<u64> {
+pub async fn remote_stage_start(app: AppHandle, state: State<'_, Shared>, sources: Vec<String>, max_mb: Option<u64>, allow_folders: Option<bool>) -> CmdResult<u64> {
     let st = state.inner().clone();
     if sources.is_empty() || sources.iter().any(|s| !remote::is_remote(s)) {
         return Err("Only items on a server or phone can be fetched this way.".into());
+    }
+    // A limit: nothing is fetched for something bigger. A folder's size is not known without a walk, so it counts as
+    // too big unless the caller accepts folders (a drag out of the window does: the person is holding it right there).
+    if let Some(mb) = max_mb {
+        let (st3, list) = (st.clone(), sources.clone());
+        let (bytes, folder) = blocking(move || file_sizes(&st3, &list)).await?;
+        if bytes > mb.saturating_mul(1 << 20) || (folder && !allow_folders.unwrap_or(false)) {
+            return Err(format!("{TOO_BIG_TO_STAGE}:{}", bytes >> 20));
+        }
     }
     let first = base_name(&sources[0]);
     let n = sources.len() as u64;

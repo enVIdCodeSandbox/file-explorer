@@ -153,3 +153,7 @@ projects lives in `src-tauri/mobile` and is applied by
 that asks for file access and opens and shares files, and release signing from
 `gen/android/keystore.properties`; on iOS the settings that show the app's
 folder in the Files app.
+
+## When the Android build cannot download Gradle's tools (0.24.1)
+
+A build that stops with *Could not find org.jetbrains.kotlin:kotlin-stdlib…* (or another Kotlin file) while configuring `:buildSrc` failed before any of this app's code was built: Gradle could not fetch its own build-script tools from the Gradle plugin portal. `scripts/mobile-setup.mjs android` now gives `buildSrc` a `settings.gradle.kts` that also looks on Maven Central, and the Mobile workflow tries the Android build up to three times.

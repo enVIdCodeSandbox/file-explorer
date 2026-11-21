@@ -19,7 +19,8 @@ import { crumb, flushTrail } from "./util/crashTrail";
 import { create } from "zustand";
 import { api, type Drive } from "./api";
 import { useStore } from "./store";
-import { baseName, insideArchive, isArchiveLoc, isInside, parentPath } from "./util/path";
+import { baseName, insideArchive, isArchiveLoc, isInside, isRemote, parentPath } from "./util/path";
+import { dragLimitMb, startDragFetch, stopDragFetch, type DragFetch } from "./util/dragFetch";
 import { isBetween, isNavId, isZone, moveNav, parseLayout, serializeLayout, SETTING as LAYOUT_KEY, type NavId, type Zone } from "./util/sideLayout";
 
 export interface Mods {
@@ -263,6 +264,49 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
   };
 
   let staging: Promise<string[] | null> | null = null;
+
+  // Items on a phone or server are not files here. At the edge of the window they are fetched, and the system drag
+  // starts when they have arrived; the button stays held meanwhile. Coming back inside, or letting go, stops it.
+  let fetchToken = 0;
+  let fetching: { handle: DragFetch | null } | null = null;
+  let handingOver = false;
+  const stopFetching = () => {
+    fetchToken++;
+    const f = fetching;
+    fetching = null;
+    if (f?.handle) void stopDragFetch(f.handle.id);
+  };
+  const beginFetching = (paths: string[]) => {
+    const token = ++fetchToken;
+    const mine = { handle: null as DragFetch | null };
+    fetching = mine;
+    void startDragFetch(paths, dragLimitMb(useStore.getState().settings))
+      .then((handle) => {
+        if (token !== fetchToken) {
+          void stopDragFetch(handle.id);
+          return null;
+        }
+        mine.handle = handle;
+        return handle.done;
+      })
+      .then((files) => {
+        if (!files || token !== fetchToken) return;
+        handingOver = true;
+        fetching = null;
+        finish(false);
+        noteOwnDrag(files);
+        crumb(`drag out of the window: ${files.length} fetched item(s)`);
+        flushTrail();
+        return api.dragOut(files).catch((err) => useStore.getState().showToast(String(err)));
+      })
+      .catch((err) => {
+        if (token !== fetchToken) return;
+        useStore.getState().showToast(String(err?.message ?? err));
+        stopFetching();
+        finish(false);
+      });
+  };
+
   const move = (e: PointerEvent) => {
     last = { x: e.clientX, y: e.clientY };
     mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
@@ -284,6 +328,14 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
     // Out past the edge of the window: hand over to the system's own drag, so
     // another program receives the files as if they were dropped from a file manager.
     const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth - 1 || e.clientY > window.innerHeight - 1;
+    if (payload.paths.length && !payload.section && payload.paths.every(isRemote)) {
+      if (outside) {
+        if (!fetching) beginFetching(payload.paths);
+        setView({ x: last.x, y: last.y, label: payload.label, count: payload.paths.length, text: "Getting the files to hand over…", ok: true });
+        return;
+      }
+      if (fetching) stopFetching();
+    }
     if (outside && payload.paths.length && !payload.section) {
       const paths = payload.paths;
       const pending = staging;
@@ -309,6 +361,7 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
   const up = () => finish(true);
 
   function finish(commit: boolean) {
+    if (!handingOver) stopFetching();
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", cancel);

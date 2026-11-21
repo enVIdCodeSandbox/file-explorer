@@ -44,6 +44,18 @@ function android() {
   const app = join(tauri, "gen", "android", "app");
   if (!existsSync(app)) fail("src-tauri/gen/android is missing. Run `npx tauri android init` first.");
 
+  // 0. Where Gradle looks for the plugins that build the build scripts themselves. Gradle's own Kotlin plugin needs
+  // Kotlin libraries that the Gradle plugin portal mirrors from Maven Central; when the portal's copy is missing or
+  // late, the whole build fails before any of our code is touched. Maven Central is a second place to look.
+  const buildSrc = join(tauri, "gen", "android", "buildSrc");
+  if (existsSync(buildSrc)) {
+    const settings = join(buildSrc, "settings.gradle.kts");
+    const block = "pluginManagement {\n    repositories {\n        gradlePluginPortal()\n        mavenCentral()\n        google()\n    }\n}\n";
+    if (!existsSync(settings)) writeFileSync(settings, `// Added by scripts/mobile-setup.mjs\n${block}`);
+    else edit(settings, (text) => (text.includes("pluginManagement") ? text : `${block}\n${text}`));
+    say("build-script plugins can also come from Maven Central");
+  }
+
   // 1. The activity.
   const source = join(app, "src", "main", "java", ...pkg.split("."));
   mkdirSync(source, { recursive: true });

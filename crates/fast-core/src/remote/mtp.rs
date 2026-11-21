@@ -336,12 +336,14 @@ mod engine {
     }
 
     /// A file read in pieces for upload; stops at once when the job is cancelled.
-    struct Chunks<'a> {
-        file: std::fs::File,
+    struct Chunks<'a, R: std::io::Read> {
+        file: R,
         ctl: &'a Control<'a>,
+        /// Counted here only for files read from this computer; a pass-through is counted by whoever writes.
+        count: bool,
     }
 
-    impl Iterator for Chunks<'_> {
+    impl<R: std::io::Read> Iterator for Chunks<'_, R> {
         type Item = std::result::Result<Bytes, std::io::Error>;
         fn next(&mut self) -> Option<Self::Item> {
             if self.ctl.check().is_err() {
@@ -352,7 +354,9 @@ mod engine {
                 Ok(0) => None,
                 Ok(n) => {
                     buf.truncate(n);
-                    (self.ctl.on_bytes)(n as u64);
+                    if self.count {
+                        (self.ctl.on_bytes)(n as u64);
+                    }
                     Some(Ok(Bytes::from(buf)))
                 }
                 Err(e) => Some(Err(e)),
@@ -486,11 +490,88 @@ mod engine {
             }
             let size = std::fs::metadata(local).map_err(|e| CoreError::io(local, e))?.len();
             let file = std::fs::File::open(local).map_err(|e| CoreError::io(local, e))?;
-            let stream = futures::stream::iter(Chunks { file, ctl });
+            let stream = futures::stream::iter(Chunks { file, ctl, count: true });
             let uploaded = self.rt.block_on(self.storages[storage].upload(parent_handle, NewObjectInfo::file(name, size), stream));
             self.nodes.clear();
             match uploaded {
                 Ok(_) => Ok(size),
+                Err(e) => {
+                    if let Some(partial) = e.partial {
+                        let _ = self.rt.block_on(self.storages[storage].delete(partial));
+                    }
+                    self.note(Err(e.source))
+                }
+            }
+        }
+
+        /// A file's bytes, piece by piece, to `sink`. Not retried: pieces already handed on cannot be taken back.
+        fn read_stream_once(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+            let Node::Object { storage, handle, dir: false } = self.resolve(remote)? else {
+                return Err(fail("That is not a file."));
+            };
+            let started = self.rt.block_on(self.storages[storage].download(handle, ByteRange::Full));
+            let mut dl = self.note(started)?;
+            let mut total = 0u64;
+            loop {
+                if ctl.check().is_err() {
+                    let _ = self.rt.block_on(dl.cancel(Duration::from_secs(5)));
+                    return Err(fail("Cancelled."));
+                }
+                match self.rt.block_on(dl.next_chunk()) {
+                    None => return Ok(total),
+                    Some(Ok(chunk)) => {
+                        if let Err(e) = sink(&chunk) {
+                            let _ = self.rt.block_on(dl.cancel(Duration::from_secs(5)));
+                            return Err(e);
+                        }
+                        total += chunk.len() as u64;
+                    }
+                    Some(Err(e)) => return Err(explain(e)),
+                }
+            }
+        }
+
+        /// A file of `size` bytes, taken from `source` as the device asks for them.
+        fn write_stream_once(&mut self, source: &mut (dyn std::io::Read + Send), size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+            let (parent, name) = split(remote)?;
+            let (storage, parent_handle) = self.place(&parent)?;
+            if let Ok(Node::Object { handle, dir: false, .. }) = self.resolve(remote) {
+                let r = self.rt.block_on(self.storages[storage].delete(handle));
+                self.note(r)?;
+            }
+            // The bytes are counted as they are read; the device announces the size first, so a source that ends
+            // early or runs long is an error, not a short file.
+            struct Counted<'s> {
+                source: &'s mut (dyn std::io::Read + Send),
+                seen: u64,
+                size: u64,
+            }
+            impl std::io::Read for Counted<'_> {
+                fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                    let room = (self.size - self.seen.min(self.size)) as usize;
+                    if room == 0 {
+                        return Ok(0);
+                    }
+                    let take = buf.len().min(room);
+                    let n = self.source.read(&mut buf[..take])?;
+                    self.seen += n as u64;
+                    Ok(n)
+                }
+            }
+            let mut counted = Counted { source, seen: 0, size };
+            let stream = futures::stream::iter(Chunks { file: &mut counted, ctl, count: true });
+            let uploaded = self.rt.block_on(self.storages[storage].upload(parent_handle, NewObjectInfo::file(name, size), stream));
+            let seen = counted.seen;
+            self.nodes.clear();
+            match uploaded {
+                Ok(_) if seen == size => Ok(size),
+                Ok(_) => {
+                    // The source ended before the announced size: whatever the device made is not the file.
+                    if let Ok(Node::Object { handle, dir: false, .. }) = self.resolve(remote) {
+                        let _ = self.rt.block_on(self.storages[storage].delete(handle));
+                    }
+                    Err(fail("The file ended before all of it arrived."))
+                }
                 Err(e) => {
                     if let Some(partial) = e.partial {
                         let _ = self.rt.block_on(self.storages[storage].delete(partial));
@@ -583,6 +664,18 @@ mod engine {
 
         fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
             self.retrying(|s| s.upload_once(local, remote, ctl))
+        }
+
+        fn streams(&self) -> bool {
+            true
+        }
+
+        fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+            self.read_stream_once(remote, sink, ctl)
+        }
+
+        fn write_stream(&mut self, source: &mut (dyn std::io::Read + Send), size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+            self.write_stream_once(source, size, remote, ctl)
         }
 
         fn mkdir(&mut self, path: &str) -> Result<()> {
@@ -806,6 +899,31 @@ mod engine {
 
             // An item that really is gone is still reported, not retried forever.
             assert!(s.remove("/Internal storage/nothing.txt", false).is_err());
+        }
+
+        #[test]
+        fn a_file_goes_from_one_phone_to_another_without_a_copy_on_this_computer() {
+            let from = tempfile::tempdir().unwrap();
+            let to = tempfile::tempdir().unwrap();
+            let data: Vec<u8> = (0..3_000_017u32).map(|i| (i % 253) as u8).collect();
+            std::fs::write(from.path().join("clip.mp4"), &data).unwrap();
+            let mut a = phone(&[from.path()]);
+            let mut b = phone(&[to.path()]);
+            assert!(a.streams() && b.streams());
+            let cancel = AtomicBool::new(false);
+            let counted = std::sync::atomic::AtomicU64::new(0);
+            let on_bytes = |n: u64| {
+                counted.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            };
+            let ctl = Control { cancel: &cancel, on_bytes: &on_bytes };
+            let n = crate::remote::relay_file(a.as_mut(), "/Internal storage/clip.mp4", b.as_mut(), "/Internal storage/clip.mp4", data.len() as u64, &ctl).unwrap();
+            assert_eq!(n, data.len() as u64);
+            assert_eq!(counted.load(std::sync::atomic::Ordering::Relaxed), data.len() as u64);
+            assert_eq!(std::fs::read(to.path().join("clip.mp4")).unwrap(), data);
+            // A size that does not match what arrives is an error, and the device keeps nothing.
+            let e = crate::remote::relay_file(a.as_mut(), "/Internal storage/clip.mp4", b.as_mut(), "/Internal storage/short.mp4", data.len() as u64 + 10, &ctl);
+            assert!(e.is_err());
+            assert!(!to.path().join("short.mp4").exists());
         }
 
         #[test]

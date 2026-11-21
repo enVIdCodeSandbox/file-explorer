@@ -3,13 +3,14 @@
 //! flagged in the interface.
 
 use super::http::Client;
-use super::{fail, pump, Control, Entry, Server, Session};
+use super::{fail, pump, Batches, Control, Entry, Server, Session};
 use crate::error::{CoreError, Result};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct Dav {
     http: Client,
@@ -145,6 +146,21 @@ pub(super) fn parse_multistatus(xml: &str) -> Vec<(String, Entry)> {
     out
 }
 
+/// Where the last complete `<response>…</response>` in `buf` ends (0 when there is none yet).
+fn complete_upto(buf: &[u8]) -> usize {
+    let tail = b"response>";
+    let mut end = buf.len();
+    while let Some(at) = buf[..end].windows(tail.len()).rposition(|w| w == tail) {
+        // A closing tag has "</" (and maybe a prefix such as "d:") before the name.
+        let open = buf[..at].iter().rposition(|&b| b == b'<');
+        if open.is_some_and(|o| buf.get(o + 1) == Some(&b'/')) {
+            return at + tail.len();
+        }
+        end = at;
+    }
+    0
+}
+
 impl Dav {
     fn simple(&mut self, method: &str, path: &str, headers: &[(&str, &str)]) -> Result<u16> {
         let reply = self.http.call(method, path, headers, b"")?;
@@ -168,6 +184,40 @@ impl Session for Dav {
         Ok(parse_multistatus(&xml).into_iter().filter(|(p, _)| p.trim_end_matches('/') != me && !p.is_empty()).map(|(_, e)| e).filter(|e| !e.name.is_empty()).collect())
     }
 
+    /// The answer is parsed while it arrives, so a big folder starts to fill before the server has finished sending.
+    fn list_streaming(&mut self, path: &str, cancel: &AtomicBool, sink: &mut dyn FnMut(&[Entry], crate::entry::ListProgress)) -> Result<Vec<Entry>> {
+        let reply = self.http.call("PROPFIND", path, &[("Depth", "1"), ("Content-Type", "application/xml; charset=utf-8")], PROPFIND_BODY.as_bytes())?;
+        expect("list this folder", reply.status, &[207, 200])?;
+        let me = path.trim_end_matches('/').to_string();
+        let mut body = reply.into_reader();
+        let (mut out, mut batches) = (Vec::new(), Batches::new(sink, 0));
+        let (mut buf, mut chunk) = (Vec::<u8>::new(), vec![0u8; 64 * 1024]);
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(fail("Cancelled."));
+            }
+            let n = body.read(&mut chunk).map_err(|e| fail(format!("Could not read the answer: {e}")))?;
+            buf.extend_from_slice(&chunk[..n]);
+            let upto = if n == 0 { buf.len() } else { complete_upto(&buf) };
+            if upto > 0 {
+                let part = String::from_utf8_lossy(&buf[..upto]).into_owned();
+                buf.drain(..upto);
+                for (p, e) in parse_multistatus(&part) {
+                    if p.trim_end_matches('/') == me || p.is_empty() || e.name.is_empty() {
+                        continue;
+                    }
+                    out.push(e.clone());
+                    batches.add(Some(e));
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        batches.finish();
+        Ok(out)
+    }
+
     fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
         let reply = self.http.get(remote)?;
         expect("download this file", reply.status, &[200])?;
@@ -182,9 +232,9 @@ impl Session for Dav {
     }
 
     fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
-        let file = File::open(local).map_err(|e| CoreError::io(local, e))?;
+        let mut file = File::open(local).map_err(|e| CoreError::io(local, e))?;
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let mut counting = Counting { inner: file, ctl, total: 0, cancelled: false };
+        let mut counting = Counting { inner: &mut file, ctl, total: 0, cancelled: false };
         let result = self.http.put(remote, &mut counting, len);
         if counting.cancelled {
             // Do not leave half a file on the server. The server may only
@@ -198,6 +248,49 @@ impl Session for Dav {
             return Err(fail("Cancelled."));
         }
         expect("upload this file", result?, &[200, 201, 204])?;
+        Ok(counting.total)
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+        let reply = self.http.get(remote)?;
+        expect("download this file", reply.status, &[200])?;
+        let mut body = reply.into_reader();
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut total = 0u64;
+        loop {
+            ctl.check()?;
+            let n = body.read(&mut buf).map_err(|e| fail(e))?;
+            if n == 0 {
+                return Ok(total);
+            }
+            sink(&buf[..n])?;
+            total += n as u64;
+        }
+    }
+
+    fn write_stream(&mut self, source: &mut (dyn Read + Send), size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+        let mut counting = Counting { inner: source, ctl, total: 0, cancelled: false };
+        let result = self.http.put(remote, &mut counting, size);
+        let failed = result.is_err() || counting.cancelled;
+        let status = match result {
+            Ok(s) if !counting.cancelled => expect("upload this file", s, &[200, 201, 204]),
+            Ok(_) => Err(fail("Cancelled.")),
+            Err(e) => Err(e),
+        };
+        if failed || status.is_err() {
+            // Do not leave half a file on the server (it may only notice the broken upload a moment later).
+            for _ in 0..8 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                if matches!(self.simple("DELETE", remote, &[]), Ok(200 | 202 | 204 | 404)) {
+                    break;
+                }
+            }
+        }
+        status?;
         Ok(counting.total)
     }
 
@@ -220,14 +313,14 @@ impl Session for Dav {
 }
 
 /// Reads a file for upload, counting bytes and noticing Cancel.
-struct Counting<'a, 'b> {
-    inner: File,
+struct Counting<'a, 'b, R: Read + ?Sized = File> {
+    inner: &'a mut R,
     ctl: &'a Control<'b>,
     total: u64,
     cancelled: bool,
 }
 
-impl Read for Counting<'_, '_> {
+impl<R: Read + ?Sized> Read for Counting<'_, '_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.ctl.check().is_err() {
             self.cancelled = true;
@@ -286,5 +379,52 @@ mod tests {
         let items = parse_multistatus(xml);
         assert_eq!(items[0].1.size, 7);
         assert_eq!(items[0].1.name, "a.bin");
+    }
+
+    #[test]
+    fn only_whole_responses_are_cut_off() {
+        let xml = b"<?xml?><d:multistatus><d:response><d:href>/a</d:href></d:response><d:response><d:href>/b";
+        let upto = complete_upto(xml);
+        assert!(xml[..upto].ends_with(b"</d:response>"));
+        assert_eq!(complete_upto(b"<d:multistatus><d:response><d:href>/a"), 0);
+        assert_eq!(complete_upto(b""), 0);
+        assert!(complete_upto(b"<response></response>") > 0);
+    }
+
+    /// A folder answer that arrives in pieces fills the list in pieces too.
+    #[test]
+    fn a_slow_answer_is_listed_as_it_arrives() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let mut seen = Vec::new();
+            let mut b = [0u8; 1024];
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = c.read(&mut b).unwrap();
+                seen.extend_from_slice(&b[..n]);
+            }
+            c.write_all(b"HTTP/1.1 207 Multi-Status\r\nConnection: close\r\n\r\n<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\">").unwrap();
+            let item = |p: &str, dir: bool| format!("<d:response><d:href>{p}</d:href><d:propstat><d:prop><d:resourcetype>{}</d:resourcetype><d:getcontentlength>5</d:getcontentlength></d:prop></d:propstat></d:response>", if dir { "<d:collection/>" } else { "" });
+            for group in [["/f/", "/f/a.txt", "/f/b.txt"], ["/f/c.txt", "/f/d/", "/f/e.txt"]] {
+                for p in group {
+                    c.write_all(item(p, p.ends_with('/') && p != "/f/").as_bytes()).unwrap();
+                }
+                c.flush().unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            c.write_all(b"</d:multistatus>").unwrap();
+        });
+        let mut dav = Dav { http: Client::new("127.0.0.1", port, false, "", "") };
+        let mut batches: Vec<usize> = Vec::new();
+        let all = dav.list_streaming("/f", &AtomicBool::new(false), &mut |b, _| batches.push(b.len())).unwrap();
+        let names: Vec<_> = all.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["a.txt", "b.txt", "c.txt", "d", "e.txt"]);
+        assert!(all[3].is_dir && !all[0].is_dir);
+        // The first names were handed over before the rest had even been sent.
+        assert!(batches.len() >= 2, "{batches:?}");
+        assert!(batches[0] < 5);
+        assert_eq!(batches.iter().sum::<usize>(), 5);
     }
 }

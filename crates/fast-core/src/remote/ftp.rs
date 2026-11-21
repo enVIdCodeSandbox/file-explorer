@@ -1,9 +1,11 @@
 //! FTP. Plain FTP sends the password and the files unencrypted; the
 //! interface says so when connecting.
 
-use super::{fail, pump, Control, Entry, Server, Session};
+use super::{fail, pump, Batches, Control, Entry, Server, Session};
 use crate::error::{CoreError, Result};
 use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
@@ -91,6 +93,48 @@ impl Session for Ftp {
         Ok(lines.iter().filter(|f| f.name() != "." && f.name() != "..").map(entry).collect())
     }
 
+    /// The folder's lines are read as the data connection delivers them, so a big folder starts to fill at once.
+    fn list_streaming(&mut self, path: &str, cancel: &AtomicBool, sink: &mut dyn FnMut(&[Entry], crate::entry::ListProgress)) -> Result<Vec<Entry>> {
+        use suppaftp::Status;
+        let wanted = [Status::AboutToSend, Status::AlreadyOpen];
+        let (data, machine) = match self.stream.custom_data_command(format!("MLSD {path}"), &wanted) {
+            Ok((_, d)) => (d, true),
+            // Older servers only have LIST.
+            Err(_) => (self.stream.custom_data_command(format!("LIST {path}"), &wanted).map_err(fail)?.1, false),
+        };
+        let mut reader = BufReader::new(data);
+        let (mut out, mut batches, mut line) = (Vec::new(), Batches::new(sink, 0), Vec::new());
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = self.stream.abort(reader.into_inner());
+                return Err(fail("Cancelled."));
+            }
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = self.stream.abort(reader.into_inner());
+                    return Err(fail(e));
+                }
+            }
+            let text = String::from_utf8_lossy(&line);
+            let text = text.trim_end_matches(['\r', '\n']);
+            if text.is_empty() {
+                continue;
+            }
+            let parsed = if machine { suppaftp::list::ListParser::parse_mlsd(text).ok() } else { suppaftp::list::File::try_from(text).ok() };
+            let kept = parsed.filter(|f| f.name() != "." && f.name() != "..").map(|f| entry(&f));
+            if let Some(e) = &kept {
+                out.push(e.clone());
+            }
+            batches.add(kept);
+        }
+        reader.into_inner().finish().map_err(fail)?;
+        batches.finish();
+        Ok(out)
+    }
+
     fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64> {
         // A download that was cut off (the connection dropped) leaves its first part next to the target, named for
         // the size the server announced; the next try asks the server to continue from there (REST).
@@ -153,6 +197,50 @@ impl Session for Ftp {
         let mut src = File::open(local).map_err(|e| CoreError::io(local, e))?;
         let mut data = self.stream.put_with_stream(remote).map_err(fail)?;
         match pump(&mut src, &mut data, ctl) {
+            Ok(n) => {
+                data.finish().map_err(fail)?;
+                Ok(n)
+            }
+            Err(e) => {
+                let _ = self.stream.abort(data);
+                let _ = self.stream.rm(remote);
+                Err(e)
+            }
+        }
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+        let mut data = self.stream.retr_as_stream(remote).map_err(fail)?;
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut total = 0u64;
+        let result: Result<()> = (|| loop {
+            ctl.check()?;
+            let n = std::io::Read::read(&mut data, &mut buf).map_err(|e| fail(e))?;
+            if n == 0 {
+                return Ok(());
+            }
+            sink(&buf[..n])?;
+            total += n as u64;
+        })();
+        match result {
+            Ok(()) => {
+                data.finish().map_err(fail)?;
+                Ok(total)
+            }
+            Err(e) => {
+                let _ = self.stream.abort(data);
+                Err(e)
+            }
+        }
+    }
+
+    fn write_stream(&mut self, source: &mut (dyn std::io::Read + Send), _size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+        let mut data = self.stream.put_with_stream(remote).map_err(fail)?;
+        match pump(source, &mut data, ctl) {
             Ok(n) => {
                 data.finish().map_err(fail)?;
                 Ok(n)
@@ -245,6 +333,16 @@ mod tests {
                                 d.write_all(&data()[rest..]).unwrap();
                                 drop(d);
                                 rest = 0;
+                                w.write_all(b"226 done\r\n").unwrap();
+                            }
+                            "MLSD" => {
+                                w.write_all(b"150 listing\r\n").unwrap();
+                                let (mut d, _) = pasv.take().unwrap().accept().unwrap();
+                                d.write_all(b"type=cdir;modify=20240101000000; .\r\ntype=file;size=5;modify=20240102030405; a.txt\r\ntype=dir;modify=20240101000000; sub\r\n").unwrap();
+                                d.flush().unwrap();
+                                thread::sleep(std::time::Duration::from_millis(250));
+                                d.write_all(b"type=file;size=7;modify=20240102030405; b c.txt\r\n").unwrap();
+                                drop(d);
                                 w.write_all(b"226 done\r\n").unwrap();
                             }
                             "QUIT" => {
@@ -385,5 +483,19 @@ mod tests {
         assert_eq!(got, data());
         assert_eq!(carried.load(Ordering::SeqCst), 2, "one control and one data connection");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_is_listed_as_its_lines_arrive() {
+        let (port, _) = fake_ftp();
+        let mut s = connect(&server(port)).unwrap();
+        let mut batches: Vec<usize> = Vec::new();
+        let all = s.list_streaming("/", &AtomicBool::new(false), &mut |b, _| batches.push(b.len())).unwrap();
+        let names: Vec<_> = all.iter().map(|e| (e.name.as_str(), e.is_dir, e.size)).collect();
+        assert_eq!(names, [("a.txt", false, 5), ("sub", true, 0), ("b c.txt", false, 7)]);
+        assert!(batches.len() >= 2 && batches[0] < 3, "{batches:?}");
+        assert_eq!(batches.iter().sum::<usize>(), 3);
+        // The connection is still good for the next command.
+        assert_eq!(s.list_streaming("/", &AtomicBool::new(false), &mut |_, _| {}).unwrap().len(), 3);
     }
 }

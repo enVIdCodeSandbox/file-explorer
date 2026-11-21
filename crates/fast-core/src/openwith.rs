@@ -819,7 +819,9 @@ impl Opener {
     }
 }
 
-/// What the system found for a kind of file, before it is dressed up.
+/// What the system found for a kind of file, before it is dressed up. (Phones find nothing, so there the other
+/// variants are never built.)
+#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub(crate) enum Found {
     App { id: String, name: String, icon: String },

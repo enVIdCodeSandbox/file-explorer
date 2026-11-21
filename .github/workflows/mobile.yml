@@ -76,7 +76,15 @@ jobs:
           fi
           printf 'password=%s\nkeyAlias=%s\nstoreFile=%s\n' "$password" "$alias" "$store" > src-tauri/gen/android/keystore.properties
       - name: Build the .apk (64-bit and 32-bit ARM)
-        run: npx tauri android build --apk --target aarch64 --target armv7
+        # Gradle downloads its tools from the internet on every fresh runner, and that now and then fails for reasons
+        # that have nothing to do with the code. A second and third try cost little: the Rust part is cached.
+        run: |
+          for attempt in 1 2 3; do
+            npx tauri android build --apk --target aarch64 --target armv7 && exit 0
+            echo "::warning::The Android build failed (attempt $attempt of 3)."
+            sleep 20
+          done
+          exit 1
       - name: Collect the package
         run: |
           mkdir -p mobile-out

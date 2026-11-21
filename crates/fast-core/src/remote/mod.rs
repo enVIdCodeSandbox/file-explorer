@@ -195,6 +195,49 @@ pub struct Entry {
     pub modified: Option<i64>,
 }
 
+/// Gathers the items of a listing and hands them to the sink in batches: the first ones at once (so the folder
+/// starts to fill straight away), after that about every tenth of a second.
+pub(crate) struct Batches<'a> {
+    sink: &'a mut dyn FnMut(&[Entry], crate::entry::ListProgress),
+    batch: Vec<Entry>,
+    flushed: std::time::Instant,
+    first: bool,
+    restarted: bool,
+    total: usize,
+    pub done: usize,
+}
+
+impl<'a> Batches<'a> {
+    pub(crate) const EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
+    pub(crate) fn new(sink: &'a mut dyn FnMut(&[Entry], crate::entry::ListProgress), total: usize) -> Self {
+        Batches { sink, batch: Vec::new(), flushed: std::time::Instant::now(), first: true, restarted: false, total, done: 0 }
+    }
+
+    /// One more item was read (kept, or left out: `kept` is false for the entries the listing does not show).
+    pub(crate) fn add(&mut self, entry: Option<Entry>) {
+        self.done += 1;
+        if let Some(e) = entry {
+            self.batch.push(e);
+        }
+        if !self.batch.is_empty() && (self.first || self.flushed.elapsed() >= Self::EVERY) {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        (self.sink)(&self.batch, crate::entry::ListProgress { done: self.done, total: self.total, restart: self.first && self.restarted });
+        self.batch.clear();
+        self.flushed = std::time::Instant::now();
+        self.first = false;
+    }
+
+    /// Hand over what is left.
+    pub(crate) fn finish(mut self) {
+        self.flush();
+    }
+}
+
 /// Cancellation and byte counting for one operation.
 pub struct Control<'a> {
     pub cancel: &'a AtomicBool,
@@ -233,6 +276,23 @@ pub trait Session: Send {
     }
     fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64>;
     fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64>;
+    /// Whether `read_stream` and `write_stream` work on this kind of connection. Copying from one server (or phone)
+    /// to another passes the bytes straight through when both ends can, with nothing kept on this computer.
+    fn streams(&self) -> bool {
+        false
+    }
+    /// Send a file's bytes to `sink`, a piece at a time, keeping no copy. Returns how many bytes were sent.
+    /// Bytes are counted by the writing end (`write_stream`), not here.
+    fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+        let _ = (remote, sink, ctl);
+        Err(fail("This kind of connection cannot pass files straight through."))
+    }
+    /// Store a file of `size` bytes read from `source`. Counts the bytes with `ctl.on_bytes`. Does not leave half a
+    /// file behind when it fails.
+    fn write_stream(&mut self, source: &mut (dyn std::io::Read + Send), size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+        let _ = (source, size, remote, ctl);
+        Err(fail("This kind of connection cannot pass files straight through."))
+    }
     fn mkdir(&mut self, path: &str) -> Result<()>;
     /// Delete a file, or an empty folder.
     fn remove(&mut self, path: &str, is_dir: bool) -> Result<()>;
@@ -349,6 +409,121 @@ pub fn upload_tree_as(s: &mut dyn Session, local: &Path, dest_dir: &str, name: &
         }
         Err(e) if ctl.cancel.load(Ordering::Relaxed) => return Err(e),
         Err(e) => tally.failed.push((local.to_string_lossy().into_owned(), e.to_string())),
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Straight from one server to another
+// ---------------------------------------------------------------------------
+
+/// How much is read ahead of the writer: `RELAY_DEPTH` pieces of `RELAY_PIECE` bytes. Memory use never passes this,
+/// whatever the size of the file.
+const RELAY_PIECE: usize = 1 << 20;
+const RELAY_DEPTH: usize = 8;
+
+/// The receiving end's view of what the sending thread produces.
+struct Pipe<'a> {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    piece: Vec<u8>,
+    at: usize,
+    /// Set by the sending thread when it stopped early, so a cut-off file is never mistaken for a whole one.
+    broke: &'a AtomicBool,
+}
+
+impl std::io::Read for Pipe<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        while self.at >= self.piece.len() {
+            match self.rx.recv() {
+                Ok(next) => {
+                    self.piece = next;
+                    self.at = 0;
+                }
+                Err(_) if self.broke.load(Ordering::SeqCst) => return Err(std::io::Error::other("The source stopped sending.")),
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.piece.len() - self.at);
+        out[..n].copy_from_slice(&self.piece[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// Copy one file from `src` to `dst` while it is being read: the two connections work at the same time, so the time
+/// taken is that of the slower one, and nothing is stored on this computer. Returns the bytes copied.
+pub fn relay_file(src: &mut dyn Session, from: &str, dst: &mut dyn Session, to: &str, size: u64, ctl: &Control) -> Result<u64> {
+    let broke = AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(RELAY_DEPTH);
+    let (read, written) = std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            let mut piece: Vec<u8> = Vec::with_capacity(RELAY_PIECE);
+            let result = src.read_stream(
+                from,
+                &mut |bytes| {
+                    piece.extend_from_slice(bytes);
+                    if piece.len() >= RELAY_PIECE {
+                        // The writer is gone (it failed): stop reading.
+                        tx.send(std::mem::replace(&mut piece, Vec::with_capacity(RELAY_PIECE))).map_err(|_| fail("The destination stopped receiving."))?;
+                    }
+                    ctl.check()
+                },
+                ctl,
+            );
+            let result = result.and_then(|n| {
+                if !piece.is_empty() {
+                    tx.send(std::mem::take(&mut piece)).map_err(|_| fail("The destination stopped receiving."))?;
+                }
+                Ok(n)
+            });
+            if result.is_err() {
+                broke.store(true, Ordering::SeqCst);
+            }
+            drop(tx);
+            result
+        });
+        let mut pipe = Pipe { rx, piece: Vec::new(), at: 0, broke: &broke };
+        let written = dst.write_stream(&mut pipe, size, to, ctl);
+        // A writer that stopped early must not leave the reader waiting for room that never comes.
+        drop(pipe);
+        (reader.join().unwrap_or_else(|_| Err(fail("The source stopped unexpectedly."))), written)
+    });
+    match (read, written) {
+        (Ok(r), Ok(w)) if r == w => Ok(w),
+        (Ok(r), Ok(w)) => Err(fail(format!("Only {w} of {r} bytes arrived."))),
+        // The sending end's explanation comes first: the receiving end only noticed the file stopped.
+        (Err(e), _) if !matches!(&e, CoreError::Invalid(m) if m.starts_with("The destination stopped")) => Err(e),
+        (_, Err(e)) => Err(e),
+        (Err(e), Ok(_)) => Err(e),
+    }
+}
+
+/// Copy a file or folder from one server to another, passing the bytes straight through (see [`relay_file`]). The
+/// top item is stored as `name` in `dest_dir`. Existing items are kept unless `replace`.
+#[allow(clippy::too_many_arguments)]
+pub fn relay_tree_as(src: &mut dyn Session, remote: &str, is_dir: bool, size: u64, dst: &mut dyn Session, dest_dir: &str, name: &str, replace: bool, ctl: &Control, tally: &mut Tally) -> Result<()> {
+    ctl.check()?;
+    let target = format!("{}/{}", dest_dir.trim_end_matches('/'), name);
+    if !is_dir {
+        if !replace && dst.exists(&target).unwrap_or(false) {
+            return Ok(());
+        }
+        match relay_file(src, remote, dst, &target, size, ctl) {
+            Ok(n) => {
+                tally.files += 1;
+                tally.bytes += n;
+            }
+            Err(e) if ctl.cancel.load(Ordering::Relaxed) => return Err(e),
+            Err(e) => tally.failed.push((remote.to_string(), e.to_string())),
+        }
+        return Ok(());
+    }
+    if !dst.exists(&target).unwrap_or(false) {
+        dst.mkdir(&target)?;
+    }
+    tally.folders += 1;
+    for e in src.list(remote)? {
+        relay_tree_as(src, &format!("{}/{}", remote.trim_end_matches('/'), e.name), e.is_dir, e.size, dst, &target, &e.name, replace, ctl, tally)?;
     }
     Ok(())
 }
@@ -531,5 +706,190 @@ mod tests {
         assert_eq!(known_host(&f, "h", 22).as_deref(), Some("SHA256:ccc"));
         assert_eq!(known_host(&f, "other", 22).as_deref(), Some("SHA256:bbb"));
         assert_eq!(known_host(&f, "h", 2222), None);
+    }
+
+    // ---- straight through from one server to another ----
+
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    /// A server held in memory. `cut_after` makes reading a file stop with an error after that many bytes.
+    #[derive(Clone, Default)]
+    struct Memory {
+        files: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+        dirs: Arc<Mutex<Vec<String>>>,
+        cut_after: Option<usize>,
+        /// The most that was ever waiting between the two ends.
+        reads: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Session for Memory {
+        fn home(&mut self) -> Result<String> {
+            Ok("/".into())
+        }
+        fn list(&mut self, path: &str) -> Result<Vec<Entry>> {
+            let base = format!("{}/", path.trim_end_matches('/'));
+            let mut out = Vec::new();
+            for (k, v) in self.files.lock().unwrap().iter() {
+                if let Some(rest) = k.strip_prefix(&base) {
+                    if !rest.contains('/') {
+                        out.push(Entry { name: rest.into(), is_dir: false, size: v.len() as u64, modified: None });
+                    }
+                }
+            }
+            for d in self.dirs.lock().unwrap().iter() {
+                if let Some(rest) = d.strip_prefix(&base) {
+                    if !rest.contains('/') {
+                        out.push(Entry { name: rest.into(), is_dir: true, size: 0, modified: None });
+                    }
+                }
+            }
+            Ok(out)
+        }
+        fn download(&mut self, _: &str, _: &Path, _: &Control) -> Result<u64> {
+            Err(fail("not used"))
+        }
+        fn upload(&mut self, _: &Path, _: &str, _: &Control) -> Result<u64> {
+            Err(fail("not used"))
+        }
+        fn streams(&self) -> bool {
+            true
+        }
+        fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+            let data = self.files.lock().unwrap().get(remote).cloned().ok_or_else(|| fail("missing"))?;
+            let mut sent = 0;
+            for piece in data.chunks(100_000) {
+                ctl.check()?;
+                if self.cut_after.is_some_and(|c| sent >= c) {
+                    return Err(fail("The connection dropped."));
+                }
+                sink(piece)?;
+                sent += piece.len();
+            }
+            self.reads.lock().unwrap().push(sent);
+            Ok(sent as u64)
+        }
+        fn write_stream(&mut self, source: &mut (dyn std::io::Read + Send), _size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+            let mut data = Vec::new();
+            let result = pump(source, &mut data, ctl);
+            match result {
+                Ok(n) => {
+                    self.files.lock().unwrap().insert(remote.into(), data);
+                    Ok(n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        fn mkdir(&mut self, path: &str) -> Result<()> {
+            self.dirs.lock().unwrap().push(path.into());
+            Ok(())
+        }
+        fn remove(&mut self, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename(&mut self, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn bytes(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i * 31 % 251) as u8).collect()
+    }
+
+    fn with_control<T>(f: impl FnOnce(&Control, &std::sync::atomic::AtomicU64) -> T) -> T {
+        let cancel = AtomicBool::new(false);
+        let counted = std::sync::atomic::AtomicU64::new(0);
+        let on_bytes = |n: u64| {
+            counted.fetch_add(n, Ordering::Relaxed);
+        };
+        let ctl = Control { cancel: &cancel, on_bytes: &on_bytes };
+        f(&ctl, &counted)
+    }
+
+    #[test]
+    fn a_file_passes_straight_through_and_is_counted_once() {
+        let mut a = Memory::default();
+        let mut b = Memory::default();
+        // Bigger than everything that can wait between the ends, so the two really do work at the same time.
+        let data = bytes(40 * (1 << 20) + 123);
+        a.files.lock().unwrap().insert("/src/big.bin".into(), data.clone());
+        with_control(|ctl, counted| {
+            let n = relay_file(&mut a, "/src/big.bin", &mut b, "/dst/big.bin", data.len() as u64, ctl).unwrap();
+            assert_eq!(n, data.len() as u64);
+            assert_eq!(counted.load(Ordering::Relaxed), data.len() as u64, "moved once, not twice");
+        });
+        assert!(b.files.lock().unwrap().get("/dst/big.bin").unwrap() == &data);
+    }
+
+    #[test]
+    fn a_source_that_stops_halfway_never_leaves_a_short_file() {
+        let mut a = Memory { cut_after: Some(300_000), ..Default::default() };
+        let mut b = Memory::default();
+        a.files.lock().unwrap().insert("/f".into(), bytes(1_000_000));
+        with_control(|ctl, _| {
+            let e = relay_file(&mut a, "/f", &mut b, "/g", 1_000_000, ctl).unwrap_err();
+            assert!(e.to_string().contains("connection dropped"), "{e}");
+        });
+        assert!(b.files.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cancelling_stops_both_ends() {
+        let mut a = Memory::default();
+        let mut b = Memory::default();
+        a.files.lock().unwrap().insert("/f".into(), bytes(5_000_000));
+        let cancel = AtomicBool::new(true);
+        let on_bytes = |_: u64| {};
+        let ctl = Control { cancel: &cancel, on_bytes: &on_bytes };
+        assert!(relay_file(&mut a, "/f", &mut b, "/g", 5_000_000, &ctl).is_err());
+        assert!(b.files.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn folders_are_copied_whole_and_existing_files_are_kept() {
+        let mut a = Memory::default();
+        let mut b = Memory::default();
+        {
+            let mut f = a.files.lock().unwrap();
+            f.insert("/pics/one.jpg".into(), bytes(10));
+            f.insert("/pics/sub/two.jpg".into(), bytes(20));
+        }
+        a.dirs.lock().unwrap().push("/pics/sub".into());
+        b.files.lock().unwrap().insert("/out/pics/one.jpg".into(), vec![9; 3]);
+        b.dirs.lock().unwrap().push("/out/pics".into());
+        with_control(|ctl, counted| {
+            let mut tally = Tally::default();
+            relay_tree_as(&mut a, "/pics", true, 0, &mut b, "/out", "pics", false, ctl, &mut tally).unwrap();
+            assert!(tally.failed.is_empty());
+            assert_eq!(tally.files, 1, "only the file that was not there yet");
+            assert_eq!(counted.load(Ordering::Relaxed), 20);
+        });
+        let files = b.files.lock().unwrap();
+        assert_eq!(files["/out/pics/one.jpg"], vec![9; 3]);
+        assert_eq!(files["/out/pics/sub/two.jpg"], bytes(20));
+    }
+
+    #[test]
+    fn a_listing_goes_out_in_batches_and_all_of_it_arrives() {
+        let mut got: Vec<(usize, crate::entry::ListProgress)> = Vec::new();
+        {
+            let mut sink = |b: &[Entry], p: crate::entry::ListProgress| got.push((b.len(), p));
+            let mut batches = Batches::new(&mut sink, 7);
+            for i in 0..5 {
+                let hidden = i == 2;
+                batches.add((!hidden).then(|| Entry { name: format!("f{i}"), is_dir: false, size: 1, modified: None }));
+                if i == 3 {
+                    std::thread::sleep(Batches::EVERY + std::time::Duration::from_millis(20));
+                }
+            }
+            batches.finish();
+        }
+        // The first item at once; then the next ones when the interval had passed; then the rest.
+        assert_eq!(got.iter().map(|g| g.0).sum::<usize>(), 4);
+        assert_eq!(got[0].0, 1);
+        assert!(got.len() >= 3, "{got:?}");
+        assert_eq!(got.last().unwrap().1.done, 5);
+        assert_eq!(got[0].1.total, 7);
+        assert!(got.iter().all(|g| !g.1.restart));
     }
 }

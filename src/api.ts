@@ -804,7 +804,7 @@ export const api = {
   /** Unpack items to a staging folder so real files can go on the system clipboard. */
   archiveStage: (sources: string[]) => invoke<string[]>("archive_stage", { sources }),
   /** Fetch server or phone items into real files; the finished job lists them (one per line) in its result. */
-  remoteStageStart: (sources: string[]) => invoke<number>("remote_stage_start", { sources }),
+  remoteStageStart: (sources: string[], maxMb?: number, allowFolders?: boolean) => invoke<number>("remote_stage_start", { sources, maxMb: maxMb ?? null, allowFolders: allowFolders ?? null }),
   remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => invoke<number>("remote_copy_start", { sources, dest, mv, open }),
   remoteRemoveStart: (paths: string[]) => invoke<number>("remote_remove_start", { paths }),
   serversList: () => invoke<SavedServer[]>("servers_list"),

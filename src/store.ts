@@ -1,5 +1,6 @@
 // Global UI state. Components subscribe to the slices they need, so a
 // transfer progress tick does not re-render the file list.
+import { isTooBig, stageRemote } from "./util/stageRemote";
 import { isMobileOs, openOutside } from "./util/native";
 import { create } from "zustand";
 import {
@@ -1153,9 +1154,10 @@ export const useStore = create<State>((set, get) => ({
       } else if (paths.every(isRemote)) {
         // From a server or a phone: fetched in the background (a job that can be stopped), then put on the clipboard.
         void api.clipboardClear().catch(() => {});
-        if (adv<boolean>(get().settings, "clipboard.stageRemote")) {
+        const stage = stageRemote(get().settings);
+        if (stage.mode !== "off") {
           void api
-            .remoteStageStart(paths)
+            .remoteStageStart(paths, stage.mode === "small" ? stage.mb : undefined)
             .then((id) => {
               pendingClips.set(id, clipboard);
               // A very small job can end before its id was known here.
@@ -1165,7 +1167,11 @@ export const useStore = create<State>((set, get) => ({
                 stagedForClipboard(early);
               }
             })
-            .catch((e) => get().showToast(friendlyRemoteError(e)));
+            .catch((e) => {
+              // Too big to fetch just for a copy: nothing was started. Pasting here is direct and needs none of it.
+              if (isTooBig(e)) get().showToast("Copied. Pasting here goes straight from the source. Other programs only get small items; drag this one out of the window to give it to another program.");
+              else get().showToast(friendlyRemoteError(e));
+            });
         }
       } else void api.clipboardSetFiles(paths).catch(() => {});
     }
@@ -2338,6 +2344,17 @@ let stagedClip: string[] = [];
 /** Server or phone items being fetched for the clipboard, by job id, with the copy they belong to. */
 /** Stage jobs that ended before the copy they belong to was known. */
 const earlyStages = new Map<number, DeleteProgress>();
+const stageWaiters = new Map<number, (p: DeleteProgress) => void>();
+
+/** Wait for a fetch job (`remoteStageStart`) to end; resolves with its last state. */
+export function awaitStage(id: number): Promise<DeleteProgress> {
+  const early = earlyStages.get(id);
+  if (early) {
+    earlyStages.delete(id);
+    return Promise.resolve(early);
+  }
+  return new Promise((resolve) => stageWaiters.set(id, resolve));
+}
 const pendingClips = new Map<number, { paths: string[]; op: "copy" | "move" }>();
 const remoteJobs = new Map<number, { op: "copy" | "move" }>();
 
@@ -2387,6 +2404,11 @@ async function deleteOnServer(paths: string[]): Promise<boolean> {
 
 /** Items from a server or phone were fetched for the clipboard: put the files there, unless a newer copy replaced them. */
 function stagedForClipboard(p: DeleteProgress) {
+  const waiting = stageWaiters.get(p.id);
+  if (waiting) {
+    stageWaiters.delete(p.id);
+    return waiting(p);
+  }
   const s = useStore.getState();
   const mine = pendingClips.get(p.id);
   if (!mine) {

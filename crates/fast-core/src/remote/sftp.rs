@@ -1,13 +1,14 @@
 //! SFTP over SSH, in pure Rust. The server's key is checked against a list of
 //! hosts the person has already trusted (trust on first use, like OpenSSH).
 
-use super::{fail, known_host, remember_host, Control, Entry, Server, Session, CHANGED_HOST, UNTRUSTED_HOST};
+use super::{fail, known_host, remember_host, Batches, Control, Entry, Server, Session, CHANGED_HOST, UNTRUSTED_HOST};
 use crate::error::{CoreError, Result};
 use russh::client::{self, Handle, Handler};
 use russh::keys::{ssh_key::HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{RawSftpSession, SftpSession};
 use russh_sftp::protocol::OpenFlags;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,6 +39,10 @@ struct Sftp {
     // Kept so the connection stays open.
     _handle: Handle<Client>,
     sftp: SftpSession,
+    /// A second channel that reads folders page by page (the library's own listing waits for the last page). `None`
+    /// until first wanted; `raw_failed` when the server would not open one, and folders are read the plain way.
+    raw: Option<Arc<RawSftpSession>>,
+    raw_failed: bool,
 }
 
 pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Session>> {
@@ -104,7 +109,7 @@ pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Ses
             remember_host(known_hosts, &server.host, server.port, &fp);
         }
     }
-    Ok(Box::new(Sftp { rt, _handle: handle, sftp }))
+    Ok(Box::new(Sftp { rt, _handle: handle, sftp, raw: None, raw_failed: false }))
 }
 
 fn sftp_err(path: &str, e: russh_sftp::client::error::Error) -> CoreError {
@@ -119,9 +124,75 @@ fn sftp_err(path: &str, e: russh_sftp::client::error::Error) -> CoreError {
     }
 }
 
+impl Sftp {
+    /// The channel that reads folders a page at a time, opened on first use.
+    fn pager(&mut self) -> Option<Arc<RawSftpSession>> {
+        if self.raw.is_none() && !self.raw_failed {
+            let opened = self.rt.block_on(async {
+                let channel = self._handle.channel_open_session().await.ok()?;
+                channel.request_subsystem(true, "sftp").await.ok()?;
+                let raw = RawSftpSession::new(channel.into_stream());
+                raw.init().await.ok()?;
+                Some(Arc::new(raw))
+            });
+            self.raw_failed = opened.is_none();
+            self.raw = opened;
+        }
+        self.raw.clone()
+    }
+
+    /// One item of a folder as the listing shows it. A link to a folder opens like a folder.
+    fn entry_of(&mut self, dir: &str, name: &str, attrs: &russh_sftp::protocol::FileAttributes) -> Entry {
+        let mut is_dir = attrs.file_type().is_dir();
+        let mut size = attrs.len();
+        let mut modified = attrs.mtime.map(|t| t as i64);
+        if attrs.file_type().is_symlink() {
+            let target = if dir.ends_with('/') { format!("{dir}{name}") } else { format!("{dir}/{name}") };
+            if let Ok(m) = self.rt.block_on(self.sftp.metadata(target)) {
+                is_dir = m.file_type().is_dir();
+                size = m.len();
+                modified = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+            }
+        }
+        Entry { name: name.to_string(), is_dir, size: if is_dir { 0 } else { size }, modified }
+    }
+}
+
 impl Session for Sftp {
     fn home(&mut self) -> Result<String> {
         self.rt.block_on(self.sftp.canonicalize(".")).map_err(|e| sftp_err(".", e))
+    }
+
+    fn list_streaming(&mut self, path: &str, cancel: &AtomicBool, sink: &mut dyn FnMut(&[Entry], crate::entry::ListProgress)) -> Result<Vec<Entry>> {
+        use russh_sftp::client::error::Error as SftpError;
+        use russh_sftp::protocol::StatusCode;
+        let Some(raw) = self.pager() else { return self.list(path) };
+        let handle = self.rt.block_on(raw.opendir(path)).map_err(|e| sftp_err(path, e))?.handle;
+        let (mut out, mut batches) = (Vec::new(), Batches::new(sink, 0));
+        let result = loop {
+            if cancel.load(Ordering::Relaxed) {
+                break Err(fail("Cancelled."));
+            }
+            match self.rt.block_on(raw.readdir(handle.as_str())) {
+                Ok(page) => {
+                    for f in page.files {
+                        if f.filename == "." || f.filename == ".." {
+                            batches.add(None);
+                            continue;
+                        }
+                        let entry = self.entry_of(path, &f.filename, &f.attrs);
+                        out.push(entry.clone());
+                        batches.add(Some(entry));
+                    }
+                }
+                Err(SftpError::Status(st)) if st.status_code == StatusCode::Eof => break Ok(()),
+                Err(e) => break Err(sftp_err(path, e)),
+            }
+        };
+        let _ = self.rt.block_on(raw.close(handle));
+        result?;
+        batches.finish();
+        Ok(out)
     }
 
     fn list(&mut self, path: &str) -> Result<Vec<Entry>> {
@@ -201,6 +272,56 @@ impl Session for Sftp {
         });
         if result.is_err() {
             // Do not leave half a file behind.
+            let _ = self.rt.block_on(self.sftp.remove_file(remote));
+        }
+        result
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    fn read_stream(&mut self, remote: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, ctl: &Control) -> Result<u64> {
+        self.rt.block_on(async {
+            let mut src = self.sftp.open(remote).await.map_err(|e| sftp_err(remote, e))?;
+            let mut buf = vec![0u8; 256 * 1024];
+            let mut total = 0u64;
+            loop {
+                ctl.check()?;
+                let n = src.read(&mut buf).await.map_err(fail)?;
+                if n == 0 {
+                    return Ok(total);
+                }
+                sink(&buf[..n])?;
+                total += n as u64;
+            }
+        })
+    }
+
+    fn write_stream(&mut self, source: &mut (dyn std::io::Read + Send), _size: u64, remote: &str, ctl: &Control) -> Result<u64> {
+        let result: Result<u64> = self.rt.block_on(async {
+            let mut out = self.sftp.open_with_flags(remote, OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE).await.map_err(|e| sftp_err(remote, e))?;
+            let mut buf = vec![0u8; 128 * 1024];
+            let mut total = 0u64;
+            let copied: Result<()> = async {
+                loop {
+                    ctl.check()?;
+                    let n = source.read(&mut buf).map_err(fail)?;
+                    if n == 0 {
+                        return Ok(());
+                    }
+                    out.write_all(&buf[..n]).await.map_err(fail)?;
+                    total += n as u64;
+                    (ctl.on_bytes)(n as u64);
+                }
+            }
+            .await;
+            let closed = out.shutdown().await;
+            copied?;
+            closed.map_err(fail)?;
+            Ok(total)
+        });
+        if result.is_err() {
             let _ = self.rt.block_on(self.sftp.remove_file(remote));
         }
         result

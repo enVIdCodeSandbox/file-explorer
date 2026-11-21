@@ -4,6 +4,7 @@
 
 import { sk, skShift } from "../util/shortcutText";
 import { viewLevelOf } from "../util/viewLevel";
+import { createPacer, recallVisit, refreshMinMs, rememberVisit } from "../util/progressive";
 import { wheelSteps } from "../util/zoomKeys";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SelectGroup } from "./SelectGroup";
@@ -134,16 +135,25 @@ export function FileView({ path }: { path: string }) {
   // ---- Loading ------------------------------------------------------------
   const progressive = adv<boolean>(settings, "files.progressiveLoad");
   const [loading, setLoading] = useState(false);
+  const refreshMs = refreshMinMs(settings);
   useEffect(() => {
     let alive = true;
     let off: (() => void) | undefined;
     const ticket = progressive ? ++listTickets : undefined;
     setError(null);
     const startedAt = Date.now();
+    const visit = recallVisit(path);
+    const pacer = createPacer(refreshMs);
     const finish = () => {
       setLoading(false);
       if (useStore.getState().loadingDir?.path === path) useStore.setState({ loadingDir: null });
     };
+    // A folder that takes a moment says so (a phone hands its list over all at once, so nothing else would show):
+    // not for one that opens at once, which would only flash.
+    const notice = setTimeout(() => {
+      if (!alive || useStore.getState().loadingDir?.path === path) return;
+      useStore.setState({ loadingDir: { path, done: 0, total: visit?.count ?? 0, totalFrom: visit ? "last-visit" : undefined, lastMs: visit?.ms, startedAt } });
+    }, 250);
     void (async () => {
       if (ticket !== undefined) {
         // Listen before asking, so the first batch cannot be missed.
@@ -151,17 +161,32 @@ export function FileView({ path }: { path: string }) {
         const un = await on("dir-chunk", (c) => {
           if (!alive || c.ticket !== ticket) return;
           seen = c.restart ? [...c.entries] : seen.concat(c.entries);
-          setListing({ path, parent: parentPath(path), entries: seen, cached: false });
-          setLoading(true);
-          useStore.setState({ loadingDir: { path, done: c.done, total: c.total, startedAt } });
+          const upTo = seen;
+          // Batches are drawn at a steady pace, the latest one standing for those skipped, so a fast device cannot
+          // keep a slow computer busy redrawing.
+          pacer.push(() => {
+            if (!alive) return;
+            const t = performance.now();
+            setListing({ path, parent: parentPath(path), entries: upTo, cached: false });
+            setLoading(true);
+            const fromSystem = c.total > 0;
+            const total = fromSystem ? c.total : visit && visit.count > c.done ? visit.count : 0;
+            useStore.setState({ loadingDir: { path, done: c.done, total, totalFrom: total ? (fromSystem ? "system" : "last-visit") : undefined, lastMs: visit?.ms, startedAt } });
+            requestAnimationFrame(() => pacer.drew(performance.now() - t));
+          });
         });
         if (!alive) return un();
         off = un;
       }
       try {
         const l = await api.listDir(path, ticket);
-        if (alive) setListing(l);
+        pacer.cancel();
+        if (alive) {
+          setListing(l);
+          if (Date.now() - startedAt > 800) rememberVisit(path, l.entries.length, Date.now() - startedAt);
+        }
       } catch (e) {
+        pacer.cancel();
         if (alive) setError(String(e));
       } finally {
         if (alive) finish();
@@ -169,6 +194,8 @@ export function FileView({ path }: { path: string }) {
     })();
     return () => {
       alive = false;
+      clearTimeout(notice);
+      pacer.cancel();
       off?.();
       if (ticket !== undefined) void api.listDirCancel(ticket).catch(() => {});
       finish();
