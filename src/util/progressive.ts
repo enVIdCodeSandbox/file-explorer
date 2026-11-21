@@ -135,3 +135,21 @@ export function createPacer(minMs: number, now: () => number = () => performance
     },
   };
 }
+
+/** Shows the "still loading" notice only for a folder that is slow to open, and never once it has stopped: a folder
+ *  that opens at once must not have the notice appear after it is already complete. */
+export function createNotice(show: () => void, delayMs = 250) {
+  let over = false;
+  const timer = setTimeout(() => {
+    if (!over) show();
+  }, delayMs);
+  return {
+    stop() {
+      over = true;
+      clearTimeout(timer);
+    },
+    get stopped() {
+      return over;
+    },
+  };
+}

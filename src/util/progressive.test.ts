@@ -98,3 +98,30 @@ describe("redraw pace", () => {
     expect(drawn).toEqual([1, 3, 4]);
   });
 });
+
+import { createNotice } from "./progressive";
+import { vi } from "vitest";
+
+describe("the slow-folder notice", () => {
+  it("appears for a folder that is slow to open", () => {
+    vi.useFakeTimers();
+    const show = vi.fn();
+    createNotice(show);
+    vi.advanceTimersByTime(249);
+    expect(show).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(show).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+  it("never appears once the folder is complete, even if it opened faster than the delay", () => {
+    vi.useFakeTimers();
+    const show = vi.fn();
+    const n = createNotice(show);
+    vi.advanceTimersByTime(100);
+    n.stop();
+    vi.advanceTimersByTime(5000);
+    expect(show).not.toHaveBeenCalled();
+    expect(n.stopped).toBe(true);
+    vi.useRealTimers();
+  });
+});

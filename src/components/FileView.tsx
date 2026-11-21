@@ -4,7 +4,7 @@
 
 import { sk, skShift } from "../util/shortcutText";
 import { viewLevelOf } from "../util/viewLevel";
-import { createPacer, recallVisit, refreshMinMs, rememberVisit } from "../util/progressive";
+import { createNotice, createPacer, recallVisit, refreshMinMs, rememberVisit } from "../util/progressive";
 import { wheelSteps } from "../util/zoomKeys";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SelectGroup } from "./SelectGroup";
@@ -144,16 +144,22 @@ export function FileView({ path }: { path: string }) {
     const startedAt = Date.now();
     const visit = recallVisit(path);
     const pacer = createPacer(refreshMs);
+    let over = false;
     const finish = () => {
+      // Every item is in: nothing may announce "still loading" afterwards (the notice's timer, a waiting redraw).
+      over = true;
+      notice.stop();
+      pacer.cancel();
       setLoading(false);
       if (useStore.getState().loadingDir?.path === path) useStore.setState({ loadingDir: null });
     };
     // A folder that takes a moment says so (a phone hands its list over all at once, so nothing else would show):
     // not for one that opens at once, which would only flash.
-    const notice = setTimeout(() => {
-      if (!alive || useStore.getState().loadingDir?.path === path) return;
+    const show = () => {
+      if (!alive || over || useStore.getState().loadingDir?.path === path) return;
       useStore.setState({ loadingDir: { path, done: 0, total: visit?.count ?? 0, totalFrom: visit ? "last-visit" : undefined, lastMs: visit?.ms, startedAt } });
-    }, 250);
+    };
+    const notice = createNotice(show);
     void (async () => {
       if (ticket !== undefined) {
         // Listen before asking, so the first batch cannot be missed.
@@ -165,7 +171,7 @@ export function FileView({ path }: { path: string }) {
           // Batches are drawn at a steady pace, the latest one standing for those skipped, so a fast device cannot
           // keep a slow computer busy redrawing.
           pacer.push(() => {
-            if (!alive) return;
+            if (!alive || over) return;
             const t = performance.now();
             setListing({ path, parent: parentPath(path), entries: upTo, cached: false });
             setLoading(true);
@@ -194,7 +200,6 @@ export function FileView({ path }: { path: string }) {
     })();
     return () => {
       alive = false;
-      clearTimeout(notice);
       pacer.cancel();
       off?.();
       if (ticket !== undefined) void api.listDirCancel(ticket).catch(() => {});
