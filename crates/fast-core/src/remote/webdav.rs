@@ -191,13 +191,23 @@ impl Session for Dav {
         let me = path.trim_end_matches('/').to_string();
         let mut body = reply.into_reader();
         let (mut out, mut batches) = (Vec::new(), Batches::new(sink, 0));
-        let (mut buf, mut chunk) = (Vec::<u8>::new(), vec![0u8; 64 * 1024]);
+        let (mut buf, mut chunk, mut tail) = (Vec::<u8>::new(), vec![0u8; 64 * 1024], Vec::<u8>::new());
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(fail("Cancelled."));
             }
-            let n = body.read(&mut chunk).map_err(|e| fail(format!("Could not read the answer: {e}")))?;
+            let n = match body.read(&mut chunk) {
+                Ok(n) => n,
+                // Some servers reset the connection right after the last byte. If the closing tag already came, the
+                // list is whole and the reset is only how the server hung up.
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) && ended(&tail) => 0,
+                Err(e) => return Err(fail(format!("Could not read the answer: {e}"))),
+            };
             buf.extend_from_slice(&chunk[..n]);
+            tail.extend_from_slice(&chunk[..n]);
+            if tail.len() > 64 {
+                tail.drain(..tail.len() - 64);
+            }
             let upto = if n == 0 { buf.len() } else { complete_upto(&buf) };
             if upto > 0 {
                 let part = String::from_utf8_lossy(&buf[..upto]).into_owned();
@@ -333,6 +343,13 @@ impl<R: Read + ?Sized> Read for Counting<'_, '_, R> {
     }
 }
 
+/// True when the last bytes of an answer close the multistatus element (whatever prefix the server gave it).
+fn ended(tail: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(tail).to_ascii_lowercase();
+    let text = text.trim_end();
+    text.ends_with("multistatus>") && text.rfind("</").is_some_and(|at| text[at..].contains("multistatus>"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +408,15 @@ mod tests {
         assert!(complete_upto(b"<response></response>") > 0);
     }
 
+    #[test]
+    fn the_end_of_an_answer_is_recognised() {
+        assert!(ended(b"</d:response></d:multistatus>\r\n"));
+        assert!(ended(b"</multistatus>"));
+        assert!(!ended(b"</d:response>"));
+        assert!(!ended(b"<d:multistatus>"));
+        assert!(!ended(b""));
+    }
+
     /// A folder answer that arrives in pieces fills the list in pieces too.
     #[test]
     fn a_slow_answer_is_listed_as_it_arrives() {
@@ -399,10 +425,23 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             let (mut c, _) = listener.accept().unwrap();
+            // Take in the whole request, body included. Closing a socket that still has unread bytes makes Windows
+            // reset the connection, which would cut the client's reading short.
             let mut seen = Vec::new();
             let mut b = [0u8; 1024];
-            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+            let head_end = loop {
+                if let Some(at) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break at + 4;
+                }
                 let n = c.read(&mut b).unwrap();
+                assert!(n > 0, "the client hung up before it finished asking");
+                seen.extend_from_slice(&b[..n]);
+            };
+            let head = String::from_utf8_lossy(&seen[..head_end]).to_ascii_lowercase();
+            let body_len = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
+            while seen.len() < head_end + body_len {
+                let n = c.read(&mut b).unwrap();
+                assert!(n > 0, "the client hung up before it finished asking");
                 seen.extend_from_slice(&b[..n]);
             }
             c.write_all(b"HTTP/1.1 207 Multi-Status\r\nConnection: close\r\n\r\n<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\">").unwrap();
@@ -415,6 +454,10 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
             c.write_all(b"</d:multistatus>").unwrap();
+            // Say we are done, then wait for the client to finish reading and hang up, so nothing is cut off.
+            c.shutdown(std::net::Shutdown::Write).unwrap();
+            c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            while matches!(c.read(&mut b), Ok(n) if n > 0) {}
         });
         let mut dav = Dav { http: Client::new("127.0.0.1", port, false, "", "") };
         let mut batches: Vec<usize> = Vec::new();

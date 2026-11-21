@@ -82,7 +82,12 @@ jobs:
           for attempt in 1 2 3; do
             npx tauri android build --apk --target aarch64 --target armv7 && exit 0
             echo "::warning::The Android build failed (attempt $attempt of 3)."
-            sleep 20
+            # Gradle remembers a file it could not find for 24 hours, so a plain second try fails again within a second
+            # without asking the server anything. Forget what it learned (the Gradle download itself is kept), and say
+            # what Maven Central answers right now so a failure like this one can be told apart from a real problem.
+            rm -rf "$HOME/.gradle/caches/modules-2" "$HOME/.gradle/caches/jars-"* "$HOME/.gradle/caches/transforms-"* src-tauri/gen/android/buildSrc/.gradle src-tauri/gen/android/.gradle
+            curl -sS -o /dev/null -w "Maven Central answered %{http_code} for kotlin-stdlib 2.3.21\n" https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.3.21/kotlin-stdlib-2.3.21.pom || true
+            sleep $((attempt * 30))
           done
           exit 1
       - name: Collect the package
