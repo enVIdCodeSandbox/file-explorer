@@ -2395,7 +2395,7 @@ fn cache_off(st: &crate::state::AppState, path: &Path) -> bool {
     !rules.is_empty() && fast_core::cachepolicy::excluded(&rules, path)
 }
 
-fn advanced_bool(st: &crate::state::AppState, key: &str, default: bool) -> bool {
+pub(crate) fn advanced_bool(st: &crate::state::AppState, key: &str, default: bool) -> bool {
     st.settings.read().advanced.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
@@ -2407,7 +2407,7 @@ pub fn trim_thumbnails(st: &crate::state::AppState) {
     }
 }
 
-fn advanced_u64(st: &crate::state::AppState, key: &str, default: u64) -> u64 {
+pub(crate) fn advanced_u64(st: &crate::state::AppState, key: &str, default: u64) -> u64 {
     st.settings.read().advanced.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
 }
 

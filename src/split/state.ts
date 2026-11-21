@@ -38,6 +38,8 @@ export interface PaneState {
 export interface Hover {
   zone?: Zone;
   preset?: string;
+  /** Over the "Choose tabs…" button: dropping opens the list of tabs to pick from. */
+  choose?: boolean;
 }
 
 interface SplitState {
@@ -50,6 +52,8 @@ interface SplitState {
   allowed: boolean;
   /** A tab is being dragged: what it is over, what it is called, and the pane it would empty (if it is that pane's only tab). */
   drag: { hover: Hover | null; label: string; empties: number | null } | null;
+  /** The "choose which tabs to split" list is open; `first` is the tab that was dropped on it (ticked to begin with). */
+  chooser: { first: Source | null } | null;
 }
 
 const KEY = "fast.split.v3";
@@ -73,7 +77,7 @@ function load(): Pick<SplitState, "tree" | "panes"> {
   }
 }
 
-export const useSplit = create<SplitState>(() => ({ ...load(), history: [0], allowed: true, drag: null }));
+export const useSplit = create<SplitState>(() => ({ ...load(), history: [0], allowed: true, drag: null, chooser: null }));
 
 useSplit.subscribe((s, prev) => {
   if (s.tree === prev.tree && s.panes === prev.panes) return;
@@ -374,7 +378,7 @@ function takeSnapshot(): Record<number, Rect> {
   return out;
 }
 
-const sameHover = (a: Hover | null, b: Hover | null) => a?.preset === b?.preset && a?.zone?.target === b?.zone?.target && a?.zone?.side === b?.zone?.side;
+const sameHover = (a: Hover | null, b: Hover | null) => a?.choose === b?.choose && a?.preset === b?.preset && a?.zone?.target === b?.zone?.target && a?.zone?.side === b?.zone?.side;
 
 /**
  * A tab is at (x, y). Returns whether that is over the panes; if so, work out where it would go and let the panes show
@@ -397,7 +401,8 @@ export function hoverPanes(x: number, y: number, src: Source, label: string): bo
   const under = document.elementFromPoint(x, y);
   const preset = under?.closest<HTMLElement>("[data-preset]")?.dataset.preset;
   let hover: Hover | null = null;
-  if (preset && !full && empties === null) hover = { preset };
+  if (under?.closest("[data-choose-tabs]")) hover = full ? null : { choose: true };
+  else if (preset && !full && empties === null) hover = { preset };
   else {
     const strip = under?.closest<HTMLElement>("[data-pane-tabs]");
     if (strip) {
@@ -420,6 +425,10 @@ export function dropOnPanes(src: Source): boolean {
   const hover = get().drag?.hover;
   endHover();
   if (!hover) return false;
+  if (hover.choose) {
+    openChooser(src);
+    return true;
+  }
   if (hover.preset) return moveTabToPreset(src, hover.preset);
   return hover.zone ? moveTab(src, hover.zone) : false;
 }
@@ -427,6 +436,86 @@ export function dropOnPanes(src: Source): boolean {
 export function endHover() {
   snapshot = null;
   if (get().drag) set({ drag: null });
+}
+
+// ---- Choosing several tabs to split -----------------------------------------------------------------------
+
+/** Open the list of tabs to pick from; the dropped tab, if any, is ticked to begin with. */
+export function openChooser(first: Source | null = null) {
+  if (get().allowed) set({ chooser: { first } });
+}
+export const closeChooser = () => set({ chooser: null });
+
+/** Every tab the window has open: those of the normal file list, then those of the extra panes. */
+export interface OpenTab {
+  src: Source;
+  path: string;
+  /** Pane number (0 = the window's own tab strip). */
+  slot: number;
+}
+export function openTabs(): OpenTab[] {
+  const out: OpenTab[] = [];
+  for (const t of useStore.getState().tabs) {
+    const path = plainFolder(t.location);
+    if (path) out.push({ src: { slot: 0, tabId: t.id }, path, slot: 0 });
+  }
+  const { panes, tree } = get();
+  for (const slot of othersOf(tree)) for (const t of panes[slot]?.tabs ?? []) out.push({ src: { slot, tabId: t.id }, path: t.path, slot });
+  return out;
+}
+
+/** How many of these tabs could become panes: the free places, plus those that leaving frees (a pane's only tab). */
+export function splitCapacity(srcs: Source[]): number {
+  const freed = new Set(srcs.filter((s) => s.slot > 0 && get().panes[s.slot]?.tabs.length === 1).map((s) => s.slot));
+  return Math.max(0, MAX_PANES - paneCount() + freed.size);
+}
+
+/** What the panes would be called, for showing the layout choices: the count after splitting these. */
+export function paneCountAfter(srcs: Source[]): number {
+  const freed = new Set(srcs.filter((s) => s.slot > 0 && get().panes[s.slot]?.tabs.length === 1).map((s) => s.slot));
+  return Math.min(MAX_PANES, paneCount() - freed.size + Math.min(srcs.length, splitCapacity(srcs)));
+}
+
+/**
+ * Make a pane of each of these tabs, taking them out of where they were (the window's only tab stays, its pane gets a
+ * copy). `presetId` picks one of the ready-made layouts for the resulting number of panes; without it, they go side by
+ * side. Returns how many panes were made.
+ */
+export function splitTabs(srcs: Source[], presetId?: string): number {
+  const seen = new Set<string>();
+  const picked = srcs.filter((s) => (seen.has(`${s.slot}:${s.tabId}`) ? false : (seen.add(`${s.slot}:${s.tabId}`), true)));
+  const room = splitCapacity(picked);
+  const chosen = picked.map((s) => ({ s, path: sourcePath(s) })).filter((x): x is { s: Source; path: string } => x.path !== undefined).slice(0, room);
+  if (!chosen.length) return 0;
+  for (const { s } of chosen) takeOut(s);
+  return makePanes(chosen.map((c) => c.path), presetId);
+}
+
+/** Make a pane for each folder (up to the room there is), laid out by the ready-made layout `presetId` if it fits. */
+export function splitPaths(paths: string[], presetId?: string): number {
+  return makePanes(paths.slice(0, Math.max(0, MAX_PANES - paneCount())), presetId);
+}
+
+function makePanes(paths: string[], presetId?: string): number {
+  if (!paths.length) return 0;
+  let { tree, panes } = get();
+  const fresh: number[] = [];
+  const used = new Set(leaves(tree));
+  for (const path of paths) {
+    let slot = 1;
+    while (used.has(slot) && slot < MAX_PANES) slot++;
+    if (used.has(slot)) break;
+    used.add(slot);
+    fresh.push(slot);
+    panes = withPane(panes, slot, path);
+  }
+  const order = [...slotsInOrder(tree), ...fresh];
+  const options = presetsFor(order.length);
+  const preset = options.find((p) => p.id === presetId) ?? options[0];
+  tree = preset ? preset.build(order) : tree;
+  set({ tree, panes, chooser: null });
+  if (fresh.length) focusPane(fresh[fresh.length - 1]);
+  return fresh.length;
 }
 
 // ---- Keys that act on the pane that has the focus -------------------------------------------------------

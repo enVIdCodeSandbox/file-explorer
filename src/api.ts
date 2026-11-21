@@ -993,6 +993,12 @@ export const api = {
   shareList: () => invoke<ShareInfo[]>("share_list"),
   tabHover: (x: number, y: number, width: number, active: boolean) => invoke<void>("tab_hover", { x, y, width, active }),
   dropTab: (location: string, x: number, y: number, closeSource: boolean) => invoke<boolean>("drop_tab", { location, x, y, closeSource }),
+  /** This window was held over another one: hand over what tabs it has (it minimizes), for the other to offer to take. */
+  mergeOffer: (target: string, tabs: { id: string; location: string }[]) => invoke<void>("merge_offer", { target, tabs }),
+  /** Nothing was taken: bring the dragged window back. */
+  mergeCancel: (source: string) => invoke<void>("merge_cancel", { source }),
+  /** These tabs of `source` were taken. */
+  mergeDone: (source: string, ids: string[]) => invoke<void>("merge_done", { source, ids }),
   openSettingsWindow: () => invoke<void>("open_settings_window"),
   reattach: (kind: "settings" | "transfers", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
   folderSizesStart: (dir: string, names: string[], refresh: boolean, policy: SizePolicy) => invoke<void>("folder_sizes_start", { dir, names, refresh, policy }),
@@ -1122,6 +1128,14 @@ export interface BackendEvents {
   "tab-drop": { location: string; x: number; y: number };
   /** Another window is dragging a tab over this one (x is null once it leaves). */
   "tab-hover": { x: number | null; w: number };
+  /** A window is being held over this one (on), or was moved away (off). */
+  "merge-hover": { on: boolean };
+  /** This window was held still over another: say what tabs it has. */
+  "merge-offer-request": { target: string };
+  /** Another window was dropped here: these are its tabs. */
+  "merge-offer": { source: string; tabs: { id: string; location: string }[] };
+  /** The other window took these tabs: let them go. */
+  "merge-release": { ids: string[] };
   "settings-changed": Settings;
   "smart-clear-progress": ClearProgress;
   /** Another app asked for a folder; collect it with `takeLaunch`. */

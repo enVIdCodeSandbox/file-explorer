@@ -4,6 +4,7 @@ mod commands;
 mod iconpacks;
 mod crash;
 mod launch;
+mod merge;
 mod native_dnd;
 mod remote;
 mod smartclear;
@@ -184,6 +185,10 @@ pub fn run() {
                 st.watcher.set_dirs(all);
             }
             #[cfg(desktop)]
+            if matches!(event, tauri::WindowEvent::Moved(_)) {
+                merge::moved(window);
+            }
+            #[cfg(desktop)]
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
                 commands::attention_changed(window.app_handle());
             }
@@ -267,6 +272,9 @@ pub fn run() {
             commands::open_window,
             commands::drop_tab,
             commands::tab_hover,
+            merge::merge_offer,
+            merge::merge_cancel,
+            merge::merge_done,
             native_dnd::clipboard_set_files,
             native_dnd::clipboard_get_files,
             native_dnd::clipboard_get,

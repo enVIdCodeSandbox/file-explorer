@@ -313,6 +313,8 @@ interface State {
   /** Move a tab into its own new window (at a screen position). */
   detachTab: (id: string, x?: number, y?: number) => Promise<void>;
   closeOthers: (id: string) => void;
+  /** Let go of tabs that another window took (not remembered as closed). Returns how many tabs are left that were not taken. */
+  releaseTabs: (ids: string[]) => number;
   duplicateTab: (id: string) => void;
   activate: (id: string) => void;
   groupTab: (tabId: string, groupId: string | null) => void;
@@ -854,6 +856,14 @@ export const useStore = create<State>((set, get) => ({
       selection: [],
     });
     persist();
+  },
+
+  releaseTabs: (ids) => {
+    const kept = get().tabs.filter((t) => !ids.includes(t.id)).length;
+    skipRemembering = true;
+    for (const id of ids) get().closeTab(id);
+    skipRemembering = false;
+    return kept;
   },
 
   closeTab: (id) => {

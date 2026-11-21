@@ -4,6 +4,7 @@ import { dropThumbCache } from "./components/Thumb";
 import { Suspense, lazy, useEffect, useState, useSyncExternalStore } from "react";
 import { api, on } from "./api";
 import { adv } from "./settings/advanced";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
 import { useChrome } from "./util/chrome";
 import { DetailsPane } from "./components/DetailsPane";
@@ -16,6 +17,8 @@ import { ChooseDetails } from "./components/ChooseDetails";
 import { openTools } from "./components/toolsOpen";
 import { MillerColumns } from "./components/Panes";
 import { SplitArea } from "./components/Split";
+import { MergeOffer } from "./components/MergeOffer";
+import { handOver, useMerge } from "./util/mergeWindows";
 import { paneCommand, plainFolder } from "./split/state";
 import { startTaskbarProgress } from "./util/taskbarWire";
 import { ButtonBar, CommandLine } from "./components/UserCommands";
@@ -284,6 +287,22 @@ function AppInner() {
         const cur = useStore.getState().incomingTab;
         if (!cur || cur.index !== index || cur.w !== w) useStore.setState({ incomingTab: { index, w } });
       }),
+      // This window was held over another one: say what tabs it has (it minimizes), so that one can offer to take them.
+      on("merge-offer-request", ({ target }) => {
+        const tabs = useStore.getState().tabs.map((t) => ({ id: t.id, location: t.location }));
+        void handOver(target, tabs).catch((e) => useStore.getState().showToast(String(e)));
+      }),
+      // A window is held over this one, or was moved away.
+      on("merge-hover", ({ on: over }) => useMerge.setState({ hover: over })),
+      // Another window was dropped here: offer its tabs.
+      on("merge-offer", (offer) => useMerge.setState({ offer, hover: false })),
+      // The window that was dropped here was taken in: let go of what moved, and tidy up the emptied window.
+      on("merge-release", ({ ids }) => {
+        const left = useStore.getState().releaseTabs(ids);
+        const win = getCurrentWindow();
+        if (left > 0) void win.unminimize().catch(() => {});
+        else if (adv<string>(useStore.getState().settings, "windows.afterMerge") === "close") void win.close();
+      }),
       // Files dragged in from other programs.
       listenForExternalDrops().then((off) => () => off()),
       // Settings changed in another window: follow it.
@@ -507,6 +526,7 @@ function AppInner() {
       <Tooltips />
       <Dialog />
       <Toast />
+      <MergeOffer />
     </div>
   );
 }

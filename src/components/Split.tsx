@@ -5,19 +5,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import { adv } from "../settings/advanced";
-import { useStore } from "../store";
+import { tabTitle, useStore } from "../store";
 import {
   applyPreset,
   closeAllPanes,
+  closeChooser,
   cyclePane,
   ensurePanes,
   evenOutPanes,
   focusPane,
   isCurrentShape,
+  openChooser,
+  openTabs,
   paneCount,
+  paneCountAfter,
   presetsNow,
   setBranchShares,
+  splitCapacity,
+  splitTabs,
   useSplit,
+  type OpenTab,
 } from "../split/state";
 import { GHOST, MAX_PANES, drag as dragShares, insertPane, isBranch, layout, leaves, minShare, presetsFor, removePane, setShares, sharesOf, type Handle, type Node } from "../util/splitLayout";
 import type { MenuItem } from "./ContextMenu";
@@ -30,7 +37,8 @@ const GAP = 6;
 export function splitMenuItems(): MenuItem[] {
   const { count, current, more } = presetsNow();
   const items: MenuItem[] = [];
-  if (more.length) items.push({ id: "split-more", separatorBefore: true, label: count === 1 ? "Split into two panes" : `Add a pane (${count + 1} panes)`, children: more.map((p) => ({ id: p.id, label: p.label, run: () => applyPreset(p) })) });
+  if (useSplit.getState().allowed && paneCount() < MAX_PANES) items.push({ id: "split-choose", separatorBefore: true, label: "Split several tabs…", run: () => openChooser(null) });
+  if (more.length) items.push({ id: "split-more", label: count === 1 ? "Split into two panes" : `Add a pane (${count + 1} panes)`, children: more.map((p) => ({ id: p.id, label: p.label, run: () => applyPreset(p) })) });
   if (count >= 2) {
     items.push({ id: "split-current", label: `Arrange the ${count} panes`, children: current.map((p) => ({ id: p.id, label: p.label, checked: isCurrentShape(p), run: () => applyPreset(p) })) });
     items.push({ id: "split-even", label: "Even out the sizes", run: evenOutPanes });
@@ -210,13 +218,14 @@ export function SplitArea({ main, folder, allowed }: { main: React.ReactNode; fo
           onDoubleClick={() => setBranchShares(h.path, h.shares.map(() => 1 / h.kids))}
         />
       ))}
-      {drag && allowed && count < MAX_PANES && drag.empties === null && <LayoutPicker count={count} active={drag.hover?.preset} />}
+      {drag && allowed && count < MAX_PANES && drag.empties === null && <LayoutPicker count={count} active={drag.hover?.preset} choose={!!drag.hover?.choose} />}
+      <TabChooser />
     </div>
   );
 }
 
-/** While a tab is dragged: the ready-made layouts for one more pane, to drop it on. */
-function LayoutPicker({ count, active }: { count: number; active?: string }) {
+/** While a tab is dragged: the ready-made layouts for one more pane, to drop it on, and a button to pick several tabs. */
+function LayoutPicker({ count, active, choose }: { count: number; active?: string; choose: boolean }) {
   const others = leaves(useSplit.getState().tree).filter((s) => s !== 0);
   return (
     <div className="split-presets" role="group" aria-label={`Layouts for ${count + 1} panes`}>
@@ -227,12 +236,85 @@ function LayoutPicker({ count, active }: { count: number; active?: string }) {
             <Mini tree={p.build([0, ...others, GHOST])} />
           </div>
         ))}
+        <div className="split-choose" data-choose-tabs="" data-active={choose || undefined} title="Drop here to choose which of the open tabs to split">
+          Choose tabs…
+        </div>
       </div>
     </div>
   );
 }
 
-function Mini({ tree }: { tree: Node }) {
+/** The list of open tabs to pick from: each ticked one becomes a pane, laid out the way the thumbnails show. */
+function TabChooser() {
+  const chooser = useSplit((s) => s.chooser);
+  const [ticked, setTicked] = useState<string[]>([]);
+  const [layout, setLayout] = useState("");
+  const tabs = chooser ? openTabs() : [];
+  const key = (t: OpenTab) => `${t.src.slot}:${t.src.tabId}`;
+  const first = chooser?.first;
+  const lastMain = [...tabs].reverse().find((t) => t.slot === 0);
+  // Open with the dropped tab ticked; from the menu, with the window's last tab (what a plain split would use).
+  useEffect(() => {
+    if (!chooser) return;
+    const start = first ? tabs.find((t) => t.src.slot === first.slot && t.src.tabId === first.tabId) : lastMain;
+    setTicked(start ? [key(start)] : []);
+    setLayout("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chooser]);
+  if (!chooser) return null;
+  const picked = tabs.filter((t) => ticked.includes(key(t)));
+  const room = splitCapacity(picked.map((t) => t.src));
+  const used = picked.slice(0, room);
+  const total = paneCountAfter(used.map((t) => t.src));
+  const options = presetsFor(total);
+  const others = leaves(useSplit.getState().tree).filter((s) => s !== 0);
+  const chosenLayout = options.some((p) => p.id === layout) ? layout : options[0]?.id;
+  const go = () => {
+    if (used.length) splitTabs(used.map((t) => t.src), chosenLayout);
+  };
+  const toggle = (t: OpenTab) => setTicked((c) => (c.includes(key(t)) ? c.filter((k) => k !== key(t)) : [...c, key(t)]));
+  const label = (slot: number) => (slot === 0 ? "Main list" : `Pane ${slot + 1}`);
+  return (
+    <div className="modal-backdrop" onMouseDown={closeChooser}>
+      <div className="dialog tab-chooser" role="dialog" aria-modal="true" aria-label="Choose tabs to split" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Escape") closeChooser(); e.stopPropagation(); }}>
+        <h3>Choose the tabs to split</h3>
+        <p className="dialog-message">Each ticked tab becomes a pane of its own.</p>
+        <div className="chooser-list" role="group" aria-label="Open tabs">
+          {tabs.map((t) => {
+            const on = ticked.includes(key(t));
+            const over = on && !used.includes(t);
+            return (
+              <label key={key(t)} className="chooser-row" data-over={over || undefined}>
+                <input type="checkbox" checked={on} onChange={() => toggle(t)} />
+                <FileIcon kind="folder" name={t.path.split(/[\\/]/).filter(Boolean).pop()} size={16} />
+                <span className="chooser-name">{tabTitle(t.path)}</span>
+                <span className="chooser-where">{label(t.slot)}</span>
+              </label>
+            );
+          })}
+        </div>
+        {ticked.length > room && <p className="dialog-message">Only {room} more {room === 1 ? "pane fits" : "panes fit"}, so the first {room} ticked {room === 1 ? "is" : "are"} used.</p>}
+        {options.length > 0 && (
+          <div className="chooser-layouts" role="radiogroup" aria-label="Layout">
+            {options.map((p) => (
+              <button key={p.id} type="button" role="radio" aria-checked={chosenLayout === p.id} className="split-preset" data-active={chosenLayout === p.id || undefined} title={p.label} onClick={() => setLayout(p.id)}>
+                <Mini tree={p.build([0, ...others, ...Array(used.length).fill(GHOST)])} />
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="dialog-buttons">
+          <button onClick={closeChooser}>Cancel</button>
+          <button className="primary" disabled={!used.length} onClick={go} autoFocus>
+            {used.length > 1 ? `Split ${used.length} tabs` : "Split"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Mini({ tree }: { tree: Node }) {
   if (!isBranch(tree)) return <div className="mini-leaf" data-ghost={tree === GHOST || undefined} data-main={tree === 0 || undefined} />;
   const shares = sharesOf(tree);
   return (
