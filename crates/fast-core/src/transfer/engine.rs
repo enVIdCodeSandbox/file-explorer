@@ -299,6 +299,8 @@ struct Shared {
     slow_source: bool,
     /// A source is on a memory stick or card, which can stop answering: it is read in the careful way (Windows).
     removable_source: bool,
+    /// A source is on a network drive.
+    network_source: bool,
     /// The destination is a network drive.
     network_dest: bool,
     /// The destination is a card or stick.
@@ -640,6 +642,7 @@ pub fn start_with(
         reading: Mutex::new((String::new(), Instant::now())),
         slow_source: spec.sources.iter().any(|p| matches!(drives::media_for(p, &drives), drives::Media::Removable | drives::Media::Hdd)),
         removable_source: spec.sources.iter().any(|p| drives::media_for(p, &drives) == drives::Media::Removable),
+        network_source: spec.sources.iter().any(|p| drives::media_for(p, &drives) == drives::Media::Network),
         network_dest: drives::media_for(&spec.dest_dir, &drives) == drives::Media::Network,
         removable_dest: drives::media_for(&spec.dest_dir, &drives) == drives::Media::Removable,
         stage_room: drives::volume_for(&std::env::temp_dir(), &drives).map(|d| d.available).unwrap_or(u64::MAX),
@@ -2008,20 +2011,44 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
         }
     }
 
-    // From a memory stick or card on Windows every read goes through the careful reader, which the system's own
-    // one-call copy cannot do.
-    let careful_source = cfg!(windows) && shared.removable_source;
-    if size < plan.large_threshold && !shared.limited() && !careful_source {
+    // From a memory stick, card or network share on Windows every read of a big file goes through the careful reader,
+    // and from a card the system's own one-call copy is not used at all (it cannot be interrupted or changed).
+    let removable_careful = cfg!(windows) && shared.removable_source;
+    let careful_source = cfg!(windows) && (shared.removable_source || shared.network_source);
+    // Opening, and the one-call copy, are requests to drives that can stop answering on one particular file: they are
+    // not waited for for ever, so that one bad file does not hold up the rest of the folder.
+    let guarded = shared.removable_source || shared.network_source || shared.network_dest || shared.removable_dest;
+    if size < plan.large_threshold && !shared.limited() && !removable_careful {
         // 2. Small/medium file: one call into the OS fast path
         //    (copy_file_range on Linux, CopyFileEx on Windows, fcopyfile on macOS).
-        let n = fs::copy(src, dst)?;
+        let n = if guarded {
+            let (from, to) = (src.to_path_buf(), dst.to_path_buf());
+            careful::bounded(careful::call_limit(size), &format!("copying {}", src.display()), move || fs::copy(&from, &to))?
+        } else {
+            fs::copy(src, dst)?
+        };
         shared.bytes_done.fetch_add(n, Ordering::Relaxed);
     } else {
         // 3. Large file: chunked copy with big buffers so progress, pause and
         //    cancel stay responsive within one file.
-        let mut input = fs::File::open(src)?;
-        let mut careful_reader = if careful_source { Some(careful::SourceReader::new(src, input.try_clone()?)) } else { None };
-        let mut output = fs::File::create(dst)?;
+        let mut input = if guarded {
+            let from = src.to_path_buf();
+            careful::bounded(careful::call_limit(0), &format!("opening {}", src.display()), move || fs::File::open(&from))?
+        } else {
+            fs::File::open(src)?
+        };
+        let mut careful_reader = if careful_source {
+            let stall = if shared.removable_source { careful::READ_STALL } else { careful::NETWORK_READ_STALL };
+            Some(careful::SourceReader::with_stall(src, input.try_clone()?, stall))
+        } else {
+            None
+        };
+        let mut output = if guarded {
+            let to = dst.to_path_buf();
+            careful::bounded(careful::call_limit(0), &format!("creating {}", dst.display()), move || fs::File::create(&to))?
+        } else {
+            fs::File::create(dst)?
+        };
         // Reserve the space up front where that really allocates (Windows). On
         // Unix, extending the length only makes a sparse file, which measured
         // slower to fill, so it is left out there.
@@ -2364,6 +2391,7 @@ mod tests {
             reading: Mutex::new((String::new(), Instant::now())),
             slow_source: false,
             removable_source: false,
+            network_source: false,
             network_dest: false,
             removable_dest: false,
             stage_room: u64::MAX,

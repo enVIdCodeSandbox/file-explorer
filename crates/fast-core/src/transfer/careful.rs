@@ -21,6 +21,13 @@ use std::time::{Duration, Instant};
 
 /// No answer to one read for this long counts as a stall.
 pub const READ_STALL: Duration = Duration::from_secs(8);
+/// Opening a file, or copying a small one in a single call, on a drive that may not answer: no answer for this long, plus
+/// time for the size at a very slow 256 KB/s, and the request is given up.
+pub fn call_limit(size: u64) -> Duration {
+    Duration::from_secs(45 + size / (256 * 1024))
+}
+/// One read from a network share may get no answer for this long (a card is given `READ_STALL`).
+pub const NETWORK_READ_STALL: Duration = Duration::from_secs(30);
 /// A write (or the push-out of written data) with no answer for this long means the destination has stopped answering.
 pub const WRITE_STALL: Duration = Duration::from_secs(60);
 /// No answer from a folder listing for this long counts as a stall.
@@ -331,6 +338,8 @@ pub struct SourceReader {
     /// Bytes handed out so far.
     pos: u64,
     tier: Tier,
+    /// How long one read may get no answer.
+    stall: Duration,
     scratch: Aligned,
     /// Bytes read ahead of `pos` by an unbuffered read that began before it, handed out first.
     carry: Vec<u8>,
@@ -339,7 +348,12 @@ pub struct SourceReader {
 impl SourceReader {
     /// `file` is the source already opened (read from its start).
     pub fn new(path: &Path, file: File) -> SourceReader {
-        SourceReader { path: path.to_path_buf(), file, pos: 0, tier: Tier::Normal, scratch: Aligned::new(UNBUFFERED), carry: Vec::new() }
+        SourceReader::with_stall(path, file, READ_STALL)
+    }
+
+    /// As `new`, with how long one read may get no answer (a network share is given longer than a card).
+    pub fn with_stall(path: &Path, file: File, stall: Duration) -> SourceReader {
+        SourceReader { path: path.to_path_buf(), file, pos: 0, tier: Tier::Normal, stall, scratch: Aligned::new(UNBUFFERED), carry: Vec::new() }
     }
 
     pub fn tier(&self) -> Tier {
@@ -424,7 +438,7 @@ impl Read for SourceReader {
         loop {
             let began = Instant::now();
             let what = format!("reading {} at {} MB", self.path.display(), self.pos / (1024 * 1024));
-            let watch = watch_read(READ_STALL, &what);
+            let watch = watch_read(self.stall, &what);
             let result = self.attempt(buf);
             let stalled = watch.as_ref().is_some_and(|w| w.fired());
             drop(watch);
@@ -659,6 +673,29 @@ pub fn bounded<T: Send + 'static>(limit: Duration, what: &str, f: impl FnOnce() 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_limit_grows_with_size_and_network_reads_wait_longer() {
+        assert_eq!(call_limit(0), Duration::from_secs(45));
+        assert!(call_limit(1 << 30) > call_limit(1 << 20));
+        assert!(NETWORK_READ_STALL > READ_STALL);
+    }
+
+    #[test]
+    fn reader_with_longer_stall_reads_the_same_bytes() {
+        use std::io::Read;
+        let dir = std::env::temp_dir().join(format!("fast-stall-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.bin");
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+        let mut r = SourceReader::with_stall(&path, std::fs::File::open(&path).unwrap(), NETWORK_READ_STALL);
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!(got, data);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use std::io::Write;
 
     fn pattern(len: usize) -> Vec<u8> {
