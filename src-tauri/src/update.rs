@@ -34,11 +34,39 @@ struct Memory {
     /// A downloaded build waiting for a restart.
     ready: Option<Ready>,
     last_check: i64,
+    /// An update that was handed to the installer: if the app comes back as the same build, it did not take.
+    applied: Option<Applied>,
+    /// The last update that did not take, with what is known about why. It is not downloaded and installed again by itself.
+    failed: Option<Failed>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Applied {
+    key: String,
+    target_version: Option<String>,
+    from_version: String,
+    from_sha: Option<String>,
+    exe: String,
+    installer: PathBuf,
+    result_file: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Failed {
+    pub key: String,
+    pub note: String,
+    pub installer: PathBuf,
+    pub from_version: String,
+    pub from_sha: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Ready {
+    #[serde(default)]
+    pub version: Option<String>,
     pub sha: String,
     pub installer: PathBuf,
     pub kind: InstallerKind,
@@ -69,6 +97,8 @@ pub struct Info {
     pub latest: Option<Latest>,
     pub ready: Option<Ready>,
     pub message: String,
+    /// The last update did not take effect (the app came back as the same build).
+    pub failed: Option<Failed>,
     /// A download needs an access token (or nightly.link) to work.
     pub token_set: bool,
     pub last_check: i64,
@@ -76,7 +106,7 @@ pub struct Info {
 
 fn info(st: &Shared, status: &'static str, latest: Option<Latest>, message: String) -> Info {
     let m = memory(st);
-    Info { status, version: env!("CARGO_PKG_VERSION"), sha: current_sha(), latest, ready: m.ready.filter(|r| r.installer.exists()), message, token_set: !st.settings.read().updates.token.is_empty(), last_check: m.last_check }
+    Info { status, version: env!("CARGO_PKG_VERSION"), sha: current_sha(), latest, ready: m.ready.filter(|r| r.installer.exists()), message, failed: m.failed, token_set: !st.settings.read().updates.token.is_empty(), last_check: m.last_check }
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +550,7 @@ fn download_and_unpack_inner(job: &Job, st: &Shared, latest: &Latest) -> Result<
         let _ = std::fs::remove_file(&zip_path);
         core::find_installer(&unpacked).ok_or("the build holds no installer for this computer")?
     };
-    Ok(Ready { sha: latest.key(), installer, kind, created_at: latest.created_at.clone() })
+    Ok(Ready { version: latest.version.clone(), sha: latest.key(), installer, kind, created_at: latest.created_at.clone() })
 }
 
 #[cfg(not(desktop))]
@@ -575,12 +605,26 @@ fn start_download(app: &AppHandle, st: &Shared, latest: Latest) -> CmdResult<u64
 fn apply(app: &AppHandle, st: &Shared, ready: &Ready) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let work = st.paths.update_dir.clone();
+    let result_file = work.join("last-install-result.txt");
+    let _ = std::fs::remove_file(&result_file);
+    // Written down before the app closes: if it comes back as this same build, the update did not take, and why is known.
+    remember(st, |m| {
+        m.applied = Some(Applied {
+            key: ready.sha.clone(),
+            target_version: ready.version.clone().or_else(|| ready.installer.file_name().and_then(|n| core::version_in_name(&n.to_string_lossy()))),
+            from_version: env!("CARGO_PKG_VERSION").to_string(),
+            from_sha: current_sha().map(str::to_string),
+            exe: exe.display().to_string(),
+            installer: ready.installer.clone(),
+            result_file: result_file.clone(),
+        })
+    });
     match ready.kind {
         InstallerKind::Nsis | InstallerKind::Msi if cfg!(windows) => {
             #[cfg(windows)]
             {
                 let script = work.join("finish-update.bat");
-                std::fs::write(&script, core::windows_script(&ready.installer, ready.kind, &exe)).map_err(|e| e.to_string())?;
+                std::fs::write(&script, core::windows_script(&ready.installer, ready.kind, &exe, &result_file)).map_err(|e| e.to_string())?;
                 let mut cmd = std::process::Command::new("cmd");
                 cmd.arg("/C").arg(&script);
                 fast_core::proc::quiet(&mut cmd);
@@ -599,7 +643,10 @@ fn apply(app: &AppHandle, st: &Shared, ready: &Ready) -> Result<(), String> {
             // .deb, .rpm, .dmg and the like: the system's installer takes over, with its own screens.
             let _ = &exe;
             fast_core::platform::open_path(&ready.installer).map_err(|e| e.to_string())?;
-            remember(st, |m| m.ready = None);
+            remember(st, |m| {
+                m.ready = None;
+                m.applied = None;
+            });
             return Ok(());
         }
     }
@@ -625,6 +672,10 @@ fn run_auto(app: &AppHandle, st: &Shared) {
         return;
     }
     let Some(latest) = result.latest.clone() else { return };
+    // An update that already failed to take effect is not fetched and installed again by itself, round and round.
+    if memory(st).failed.as_ref().is_some_and(|f| f.key == latest.key()) {
+        return;
+    }
     let (notify, auto) = {
         let u = &st.settings.read().updates;
         (u.notify, u.auto_download)
@@ -638,6 +689,43 @@ fn run_auto(app: &AppHandle, st: &Shared) {
     }
 }
 
+/// Did the update that was handed to the installer take effect? If this is the same build as before it, it did not: say so
+/// (with what the installer reported) and do not fetch the same one again. Otherwise the last failure, if any, is over.
+fn settle_pending(app: &AppHandle, st: &Shared) {
+    let m = memory(st);
+    let (version, sha) = (env!("CARGO_PKG_VERSION"), current_sha());
+    let unchanged = |v: &str, s: &Option<String>| v == version && s.as_deref() == sha;
+    if let Some(a) = m.applied.clone() {
+        if unchanged(&a.from_version, &a.from_sha) {
+            let code = std::fs::read_to_string(&a.result_file).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            let build = format!("{version}{}", sha.map(|s| format!(" ({})", &s[..s.len().min(7)])).unwrap_or_default());
+            let target = a.target_version.as_deref().map(|v| format!(" {v}")).unwrap_or_default();
+            // What the installer file itself says it contains tells the two likely causes apart.
+            let named = a.installer.file_name().and_then(|n| core::version_in_name(&n.to_string_lossy()));
+            let named_text = named.as_deref().map(|v| format!(" The installer file is named for version {v}.")).unwrap_or_default();
+            let note = match code.as_deref() {
+                Some("0") => format!("The installer reported success for the update{target}, but this app is still {build}. It was started from {}. Either the installer put the new version in another folder than the one this app runs from, or the published build itself is still {version}.{named_text}", a.exe),
+                Some(c) => format!("The installer for the update{target} stopped with code {c} and did not install it. Often another program was still using the files, or it needs administrator rights. This app is still {build}."),
+                None => format!("The installer for the update{target} did not report a result, so it did not run or did not finish. This app is still {build}."),
+            };
+            let failed = Failed { key: a.key.clone(), note, installer: a.installer.clone(), from_version: a.from_version.clone(), from_sha: a.from_sha.clone() };
+            remember(st, |m| {
+                m.applied = None;
+                m.failed = Some(failed);
+            });
+            let _ = app.emit("update-failed", info(st, "available", None, String::new()));
+        } else {
+            remember(st, |m| {
+                m.applied = None;
+                m.failed = None;
+            });
+        }
+    } else if m.failed.as_ref().is_some_and(|f| !unchanged(&f.from_version, &f.from_sha)) {
+        // Updated since (by hand, say): the earlier failure is over.
+        remember(st, |m| m.failed = None);
+    }
+}
+
 /// Looks once after the app opens, then every few hours while it stays open.
 pub fn start(app: &AppHandle, st: Shared) {
     if !cfg!(desktop) {
@@ -647,6 +735,7 @@ pub fn start(app: &AppHandle, st: Shared) {
     let _ = std::thread::Builder::new().name("updates".into()).spawn(move || {
         // Looks soon after the window is up, not half a minute later.
         std::thread::sleep(Duration::from_secs(3));
+        settle_pending(&app, &st);
         // A build that was downloaded and never installed is offered again.
         if let Some(r) = memory(&st).ready.filter(|r| r.installer.exists()) {
             let _ = app.emit("update-ready", info(&st, "available", None, String::new()));
@@ -713,6 +802,22 @@ pub fn update_install(app: AppHandle, state: State<'_, Shared>) -> CmdResult<()>
     let st = state.inner();
     let ready = memory(st).ready.filter(|r| r.installer.exists()).ok_or("There is no downloaded update to install.")?;
     apply(&app, st, &ready)
+}
+
+/// Run the installer of the update that did not take effect with its own screens, so that what it asks and where it
+/// installs can be seen. The app closes first if the installer needs it to (it asks).
+#[tauri::command]
+pub fn update_install_manual(state: State<'_, Shared>) -> CmdResult<()> {
+    let st = state.inner();
+    let m = memory(st);
+    let installer = m.failed.map(|f| f.installer).or_else(|| m.ready.map(|r| r.installer)).filter(|p| p.exists()).ok_or("The downloaded installer is gone. Use Check now and download the update again.")?;
+    fast_core::platform::open_path(&installer).map_err(|e| e.to_string())
+}
+
+/// Forget that the last update failed, so that it is offered (and downloaded) again.
+#[tauri::command]
+pub fn update_forget_failure(state: State<'_, Shared>) {
+    remember(state.inner(), |m| m.failed = None);
 }
 
 /// Remove a downloaded build that was not installed.

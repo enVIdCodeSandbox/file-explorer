@@ -711,7 +711,9 @@ pub async fn thumbs_prewarm(state: State<'_, Shared>, paths: Vec<String>, size: 
 pub async fn get_drives(state: State<'_, Shared>) -> CmdResult<Vec<Drive>> {
     let st = state.inner().clone();
     blocking(move || {
-        let list = drives::list_drives();
+        let mut list = drives::list_drives();
+        // Asked of each network server every time: a mapped drive looks fine long after its server has gone.
+        drives::check_network(&mut list);
         *st.drives.write() = list.clone();
         st.session.lock().drives = list.clone();
         Ok(list)

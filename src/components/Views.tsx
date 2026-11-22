@@ -130,6 +130,10 @@ export function DrivesView() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   const showSpace = appearance.showDriveSpace;
+  // Every time this page is shown the drives are read again, network ones included: is the server there?
+  useEffect(() => {
+    useStore.getState().refreshDrives();
+  }, []);
 
   // Local names are remembered with the system's name at the time. If the
   // drive is later renamed in the system, that newer name is shown instead.
@@ -182,6 +186,9 @@ export function DrivesView() {
     >
       <div className="section-head">
         <h2>{thisPcLabel(os)}</h2>
+        <button className="secondary reload-drives" data-spinning={!fresh || undefined} disabled={!fresh} title="Read the drives again and check that each network location can be reached (F5)" onClick={() => useStore.getState().refreshDrives()}>
+          <Icon name="refresh" size={13} /> {fresh ? "Reload" : "Checking…"}
+        </button>
         <label className="inline-toggle" title="Show how much space each drive has">
           <input
             type="checkbox"
@@ -213,7 +220,7 @@ export function DrivesView() {
           ))}
         </div>
       </div>
-      {!fresh && drives.length > 0 && <div className="loading-bar" title="Refreshing drive information" />}
+      {!fresh && drives.length > 0 && <div className="loading-bar" title="Refreshing drive information and checking the network locations" />}
       {groups.map(
         ([title, list]) =>
           list.length > 0 && (

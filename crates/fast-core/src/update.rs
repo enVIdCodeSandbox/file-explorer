@@ -343,14 +343,17 @@ pub fn version_newer(a: &str, b: &str) -> bool {
 /// The text of the script that finishes an update after the app has closed: install, then start the
 /// app again. Windows: a batch file that runs the setup program silently. Returns (file name, text).
 #[cfg(any(windows, test))]
-pub fn windows_script(installer: &Path, kind: InstallerKind, app_exe: &Path) -> String {
+pub fn windows_script(installer: &Path, kind: InstallerKind, app_exe: &Path, result_file: &Path) -> String {
     let install = match kind {
         InstallerKind::Msi => format!("msiexec /i \"{}\" /passive /norestart", installer.display()),
         _ => format!("\"{}\" /S", installer.display()),
     };
+    // The installer's exit code is written down (the redirection comes first: "echo 1> file" would redirect handle 1),
+    // so that the app can say what happened if it comes back as the same build. The wait lets the old app finish closing.
     format!(
-        "@echo off\r\nrem Finishes an update of FAST File Explorer.\r\nping -n 3 127.0.0.1 >nul\r\n{install}\r\nstart \"\" \"{app}\"\r\ndel \"%~f0\"\r\n",
-        app = app_exe.display()
+        "@echo off\r\nrem Finishes an update of FAST File Explorer.\r\nping -n 7 127.0.0.1 >nul\r\n{install}\r\n>\"{result}\" echo %errorlevel%\r\nstart \"\" \"{app}\"\r\ndel \"%~f0\"\r\n",
+        app = app_exe.display(),
+        result = result_file.display()
     )
 }
 
@@ -530,10 +533,12 @@ mod tests {
 
     #[test]
     fn scripts_install_then_start_the_app() {
-        let s = windows_script(Path::new(r"C:\tmp\fast setup.exe"), InstallerKind::Nsis, Path::new(r"C:\Apps\FAST\fast.exe"));
+        let s = windows_script(Path::new(r"C:\tmp\fast setup.exe"), InstallerKind::Nsis, Path::new(r"C:\Apps\FAST\fast.exe"), Path::new(r"C:\tmp\result.txt"));
+        assert!(s.contains(">\"C:\\tmp\\result.txt\" echo %errorlevel%"), "{s}");
+        assert!(s.find("/S").unwrap() < s.find("echo %errorlevel%").unwrap() && s.find("echo %errorlevel%").unwrap() < s.find("start \"\"").unwrap());
         assert!(s.contains("\"C:\\tmp\\fast setup.exe\" /S") && s.contains("start \"\" \"C:\\Apps\\FAST\\fast.exe\""), "{s}");
         assert!(s.find("/S").unwrap() < s.find("start \"\"").unwrap());
-        assert!(windows_script(Path::new("a.msi"), InstallerKind::Msi, Path::new("x.exe")).contains("msiexec /i"));
+        assert!(windows_script(Path::new("a.msi"), InstallerKind::Msi, Path::new("x.exe"), Path::new("r.txt")).contains("msiexec /i"));
         let a = appimage_script(Path::new("/tmp/it's new.AppImage"), Path::new("/home/me/FAST.AppImage"));
         assert!(a.contains("'/tmp/it'\\''s new.AppImage'") && a.contains("exec '/home/me/FAST.AppImage'"), "{a}");
     }

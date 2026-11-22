@@ -331,6 +331,8 @@ pub fn run() {
             update::update_download,
             update::update_install,
             update::update_discard,
+            update::update_install_manual,
+            update::update_forget_failure,
             commands::transfer_force_stop,
             commands::transfer_resolve,
             commands::check_access,

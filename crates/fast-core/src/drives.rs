@@ -235,6 +235,69 @@ pub fn parse_remote(device: &str) -> Option<Share> {
     Some(Share { share: share.to_string(), server: host.to_string(), remote: device.to_string() })
 }
 
+/// Can a connection be made to `host` on one of these ports within `wait`? For telling whether a network drive's server
+/// answers at all, which the drive's own (cached) state does not say.
+pub fn can_connect(host: &str, ports: &[u16], wait: std::time::Duration) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    for &port in ports {
+        let (tx, host) = (tx.clone(), host.to_string());
+        std::thread::spawn(move || {
+            // Looking the name up can take as long as the connection, so it is part of the wait too.
+            let ok = (host.as_str(), port)
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+                .is_some_and(|addr| TcpStream::connect_timeout(&addr, wait).is_ok());
+            let _ = tx.send(ok);
+        });
+    }
+    drop(tx);
+    let deadline = std::time::Instant::now() + wait + std::time::Duration::from_millis(300);
+    for _ in ports {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// The ports a share's file service listens on: SMB for `\\host\share`, NFS for `host:/path`.
+fn service_ports(remote: &str) -> &'static [u16] {
+    if remote.starts_with("\\\\") || remote.starts_with("//") {
+        &[445, 139]
+    } else {
+        &[2049, 111]
+    }
+}
+
+/// Mark each network drive that cannot be reached as offline: asked of the server, every time this is called, all at
+/// once (a drive that is mapped keeps looking fine for a while after its server has gone). Takes at most about two seconds.
+pub fn check_network(drives: &mut [Drive]) {
+    let wait = std::time::Duration::from_millis(1500);
+    let jobs: Vec<(usize, String, &'static [u16])> = drives
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.media == Media::Network && d.online)
+        .filter_map(|(i, d)| {
+            let share = parse_remote(d.remote.as_deref()?)?;
+            Some((i, share.server, service_ports(&share.remote)))
+        })
+        .collect();
+    let answers: Vec<(usize, bool)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs.iter().map(|(i, host, ports)| scope.spawn(move || (*i, can_connect(host, ports, wait)))).collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    for (i, ok) in answers {
+        if !ok {
+            drives[i].online = false;
+        }
+    }
+}
+
 /// The volume containing `path`: the drive with the longest matching mount point.
 pub fn volume_for<'a>(path: &Path, drives: &'a [Drive]) -> Option<&'a Drive> {
     drives
@@ -496,6 +559,17 @@ mod tests {
             name: mount.into(), mount: mount.into(), fs: "ext4".into(), total: 100, available: 50,
             media, removable: false, read_only: false, online: true, remote: None,
         }
+    }
+
+    #[test]
+    fn a_server_that_answers_is_reachable_and_one_that_does_not_is_not() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(can_connect("127.0.0.1", &[port], std::time::Duration::from_millis(1000)));
+        drop(l);
+        assert!(!can_connect("127.0.0.1", &[port], std::time::Duration::from_millis(500)));
+        assert_eq!(service_ports(r"\\nas\photos"), &[445, 139]);
+        assert_eq!(service_ports("nas:/export"), &[2049, 111]);
     }
 
     #[test]

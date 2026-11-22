@@ -245,6 +245,7 @@ function AppInner() {
         }),
       ),
       on("update-ready", () => void askToRestart()),
+      on("update-failed", (i) => void tellUpdateFailed(i.failed?.note ?? "")),
       on("budget-changed", (budget) => {
         document.documentElement.toggleAttribute("data-background", !!budget.background);
         useStore.setState({ budget });
@@ -658,4 +659,17 @@ export default function App() {
       <AppInner />
     </Suspense>
   );
+}
+
+/** The app came back as the same build after an update: say why, and offer to run the installer by hand. */
+async function tellUpdateFailed(note: string) {
+  const r = await ask({
+    title: "The update did not install",
+    message: `${note} It will not be downloaded again by itself.`,
+    buttons: [
+      { id: "manual", label: "Run the installer myself", primary: true },
+      { id: "close", label: "Close" },
+    ],
+  });
+  if (r?.button === "manual") await api.updateInstallManual().catch((e) => useStore.getState().notify("error", "Could not start the installer", String(e)));
 }

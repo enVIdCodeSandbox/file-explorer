@@ -1135,10 +1135,12 @@ export const useStore = create<State>((set, get) => ({
   },
 
   refreshDrives: () => {
+    // Network drives are asked again each time, which can take a moment: the page shows that it is checking.
+    set({ drivesFresh: false });
     void api
       .getDrives()
       .then((drives) => set({ drives, drivesFresh: true }))
-      .catch(() => {});
+      .catch(() => set({ drivesFresh: true }));
     void api
       .getDevices()
       .then((devices) => set({ devices }))

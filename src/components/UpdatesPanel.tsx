@@ -16,7 +16,7 @@ export function UpdatesPanel() {
 
   useEffect(() => {
     void api.updateStatus().then(setInfo).catch(() => {});
-    const offs = [on("update-ready", setInfo), on("update-available", setInfo)];
+    const offs = [on("update-ready", setInfo), on("update-available", setInfo), on("update-failed", setInfo)];
     return () => offs.forEach((o) => void Promise.resolve(o).then((f) => f?.()));
   }, []);
 
@@ -60,12 +60,27 @@ export function UpdatesPanel() {
       <p className={info.status === "error" ? "error-text" : "muted"}>
         {info.status === "available" ? "A newer build is available." : info.message || (enabled === false ? "Updates are turned off." : "")}
       </p>
+      {info.failed && (
+        <div className="update-failed" role="alert">
+          <strong>The last update did not install.</strong>
+          <p>{info.failed.note}</p>
+          <p className="muted">It is not downloaded again by itself. You can run the installer yourself and watch where it installs, or try the automatic update once more.</p>
+          <div className="row-buttons">
+            <button className="primary" disabled={busy != null} onClick={() => void run("install", api.updateInstallManual)}>
+              Run the installer myself
+            </button>
+            <button className="secondary" disabled={busy != null} onClick={() => void run("check", async () => { await api.updateForgetFailure(); return api.updateStatus(); })}>
+              Try the automatic update again
+            </button>
+          </div>
+        </div>
+      )}
       {error && <p className="error-text">{error}</p>}
       <div className="row-buttons">
         <button className="secondary" disabled={busy != null || enabled === false} onClick={() => void run("check", api.updateCheck)}>
           {busy === "check" ? "Checking…" : "Check now"}
         </button>
-        {newer && !info.ready && (
+        {newer && !info.ready && !info.failed && (
           <button className="primary" disabled={busy != null} onClick={() => void run("download", api.updateDownload)}>
             {busy === "download" ? "Starting…" : info.status === "unknown" ? "Install the newest build" : "Update now"}
           </button>

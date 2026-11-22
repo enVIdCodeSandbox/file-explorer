@@ -684,6 +684,7 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
     let mut files: Vec<Item> = Vec::new();
     let mut clash_possible = false;
     let mut timeouts = 0u32;
+    let phase1_began = Instant::now();
     for src in &spec.sources {
         if shared.cancelled() {
             break;
@@ -705,34 +706,19 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
             }
             dst = unique_name(&dst);
         }
-        // The first look at an item, and whether it already exists at the destination, are requests to the drives too: from or
-        // to a card, stick or network they are not waited for for ever, and the person can skip what is being waited for.
-        let careful_lookup = shared.slow_source || shared.network_dest || shared.removable_dest;
-        let looked = if careful_lookup {
-            let (one, target) = (src.clone(), dst.clone());
-            let skip_from = shared.skip_gen.load(Ordering::Relaxed);
-            careful::bounded_io(
-                careful::LIST_STALL,
-                &src.display().to_string(),
-                &|| shared.skip_gen.load(Ordering::Relaxed) != skip_from,
-                &|| shared.cancelled(),
-                &shared.stalled_lists,
-                move || {
-                    let meta = fs::symlink_metadata(&one)?;
-                    let exists = target.exists();
-                    Ok((meta, exists, exists && target.is_dir()))
-                },
-            )
-        } else {
-            fs::symlink_metadata(src).map(|m| {
-                let exists = dst.exists();
-                (m, exists, exists && dst.is_dir())
-            })
+        // The first look at an item, and whether it already exists at the destination, are requests to drives that can
+        // stop answering (a card in a camera, a share whose server is busy): they are not waited for for ever, the person
+        // can skip what is being waited for, and the log says which of the two it was.
+        let skip_from = shared.skip_gen.load(Ordering::Relaxed);
+        let (skipped, gone) = (|| shared.skip_gen.load(Ordering::Relaxed) != skip_from, || shared.cancelled());
+        let looked = {
+            let one = src.clone();
+            careful::bounded_io(careful::LIST_STALL, &format!("looking at {}", src.display()), &skipped, &gone, &shared.stalled_lists, move || fs::symlink_metadata(&one))
         };
-        let (meta, mut dst_exists, dst_is_dir) = match looked {
-            Ok(found) => {
+        let meta = match looked {
+            Ok(m) => {
                 timeouts = 0;
-                found
+                m
             }
             Err(e) => {
                 shared.error(src, &e);
@@ -747,6 +733,20 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
                 continue;
             }
         };
+        // Whether it is there already. If the destination does not answer, the copy goes on as if it were not: what is
+        // really there is found out when the file is written (and a destination that is truly down fails there, with a reason).
+        let (dst_exists, dst_is_dir) = {
+            let target = dst.clone();
+            careful::bounded_io(careful::LIST_STALL, &format!("looking for {} at the destination", dst.display()), &skipped, &gone, &shared.stalled_lists, move || {
+                let exists = target.exists();
+                Ok((exists, exists && target.is_dir()))
+            })
+            .unwrap_or_else(|e| {
+                crate::activity::note(crate::activity::Level::Warn, "copy", "destination did not answer", &format!("{}: {e}", dst.display()));
+                (false, false)
+            })
+        };
+        let mut dst_exists = dst_exists;
         // With "ask", files are decided one by one while the job runs (in `process`).
         if dst_exists {
             clash_possible = true;
@@ -778,6 +778,7 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
             files.push(Item { src: src.clone(), dst, size: meta.len() });
         }
     }
+    crate::activity::note(crate::activity::Level::Info, "copy", "looked at the selected items", &format!("{} item(s) in {} ms, {} to copy", spec.sources.len(), phase1_began.elapsed().as_millis(), tops.len()));
     let dir_tops: Vec<(PathBuf, PathBuf)> = tops.iter().filter(|t| t.is_dir).map(|t| (t.src.clone(), t.dst.clone())).collect();
     let _ = tx.send(Found::Tops { tops, renamed_all, clash_possible });
     if !files.is_empty() {
@@ -1262,7 +1263,7 @@ fn run(
 
         // ---- Progress ticker -------------------------------------------------
         let mut last = Instant::now();
-        let (mut last_bytes, mut last_files) = (0u64, renamed);
+        let mut last_bytes = 0u64;
         let (mut bps, mut fps) = (0f64, 0f64);
         let mut file_rate = FileRate::new();
         let mut tracker = EtaTracker::with_head_start(head_start);
@@ -1288,7 +1289,6 @@ fn run(
             }
             last = now;
             last_bytes = bytes;
-            last_files = files;
 
             let skipped = shared.skipped.load(Ordering::Relaxed);
             let errors = shared.error_count.load(Ordering::Relaxed);
@@ -1863,12 +1863,13 @@ fn slow_places(spec: &TransferSpec, drives: &[drives::Drive]) -> Vec<PathBuf> {
 
 /// Push what has been written out to the drive, and say so in the activity log when that takes a long time
 /// (the drive, or the network, is the slow part, not this program).
-fn flush_out(output: &fs::File, what: &str) {
+fn flush_out(output: &fs::File, what: &str) -> io::Result<()> {
     let t = Instant::now();
-    let _ = output.sync_data();
+    let r = output.sync_data();
     if t.elapsed() >= Duration::from_secs(5) {
         crate::activity::note(crate::activity::Level::Warn, "copy", "slow to take the data", &format!("{what}: the destination took {} s to accept the last 32 MB", t.elapsed().as_secs()));
     }
+    r
 }
 
 /// Files finished per second over the last few seconds. A rate taken over a moment is 0 while one big file is copied
@@ -2048,7 +2049,7 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
                         kernel_since_flush += n as u64;
                         if shared.flush_every() > 0 && kernel_since_flush >= shared.flush_every() {
                             kernel_since_flush = 0;
-                            flush_out(&output, "writing");
+                            let _ = flush_out(&output, "writing");
                         }
                         let now = Instant::now();
                         shared.model.lock().observe_chunk(n as u64, now.duration_since(chunk_start).as_secs_f64());
@@ -2078,7 +2079,7 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
         let written = output.stream_position_or(size);
         let _ = output.set_len(written);
         if shared.flush_every() > 0 {
-            flush_out(&output, "finishing");
+            let _ = flush_out(&output, "finishing");
         }
         let closing = Instant::now();
         drop(output);
@@ -2147,6 +2148,7 @@ fn pipelined_copy(input: &mut (dyn Read + Send), output: &mut fs::File, block: u
             }
         });
         let flush_every = shared.flush_every();
+        let guard_writes = flush_every > 0;
         let mut since_flush = 0u64;
         let result = (|| -> io::Result<bool> {
             loop {
@@ -2156,12 +2158,12 @@ fn pipelined_copy(input: &mut (dyn Read + Send), output: &mut fs::File, block: u
                 // The reader hanging up with nothing queued means the input is finished.
                 let Ok(next) = full_rx.recv() else { return Ok(true) };
                 let buf = next?;
-                output.write_all(&buf)?;
+                careful::guarded_write(guard_writes, "writing to the destination", || output.write_all(&buf))?;
                 shared.bytes_done.fetch_add(buf.len() as u64, Ordering::Relaxed);
                 since_flush += buf.len() as u64;
                 if flush_every > 0 && since_flush >= flush_every {
                     since_flush = 0;
-                    flush_out(output, "writing");
+                    careful::guarded_write(guard_writes, "pushing data out to the destination", || flush_out(output, "writing"))?;
                 }
                 let now = Instant::now();
                 shared.model.lock().observe_chunk(buf.len() as u64, now.duration_since(*chunk_start).as_secs_f64());

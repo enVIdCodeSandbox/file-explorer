@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 
 /// No answer to one read for this long counts as a stall.
 pub const READ_STALL: Duration = Duration::from_secs(8);
+/// A write (or the push-out of written data) with no answer for this long means the destination has stopped answering.
+pub const WRITE_STALL: Duration = Duration::from_secs(60);
 /// No answer from a folder listing for this long counts as a stall.
 pub const LIST_STALL: Duration = Duration::from_secs(20);
 /// Listing is slow enough to be worth telling the person about after this long.
@@ -221,6 +223,22 @@ impl Drop for ReadWatch {
         if let Ok(mut list) = armed().lock() {
             list.retain(|a| a.id != self.id);
         }
+    }
+}
+
+/// Runs one write to a drive that may stop answering. If it gets no answer for `WRITE_STALL`, the request is cancelled
+/// where the system allows (Windows) and the failure says what happened, instead of the copy waiting for ever.
+pub fn guarded_write<T>(on: bool, what: &str, call: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let watch = if on { watch_read(WRITE_STALL, what) } else { None };
+    let result = call();
+    let fired = watch.as_ref().is_some_and(|w| w.fired());
+    drop(watch);
+    match result {
+        Err(_) if fired => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "The destination stopped answering (nothing for 60 seconds), so this file was not finished. Check that the drive or share is reachable, then use Retry failed items.",
+        )),
+        r => r,
     }
 }
 
@@ -798,6 +816,14 @@ mod tests {
         let e = t.join().unwrap().unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::Interrupted);
         assert_eq!(stalled.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_guarded_write_passes_results_and_errors_through_when_nothing_stalls() {
+        assert_eq!(guarded_write(true, "test", || Ok(5)).unwrap(), 5);
+        let e = guarded_write(true, "test", || -> io::Result<()> { Err(io::Error::new(io::ErrorKind::BrokenPipe, "gone")) }).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(guarded_write(false, "test", || Ok(1)).unwrap(), 1);
     }
 
     #[test]

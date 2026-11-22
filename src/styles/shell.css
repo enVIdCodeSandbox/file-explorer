@@ -1130,3 +1130,10 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .graph-zoom .graph-span { margin-right: auto; }
 .speed-graph[data-zoomed] { cursor: grab; touch-action: none; }
 .speed-graph[data-zoomed]:active { cursor: grabbing; }
+
+.reload-drives { display: inline-flex; align-items: center; gap: 6px; }
+.reload-drives[data-spinning] svg { animation: refresh-turn-a .8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .reload-drives[data-spinning] svg { animation: none; } }
+
+.update-failed { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--danger, #d13438); border-radius: var(--radius); background: color-mix(in srgb, var(--danger, #d13438) 10%, transparent); display: flex; flex-direction: column; gap: 6px; }
+.update-failed p { margin: 0; }

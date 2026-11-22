@@ -947,6 +947,8 @@ export const api = {
   updateDownload: () => invoke<number>("update_download"),
   updateInstall: () => invoke<void>("update_install"),
   updateDiscard: () => invoke<void>("update_discard"),
+  updateInstallManual: () => invoke<void>("update_install_manual"),
+  updateForgetFailure: () => invoke<void>("update_forget_failure"),
   transferAdjust: (id: number, what: "speed" | "priority" | "time" | "startNow" | "skipFolder", value?: string, stop?: boolean) =>
     invoke<void>("transfer_adjust", { id, what, value, stop }),
   transferControl: (id: number, action: "pause" | "resume" | "cancel") =>
@@ -1109,6 +1111,8 @@ export interface UpdateInfo {
   latest: UpdateLatest | null;
   ready: { sha: string; createdAt: string; kind: string } | null;
   message: string;
+  /** The last update did not take effect: the app came back as the same build. */
+  failed?: { key: string; note: string; installer: string; fromVersion: string; fromSha: string | null } | null;
   tokenSet: boolean;
   lastCheck: number;
 }
@@ -1172,6 +1176,7 @@ export interface BackendEvents {
   "term-sessions": null;
   "update-available": UpdateInfo;
   "update-ready": UpdateInfo;
+  "update-failed": UpdateInfo;
   "transfer-progress": Progress;
   "delete-progress": DeleteProgress;
   "job-adopted": number[];
