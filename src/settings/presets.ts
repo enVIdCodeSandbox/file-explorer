@@ -331,6 +331,8 @@ const MAC_KEYS: Record<string, string> = {
   delete: "Ctrl+Backspace",
   newFolder: "Ctrl+Shift+N",
   properties: "Ctrl+I",
+  // Cmd+I is Get Info here, so inverting the selection keeps its numeric-keypad key and takes a second key.
+  invertSelection: "Ctrl+Shift+I",
   goUp: "Ctrl+ArrowUp",
   back: "Ctrl+[",
   forward: "Ctrl+]",

@@ -879,7 +879,7 @@ export function KeysPanel() {
   return (
     <div className="keys-panel">
       <p className="muted">
-        Every key and mouse button of the app is here. Click a key and press the keys you want (or a side button of your mouse), or choose them from a list with <b>Choose…</b>. Each shortcut can be turned off, and <b>Reset</b> brings back its own key. The side buttons of a mouse (Mouse4 goes back, Mouse5 goes forward) work like keys, and can be given to other commands too.
+        Every key and mouse button of the app is here. Click a key and press the keys you want (or a side button of your mouse), or choose them from a list with <b>Choose…</b>. Each shortcut can be set to nothing with <b>Clear</b>, or turned off for good with its switch (or <b>Turn off</b>) while keeping its key for later; <b>Reset</b> brings back its own key and turns it on. The side buttons of a mouse (Mouse4 goes back, Mouse5 goes forward) work like keys, and can be given to other commands too.
       </p>
       <div className="keys-tools">
         <input className="text-input" placeholder="Find a shortcut or a key…" aria-label="Find a shortcut" value={find} onChange={(e) => setFind(e.target.value)} />
@@ -938,6 +938,12 @@ export function KeysPanel() {
                     </button>
                     <button className="secondary" aria-expanded={picking === k.id} onClick={() => setPicking(picking === k.id ? null : k.id)}>
                       Choose…
+                    </button>
+                    <button className="link-button" disabled={!current} title="Leave this shortcut without any key (it does nothing until a key is chosen)" onClick={() => setBinding(k.id, "")}>
+                      Clear
+                    </button>
+                    <button className="link-button" title={on ? "Stop this shortcut from working, but remember its key" : "Let this shortcut work again"} onClick={() => setOn(k.id, !on)}>
+                      {on ? "Turn off" : "Turn on"}
                     </button>
                     <button className="link-button" disabled={!changed(k.id)} onClick={() => reset(k.id)}>
                       Reset

@@ -69,7 +69,8 @@ export const KEY_COMMANDS: KeyCommand[] = [
   c("toggleCheck", "Tick or untick the current item (with check boxes)", "Selecting", "list", "Space"),
   c("selectGroup", "Select by pattern", "Selecting", "list", "Num+"),
   c("deselectGroup", "Unselect by pattern", "Selecting", "list", "Num-"),
-  c("invertSelection", "Invert the selection", "Selecting", "list", "Num*"),
+  c("invertSelection", "Invert the selection (nothing selected: select everything)", "Selecting", "list", "Ctrl+I"),
+  c("invertSelectionAlt", "Invert the selection (second key)", "Selecting", "list", "Num*"),
   c("restoreSelection", "Bring back the earlier selection", "Selecting", "list", "Num/"),
 
   // Files and folders

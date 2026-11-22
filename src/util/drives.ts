@@ -2,6 +2,7 @@
 // the drive here, and optionally without the server address.
 
 import type { Drive, Settings } from "../api";
+import { formatSize } from "./format";
 
 type Appearance = Settings["appearance"];
 
@@ -49,4 +50,24 @@ export function driveName(d: Drive, a: Appearance): string {
 export function driveRemote(d: Drive, a: Appearance): string | null {
   if (!d.remote || hidesAddress(d, a)) return null;
   return d.remote;
+}
+
+/** Which kinds of drive the person chose to see (local drives, network drives), in the navigation pane and on This PC. */
+export function visibleDrives(drives: Drive[], a: Pick<Appearance, "showLocalDrives" | "showNetworkDrives">): Drive[] {
+  const local = a.showLocalDrives ?? true;
+  const network = a.showNetworkDrives ?? true;
+  return drives.filter((d) => (d.media === "network" ? network : local));
+}
+
+/** How full a drive is, for a bar: how much of the bar to fill (the used or the free share, as chosen), and a short figure. */
+export function driveSpace(d: Drive, metric: "used" | "free"): { fraction: number; text: string; nearlyFull: boolean; known: boolean } {
+  const known = d.online && d.total > 0;
+  const used = Math.max(0, d.total - d.available);
+  const usedFraction = known ? Math.min(1, used / d.total) : 0;
+  return {
+    known,
+    nearlyFull: usedFraction > 0.9,
+    fraction: metric === "used" ? usedFraction : 1 - usedFraction,
+    text: known ? (metric === "used" ? `${formatSize(used)} used` : `${formatSize(d.available)} free`) : "",
+  };
 }

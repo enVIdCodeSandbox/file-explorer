@@ -6,6 +6,7 @@ import { useDragView } from "../dnd";
 import { api, type OpenApp, type OpenChoices } from "../api";
 import { useStore, type DialogRequest } from "../store";
 import { formatDate, formatSize } from "../util/format";
+import { looksLikeError } from "../util/errorText";
 import { Thumb } from "./Thumb";
 import { baseName } from "../util/path";
 import { pickFile } from "../util/pickFile";
@@ -38,17 +39,19 @@ export function Dialog() {
   const dialog = useStore((s) => s.dialog);
   const [input, setInput] = useState("");
   const [selected, setSelected] = useState("");
+  const [secret, setSecret] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setInput(dialog?.input ?? "");
     setSelected(dialog?.select?.options[0]?.value ?? "");
+    setSecret("");
     if (dialog?.input != null) setTimeout(() => inputRef.current?.select(), 0);
   }, [dialog]);
 
   if (!dialog) return null;
   const primary = dialog.buttons.find((b) => b.primary) ?? dialog.buttons[0];
-  const choose = (button: string) => dialog.resolve({ button, input, selected });
+  const choose = (button: string) => dialog.resolve({ button, input, selected, secret });
 
   return (
     <div className="modal-backdrop" onMouseDown={() => dialog.resolve(null)}>
@@ -69,7 +72,16 @@ export function Dialog() {
         {dialog.message && !dialog.compare && <p className="dialog-message">{dialog.message}</p>}
         {dialog.message && dialog.compare && <p className="dialog-message muted">{dialog.compare.here.path}</p>}
         {dialog.input != null && (
-          <input ref={inputRef} className="text-input" value={input} autoFocus onChange={(e) => setInput(e.target.value)} />
+          <label className="dialog-select" data-stacked={dialog.inputLabel ? true : undefined}>
+            {dialog.inputLabel && <span className="muted">{dialog.inputLabel}</span>}
+            <input ref={inputRef} className="text-input" value={input} autoFocus autoComplete="off" onChange={(e) => setInput(e.target.value)} />
+          </label>
+        )}
+        {dialog.secret && (
+          <label className="dialog-select" data-stacked>
+            <span className="muted">{dialog.secret.label}</span>
+            <input className="text-input" type="password" value={secret} autoComplete="off" onChange={(e) => setSecret(e.target.value)} />
+          </label>
         )}
         {dialog.select && (
           <label className="dialog-select">
@@ -102,9 +114,18 @@ export function Dialog() {
 export function Toast() {
   const toast = useStore((s) => s.toast);
   if (!toast) return null;
+  // A message about something that went wrong opens the activity log when clicked (what happened, and for how long).
+  const problem = looksLikeError(toast);
   return (
-    <div className="toast" role="status" onClick={() => useStore.setState({ toast: null })}>
+    <div
+      className="toast"
+      role="status"
+      data-problem={problem || undefined}
+      title={problem ? "Click to see the activity log" : "Click to dismiss"}
+      onClick={() => (problem ? useStore.getState().openActivityLog() : useStore.setState({ toast: null }))}
+    >
       {toast}
+      {problem && <span className="toast-hint">Click for the activity log</span>}
     </div>
   );
 }

@@ -131,6 +131,7 @@ export function SplitPane({ slot, leftFolder }: { slot: number; leftFolder: stri
     else if (is("open") && entries?.[i]) open(entries[i]);
     else if (is("goUpList")) up();
     else if (is("selectAll")) setPicked(new Set((entries ?? []).map((x) => x.name)));
+    else if (is("invertSelection") || is("invertSelectionAlt")) setPicked(new Set((entries ?? []).filter((x) => !picked.has(x.name)).map((x) => x.name)));
     else if (is("copyToOtherPane")) transfer("copy", "this");
     else if (is("moveToOtherPane")) transfer("move", "this");
     else if (is("delete") && chosen.length) void deletePaths(chosen, e.shiftKey).then(() => store().bumpDirs([path]));

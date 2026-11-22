@@ -28,14 +28,56 @@ export async function mapNetworkDrive(drives: Drive[], auto: boolean, os: string
     ],
   });
   if (!r || r.button !== "ok" || !r.input.trim()) return;
-  try {
-    const mount = await api.networkMap(r.input.trim(), auto || !windows ? null : r.selected || null);
+  const remote = r.input.trim();
+  const letter = auto || !windows ? null : r.selected || null;
+  const done = (mount: string | null) => {
     showToast("Connected.");
     refreshDrives();
     if (mount) useStore.getState().navigate(mount);
+  };
+  try {
+    done(await api.networkMap(remote, letter));
+    return;
   } catch (e) {
-    showToast(String(e));
+    if (!windows || !needsSignIn(String(e))) return void showToast(explainNetError(String(e)));
   }
+  // Windows would have asked for a name and password itself, but not with no console to ask on: ask here and try again.
+  let note = "That location asks you to sign in.";
+  for (let tries = 0; tries < 3; tries++) {
+    const who = await ask({
+      title: "Sign in to connect",
+      message: `${note} Enter a user name and password for ${remote}. For a computer in a domain, use DOMAIN\\name.`,
+      input: "",
+      inputLabel: "User name",
+      secret: { label: "Password" },
+      buttons: [
+        { id: "ok", label: "Connect", primary: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (!who || who.button !== "ok" || !who.input.trim()) return;
+    try {
+      return done(await api.networkMap(remote, letter, who.input.trim(), who.secret));
+    } catch (e) {
+      if (!needsSignIn(String(e))) return void showToast(explainNetError(String(e)));
+      note = "That name or password was not accepted.";
+    }
+  }
+  showToast("That name or password was not accepted.");
+}
+
+/** Windows' own error numbers for "who are you?": not signed in, wrong name or password, the sign-in was cancelled. */
+export function needsSignIn(message: string): boolean {
+  if (/system error 1219\b/i.test(message)) return false; // already connected under another name: signing in again cannot help
+  return /system error (5|86|1203|1223|1244|1312|1326|1331|1909|2220)\b/i.test(message) || /logon failure|password is not correct|access is denied/i.test(message);
+}
+
+/** Say what a `net use` error means. */
+export function explainNetError(message: string): string {
+  if (/system error 1219\b/i.test(message)) return "Windows already has a connection to that computer under another user name. Disconnect the other connection first, then try again.";
+  if (/system error 53\b/i.test(message)) return "Windows could not find that computer or share. Check the name, and that the computer is on and reachable.";
+  if (/system error 67\b/i.test(message)) return "That computer was found, but it has no share with that name.";
+  return message;
 }
 
 export function disconnectDrive(d: Drive) {

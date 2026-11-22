@@ -889,7 +889,7 @@ export function FileView({ path }: { path: string }) {
     else if (is("openNewTab") && first?.isDir) newTab(fullPath(first.name), { background: true });
     else if (is("selectGroup")) setGroup("select");
     else if (is("deselectGroup")) setGroup("deselect");
-    else if (is("invertSelection")) setSelected(new Set(entries.filter((x) => !selected.has(x.name)).map((x) => x.name)));
+    else if (is("invertSelection") || is("invertSelectionAlt")) setSelected(new Set(entries.filter((x) => !selected.has(x.name)).map((x) => x.name)));
     else if (is("restoreSelection")) restoreSelection();
     else if (is("view") && first && !first.isDir) viewFile(first, false);
     else if (is("rename") && first) startRename();

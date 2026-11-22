@@ -24,7 +24,12 @@ function NoticeRow({ n, popup }: { n: Notice; popup?: boolean }) {
     <div className={`notice-block${popup ? " notice-popup" : ""}`} data-kind={n.kind} data-open={open || undefined}>
       <div className="notice" data-kind={n.kind} role={popup ? "status" : undefined}>
         <Icon name={ICON[n.kind]} size={14} />
-        <div className="grow">
+        <div
+          className="grow"
+          data-link={n.kind === "error" || undefined}
+          title={n.kind === "error" ? "Click to see the activity log" : undefined}
+          onClick={n.kind === "error" ? () => useStore.getState().openActivityLog() : undefined}
+        >
           <div>{n.title}</div>
           {n.detail && <div className="muted">{n.detail}</div>}
         </div>

@@ -2139,8 +2139,30 @@ pub async fn create_item(
         if name.is_empty() || name.contains(['/', '\\']) {
             return Err(format!("invalid name: {name:?}"));
         }
-        let target = transfer::engine::unique_name(&Path::new(&dir).join(&name));
-        if folder { entry::create_dir(&target) } else { entry::create_file(&target) }.map_err(err)?;
+        // A share that stops answering on one folder must not leave this waiting for the system's own timeout (about
+        // 40 seconds, then an error with no explanation): each step is given 25 seconds and the failure says what stuck.
+        let wait = std::time::Duration::from_secs(25);
+        let stuck = |step: &str| {
+            format!(
+                "\"{dir}\" did not answer for {} seconds while {step}. The share or the server is stuck on this folder, not the app. Try making a folder somewhere else on the share: if that works, check this folder on the server (the disk it is on, a program using it such as a backup job, or very many files in it).",
+                wait.as_secs()
+            )
+        };
+        let wanted = Path::new(&dir).join(&name);
+        let target = transfer::careful::bounded(wait, "checking the name", move || Ok(transfer::engine::unique_name(&wanted)))
+            .map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { stuck("checking the name") } else { err(e) })?;
+        let make = target.clone();
+        let made = transfer::careful::bounded(wait, "creating the item", move || {
+            if folder { entry::create_dir(&make) } else { entry::create_file(&make) }.map_err(|e| match &e {
+                fast_core::error::CoreError::Io { source, .. } => std::io::Error::new(source.kind(), format!("{e}{}", e.hint().map(|h| format!(" {h}")).unwrap_or_default())),
+                _ => std::io::Error::other(e.to_string()),
+            })
+        });
+        match made {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err(stuck("creating it")),
+            Err(e) => return Err(e.to_string()),
+        }
         fs_changed(&app, &st, vec![PathBuf::from(dir)]);
         Ok(target.to_string_lossy().into_owned())
     })
@@ -3256,7 +3278,7 @@ fn run_tool(program: &str, args: &[&str]) -> CmdResult<String> {
 /// "Z:", or a free one when empty); macOS mounts it under /Volumes; Linux
 /// mounts it through the desktop's GVFS. Returns a folder to open, if known.
 #[tauri::command]
-pub async fn network_map(app: AppHandle, state: State<'_, Shared>, remote: String, letter: Option<String>) -> CmdResult<Option<String>> {
+pub async fn network_map(app: AppHandle, state: State<'_, Shared>, remote: String, letter: Option<String>, user: Option<String>, password: Option<String>) -> CmdResult<Option<String>> {
     #[cfg(windows)]
     {
         let st = state.inner().clone();
@@ -3266,7 +3288,17 @@ pub async fn network_map(app: AppHandle, state: State<'_, Shared>, remote: Strin
         }
         blocking(move || {
             let target = letter.filter(|l| !l.is_empty()).unwrap_or_else(|| "*".into());
-            run_net(&["use", &target, &remote, "/persistent:yes"])?;
+            // `net use` asks for a name and password on its console, and there is none here (the window is hidden), so it
+            // gives up at once with "error 1223". The person is asked in the app and the answer is handed over here.
+            let user = user.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+            let mut args: Vec<String> = vec!["use".into(), target, remote];
+            if let Some(user) = user {
+                // The password goes before the switches, as `net use` wants it; an empty one is given as "" (a blank password).
+                args.push(password.unwrap_or_default());
+                args.push(format!("/user:{user}"));
+            }
+            args.push("/persistent:yes".into());
+            run_net(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
             *st.drives.write() = fast_core::drives::list_drives();
             Ok(())
         })
@@ -3276,7 +3308,7 @@ pub async fn network_map(app: AppHandle, state: State<'_, Shared>, remote: Strin
     }
     #[cfg(not(windows))]
     {
-        let _ = letter;
+        let _ = (letter, user, password);
         let st = state.inner().clone();
         let opened = blocking(move || {
             let url = smb_url(&remote)?;

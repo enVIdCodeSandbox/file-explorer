@@ -562,6 +562,10 @@ export interface Settings {
     showPinned: boolean;
     showDrives: boolean;
     showDriveSpace: boolean;
+    /** A bar under each drive in the navigation pane (off by default); used or free follows `driveMetric`. */
+    sidebarDriveSpace: boolean;
+    showLocalDrives: boolean;
+    showNetworkDrives: boolean;
     hideNetworkAddress: boolean;
     driveNames: Record<string, DriveName>;
     layout: unknown;
@@ -988,7 +992,7 @@ export const api = {
   termTranscript: (sid: string, forget: boolean) => invoke<string | null>("term_transcript", { sid, forget }),
   termSweepTranscripts: (keep: string[]) => invoke<void>("term_sweep_transcripts", { keep }),
   columnValues: (dir: string, names: string[], keys: string[]) => invoke<{ name: string; values: Record<string, string> }[]>("column_values", { dir, names, keys }),
-  networkMap: (remote: string, letter: string | null) => invoke<string | null>("network_map", { remote, letter }),
+  networkMap: (remote: string, letter: string | null, user?: string, password?: string) => invoke<string | null>("network_map", { remote, letter, user: user || null, password: password || null }),
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
   driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),
   renameItem: (path: string, newName: string) => invoke<string>("rename_item", { path, newName }),

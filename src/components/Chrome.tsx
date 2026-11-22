@@ -24,7 +24,8 @@ import {
 } from "../store";
 import { adv } from "../settings/advanced";
 import { commandById, commandsFor, keyFor } from "../settings/keys";
-import { driveName, driveRemote, hidesAddress } from "../util/drives";
+import { formatSize } from "../util/format";
+import { driveName, driveRemote, driveSpace, hidesAddress, visibleDrives } from "../util/drives";
 import { deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { isFiltering, toSearchQuery } from "../util/filter";
 import {
@@ -970,7 +971,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       { id: "newTab", label: "New tab", shortcut: sk("newTab"), separatorBefore: true, run: () => useStore.getState().newTab() },
       { id: "selectAll", label: "Select all", shortcut: sk("selectAll"), disabled: !inFolder, run: () => useStore.getState().runCommand("selectAll") },
       { id: "selectNone", label: "Select none", disabled: !inFolder, run: () => useStore.getState().runCommand("selectNone") },
-      { id: "invert", label: "Invert selection", disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
+      { id: "invert", label: "Invert selection", shortcut: sk("invertSelection"), disabled: !inFolder, run: () => useStore.getState().runCommand("invert") },
       { id: "selectGroup", label: "Select group…", shortcut: sk("selectGroup"), disabled: !inFolder, run: () => useStore.getState().runCommand("selectGroup") },
       { id: "deselectGroup", label: "Unselect group…", shortcut: sk("deselectGroup"), disabled: !inFolder, run: () => useStore.getState().runCommand("deselectGroup") },
       { id: "restoreSelection", label: "Restore selection", shortcut: sk("restoreSelection"), disabled: !inFolder, run: () => useStore.getState().runCommand("restoreSelection") },
@@ -1223,7 +1224,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
     label: string,
     target: string,
     icon: React.ReactNode,
-    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload; onOpen?: () => void; navId?: NavId; pathMenu?: MenuTarget },
+    extra?: { isFile?: boolean; menu?: MenuItem[]; sub?: string; space?: { fraction: number; text: string; nearlyFull: boolean }; tip?: string; drop?: string; pinIndex?: number; drag?: DragPayload; onOpen?: () => void; navId?: NavId; pathMenu?: MenuTarget },
   ) => (
     <button
       key={key}
@@ -1255,7 +1256,17 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
       }}
     >
       {icon}
-      {!collapsed && <span className="side-label">{label}</span>}
+      {!collapsed && extra?.space ? (
+        <span className="side-text">
+          <span className="side-label">{label}</span>
+          <span className="side-meter" role="img" aria-label={extra.space.text} data-nearly-full={extra.space.nearlyFull || undefined}>
+            <span style={{ width: `${Math.round(extra.space.fraction * 1000) / 10}%` }} />
+          </span>
+        </span>
+      ) : (
+        !collapsed && <span className="side-label">{label}</span>
+      )}
+      {!collapsed && extra?.space && <span className="side-space">{extra.space.text}</span>}
       {!collapsed && extra?.sub && <span className="side-sub">{extra.sub}</span>}
     </button>
   );
@@ -1274,6 +1285,13 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
           checked: current === n,
           run: () => updateSettings((st) => void (st.advanced = { ...st.advanced, [rowsKey]: n })),
         })),
+        ...(flag === "showDrives"
+          ? [
+              { id: "showLocal", label: "Show local drives", checked: appearance.showLocalDrives, separatorBefore: true, run: () => updateSettings((st) => void (st.appearance.showLocalDrives = !st.appearance.showLocalDrives)) },
+              { id: "showNetwork", label: "Show network drives", checked: appearance.showNetworkDrives, run: () => updateSettings((st) => void (st.appearance.showNetworkDrives = !st.appearance.showNetworkDrives)) },
+              { id: "showSpace", label: "Show space under each drive", checked: appearance.sidebarDriveSpace, run: () => updateSettings((st) => void (st.appearance.sidebarDriveSpace = !st.appearance.sidebarDriveSpace)) },
+            ]
+          : []),
         ...(flag === "showDrives" ? networkMenuItems(drives, info?.os, appearance).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)) : []),
         { id: "hide", label: "Hide this section", separatorBefore: true, run: () => updateSettings((st) => void (st.appearance[flag] = false)) },
       ],
@@ -1491,11 +1509,12 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
           {heading("Drives", "sidebar.drivesRows", "showDrives", "drives")}
           {!folded.has("drives") && section(
             "sidebar.drivesRows",
-            [...navRows("drives"), ...drives.map((d) =>
+            [...navRows("drives"), ...visibleDrives(drives, appearance).map((d) =>
               item(`drive-${d.mount}`, driveName(d, appearance), d.mount, driveIcon(d), {
+                space: appearance.sidebarDriveSpace && d.online && d.total > 0 ? driveSpace(d, appearance.driveMetric) : undefined,
                 drop: d.online ? "folder" : undefined,
                 sub: d.online ? undefined : d.removable ? "no media" : "offline",
-                tip: `${driveName(d, appearance)}\n${hidesAddress(d, appearance) ? maskAddresses(d.mount, true) : d.mount}${driveRemote(d, appearance) ? `\n${d.remote}` : ""}`,
+                tip: `${driveName(d, appearance)}\n${hidesAddress(d, appearance) ? maskAddresses(d.mount, true) : d.mount}${driveRemote(d, appearance) ? `\n${d.remote}` : ""}${appearance.sidebarDriveSpace && d.online && d.total > 0 ? `\n${driveSpace(d, appearance.driveMetric).text} of ${formatSize(d.total)}` : ""}`,
                 menu: [
                   { id: "open", label: "Open", run: () => navigate(d.mount), disabled: !d.online },
                   ...driveMenuItems(d, { os: info?.os, drives, appearance }).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),

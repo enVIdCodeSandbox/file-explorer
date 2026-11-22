@@ -50,6 +50,7 @@ import { viewLevelOf } from "./util/viewLevel";
 import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
 import { isFiltering } from "./util/filter";
+import { looksLikeError } from "./util/errorText";
 
 /** The columns shown by default: what was chosen last, or the widths saved before columns could be chosen. */
 function loadColumnSet(): ColumnSet {
@@ -141,12 +142,16 @@ export interface DialogRequest {
   message?: string;
   /** Present for text prompts. */
   input?: string;
+  /** What the text box is for (shown above it), when it is not obvious from the message. */
+  inputLabel?: string;
+  /** A second box under the text box for a password (what is typed is hidden). */
+  secret?: { label: string };
   /** An extra drop-down under the text box. */
   select?: { label: string; options: { value: string; label: string }[] };
   buttons: { id: string; label: string; primary?: boolean; danger?: boolean }[];
   /** Two files shown side by side with a picture of each (the "already exists" question). */
   compare?: { name: string; here: { path: string; size: number; modified: number | null }; incoming: { path: string; size: number; modified: number | null } };
-  resolve: (result: { button: string; input: string; selected: string } | null) => void;
+  resolve: (result: { button: string; input: string; selected: string; secret: string } | null) => void;
 }
 
 /** Asks for the Connect to server dialog, optionally with fields filled in. */
@@ -408,6 +413,8 @@ interface State {
   pushUndo: (a: UndoAction) => void;
   startTransfer: (sources: string[], destDir: string, op: TransferOp) => Promise<void>;
   showToast: (message: string) => void;
+  /** Open Settings at the activity log (what an error message links to). */
+  openActivityLog: () => void;
   notify: (kind: NoticeKind, title: string, detail?: string, more?: { facts?: [string, string][]; names?: string[]; actions?: { label: string; run: () => void }[]; seconds?: number; important?: boolean }) => void;
   /** Where Settings should open (a section name), and which crash log Storage should show, when opened from a notice. */
   settingsSection: string;
@@ -1714,7 +1721,12 @@ export const useStore = create<State>((set, get) => ({
   showToast: (toast) => {
     set({ toast });
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => set({ toast: null }), 5000);
+    // A message about something that went wrong stays a little longer: it can be clicked to open the activity log.
+    toastTimer = setTimeout(() => set({ toast: null }), looksLikeError(toast) ? 9000 : 5000);
+  },
+  openActivityLog: () => {
+    set({ settingsSection: "Logs", toast: null, noticesOpen: false });
+    get().openSettings();
   },
 }));
 
@@ -1900,7 +1912,7 @@ async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
 }
 
 /** Show a modal with buttons; resolves with the chosen button or null. */
-export function ask(req: Omit<DialogRequest, "resolve">): Promise<{ button: string; input: string; selected: string } | null> {
+export function ask(req: Omit<DialogRequest, "resolve">): Promise<{ button: string; input: string; selected: string; secret: string } | null> {
   return new Promise((resolve) => {
     useStore.setState({
       dialog: {

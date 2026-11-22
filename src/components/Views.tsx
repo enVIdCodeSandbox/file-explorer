@@ -10,7 +10,7 @@ import { levelHits } from "../util/levelSearch";
 import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
 import { ask, compressPaths, deletePaths, extractArchive, isArchiveName, openFile, promptText, renamePath, thisPcLabel, useStore } from "../store";
 import { sameShell, useShellItems } from "./shellMenu";
-import { driveLetter, driveName, driveRemote, hidesAddress, withoutLetter } from "../util/drives";
+import { driveLetter, driveName, driveRemote, hidesAddress, visibleDrives, withoutLetter } from "../util/drives";
 import { iconMenuItems } from "./IconPicker";
 import { driveSlot } from "../util/customIcons";
 import { deviceSlot, deviceTarget, driveTarget } from "../util/iconTarget";
@@ -172,9 +172,10 @@ export function DrivesView() {
     ["Other devices", devices.filter((d) => !isMainDevice(d))],
   ];
 
+  const shown = visibleDrives(drives, appearance);
   const groups: [string, Drive[]][] = [
-    ["Devices and drives", drives.filter((d) => d.media !== "network")],
-    ["Network locations", drives.filter((d) => d.media === "network")],
+    ["Devices and drives", shown.filter((d) => d.media !== "network")],
+    ["Network locations", shown.filter((d) => d.media === "network")],
   ];
 
   return (
@@ -198,6 +199,14 @@ export function DrivesView() {
           />
           Show space
         </label>
+        <div className="segmented" role="group" aria-label="Which drives to show">
+          <button title="Show the drives of this computer" aria-pressed={appearance.showLocalDrives} data-on={appearance.showLocalDrives || undefined} onClick={() => updateSettings((s) => void (s.appearance.showLocalDrives = !s.appearance.showLocalDrives))}>
+            Local
+          </button>
+          <button title="Show network drives and locations" aria-pressed={appearance.showNetworkDrives} data-on={appearance.showNetworkDrives || undefined} onClick={() => updateSettings((s) => void (s.appearance.showNetworkDrives = !s.appearance.showNetworkDrives))}>
+            Network
+          </button>
+        </div>
         <div className="segmented" role="group" aria-label="Drive display">
           {(["bar", "donut"] as const).map((c) => (
             <button
@@ -221,6 +230,7 @@ export function DrivesView() {
           ))}
         </div>
       </div>
+      {!appearance.showLocalDrives && !appearance.showNetworkDrives && <p className="muted">Local drives and network drives are both hidden. Turn one back on above.</p>}
       {!fresh && drives.length > 0 && <div className="loading-bar" title="Refreshing drive information and checking the network locations" />}
       {groups.map(
         ([title, list]) =>
@@ -580,6 +590,7 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
     else if (is("delete") && paths.length) void deletePaths(paths, e.shiftKey);
     else if (is("clearSelection")) setSelected(new Set());
     else if (is("selectAll")) setSelected(new Set(hits.map((h) => h.path)));
+    else if (is("invertSelection") || is("invertSelectionAlt")) setSelected(new Set(hits.filter((h) => !selected.has(h.path)).map((h) => h.path)));
     else if (is("copy") && paths.length) setClipboard({ paths, op: "copy" });
     else if (is("cut") && paths.length) setClipboard({ paths, op: "move" });
     else if (is("paste")) paste();

@@ -152,6 +152,13 @@ pub struct Appearance {
     pub show_drives: bool,
     /// This PC: show how much space each drive has (on by default).
     pub show_drive_space: bool,
+    /// The navigation pane's drive list: a bar under each drive showing its space (off by default). What the bar
+    /// shows, used or free, follows `drive_metric`, the choice made on the This PC page.
+    pub sidebar_drive_space: bool,
+    /// Drives built into this computer, in the navigation pane and on This PC.
+    pub show_local_drives: bool,
+    /// Network drives and shares, in the navigation pane and on This PC.
+    pub show_network_drives: bool,
     /// Hide the server address (like "\\\\192.168.1.5") in network drive names and paths.
     pub hide_network_address: bool,
     /// Names the person gave drives inside this app, keyed by mount point.
@@ -231,6 +238,9 @@ impl Default for Appearance {
             show_pinned: true,
             show_drives: true,
             show_drive_space: true,
+            sidebar_drive_space: false,
+            show_local_drives: true,
+            show_network_drives: true,
             hide_network_address: true,
             drive_names: Default::default(),
             layout: serde_json::Value::Null,
