@@ -51,6 +51,7 @@ import { setAddressPrivacy, setDeviceNames } from "./util/path";
 import { snapshotOf } from "./settings/presets";
 import { isFiltering } from "./util/filter";
 import { looksLikeError } from "./util/errorText";
+import { pausableTransfers } from "./util/bulkJobs";
 
 /** The columns shown by default: what was chosen last, or the widths saved before columns could be chosen. */
 function loadColumnSet(): ColumnSet {
@@ -399,6 +400,8 @@ interface State {
   forceStop: (kind: "transfer" | "delete", id: number, quiet?: boolean) => void;
   /** Let go of every running job and drop every paste waiting in line (except the one job `keep` names, "transfer-12" / "delete-12"). Returns how many were stopped. */
   stopAllJobs: (keep?: string) => number;
+  /** Pause every running copy and move (true), or resume every paused one (false). Returns how many were asked. */
+  pauseAllJobs: (pause: boolean) => number;
   dismissTransfer: (id: number) => void;
   dismissDelete: (id: number) => void;
   /** A job that ended cleanly: its card goes away at once and its final state is kept until the app closes. */
@@ -1445,6 +1448,16 @@ export const useStore = create<State>((set, get) => ({
       );
     }
     return stopped + waiting;
+  },
+
+  pauseAllJobs: (pause) => {
+    const targets = pausableTransfers(get().transfers, pause);
+    // A job that cannot be reached is skipped quietly: one toast for the lot, not one each.
+    let failed = 0;
+    void Promise.all(targets.map((p) => api.transferControl(p.id, pause ? "pause" : "resume").catch(() => void failed++))).then(() => {
+      if (failed > 0) get().showToast(`${failed} of ${targets.length} jobs could not be ${pause ? "paused" : "resumed"}.`);
+    });
+    return targets.length;
   },
 
   dismissTransfer: (id) => {

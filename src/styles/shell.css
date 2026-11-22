@@ -1162,3 +1162,7 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .transfer-stats .eta-line { flex-wrap: nowrap; min-width: 0; white-space: nowrap; }
 .transfer-stats .eta-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .transfer-rate { flex: none; white-space: nowrap; text-align: right; min-width: 13em; font-variant-numeric: tabular-nums; }
+.notice-jobs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 8px; }
+.notice-jobs .secondary, .notice-finished-row .secondary { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--font-size-small); }
+.notice-finished-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 0 8px; }
+.notice-finished-row .notice-finished { flex: 1 1 0; min-width: 0; width: auto; margin: 0; }

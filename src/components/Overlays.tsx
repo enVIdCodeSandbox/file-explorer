@@ -8,6 +8,7 @@ import { useStore, type DialogRequest } from "../store";
 import { formatDate, formatSize } from "../util/format";
 import { looksLikeError } from "../util/errorText";
 import { Thumb } from "./Thumb";
+import { adv } from "../settings/advanced";
 import { baseName } from "../util/path";
 import { pickFile } from "../util/pickFile";
 import { DetailsPane } from "./DetailsPane";
@@ -218,6 +219,24 @@ export function OpenWithDialog() {
     api.installedApps(path).then((l) => alive && setAll(l)).catch((e) => alive && (setError(String(e)), setAll([])));
     return () => { alive = false; };
   }, [view, all, path]);
+
+  const escCloses = useStore((st) => adv<boolean>(st.settings, "files.openWithEsc"));
+  const open = !!request && !!path && !picking;
+  // Esc closes the window even when it has only just opened and the keyboard is still in the file list behind it,
+  // unless a text box in it is being typed into (Esc then clears the search first).
+  useEffect(() => {
+    if (!open || !escCloses) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el instanceof HTMLInputElement && el.value && el.closest(".openwith-dialog")) return void setQuery("");
+      e.preventDefault();
+      e.stopPropagation();
+      useStore.getState().closeChooser();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open, escCloses]);
 
   // While a program is being chosen in the file view, the dialog steps aside.
   if (!request || !path || picking) return null;

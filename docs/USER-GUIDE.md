@@ -484,6 +484,8 @@ Settings > Terminal chooses the terminal (on Windows Command Prompt, PowerShell,
 
 ## Opening files with no app
 
+**Esc closes the Open with window.** As soon as the window appears, Esc closes it, without clicking into it first (with text typed in its search box, Esc clears that first). Settings → Advanced → Files and lists → *Esc closes the Open with window* switches this off.
+
 Opening a file goes in this order: the app set for that kind of file, then whatever the system itself does with it (the system's own choice is trusted, including Store apps such as Photos), and only if neither works the app picks the most likely installed app for the file type, counting programs that say they can open it (an image viewer for a picture, a media player for a video, and so on for the common types). Only when none is found does it show a chooser (Default app, Suggested apps, More options, Always / Just once), or the system's own chooser on Windows, or only a message. Choose which in Advanced > *When no app is set to open a file*. *Open with…* always shows the chooser.
 
 ## Settings
@@ -572,6 +574,8 @@ Settings > Advanced > "When a server will not rename a file": off (the default, 
 When a copy, move, delete or other job ends cleanly, its card and the operations window (the one with the speed graph) close at once, and a notification says it is done. Jobs that finish with errors stay on screen until you dismiss them.
 
 The last state of every finished job is kept in memory until you close the app, nothing is written to disk. Reopen it from **Graphs and details of finished jobs** at the top of the recent actions list (the bell in the corner; finished jobs and recent actions are one list now), or from **Graph and details** on the notification: you get the final graph and every detail row, as they stood at the end. **Save…** writes a job to a file you choose: a web page with the graph, a text report, or data (JSON). The newest 30 are kept. The old setting "Hide a finished transfer after" is gone, since they now close immediately.
+
+The recent actions list also has the buttons for everything at once. **Close all graphs** sits beside the finished jobs row and forgets every finished job's graph and details in one go. Above it, **Pause all**, **Resume all** and **Stop all** act on every running copy and move: Pause all shows while something is running, Resume all while something is paused, and Stop all (which also drops pastes waiting in line) whenever anything is running or waiting. Jobs still counting files or waiting in line have nothing to pause yet, so Pause all leaves them alone; deletes cannot be paused, only stopped.
 
 
 

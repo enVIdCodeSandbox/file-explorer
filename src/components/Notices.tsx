@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { adv } from "../settings/advanced";
 import { useStore } from "../store";
+import { bulkChoices } from "../util/bulkJobs";
 import type { Notice, NoticeKind } from "../util/notices";
 import { Icon } from "./Icons";
 
@@ -109,6 +110,12 @@ export function Notices() {
     return l.length ? Math.round((l.reduce((sum, p) => sum + (s.shown[p.id] ?? 0), 0) / l.length) * 100) : 0;
   });
   const running = { count, done: percent / 100 };
+  // Which of Pause all / Resume all / Stop all apply: the numbers only, so the panel is not redrawn on every step.
+  const choices = useStore((s) => {
+    const c = bulkChoices(s.transfers, live(s).length + Object.keys(s.queuedJobs).length);
+    return `${c.pause}/${c.resume}/${c.stop}`;
+  });
+  const [canPause, canResume, canStop] = choices.split("/").map(Number);
   const hiddenJobs = tucked ? running.count : 0;
 
   const enabled = adv<boolean>(settings, "notify.enabled");
@@ -151,10 +158,35 @@ export function Notices() {
               <Icon name="expand" size={12} /> Show running jobs ({hiddenJobs}) · {Math.round(running.done * 100)}%
             </button>
           )}
+          {(canPause > 0 || canResume > 0 || canStop > 0) && (
+            <div className="notice-jobs" role="group" aria-label="All running jobs">
+              <span className="muted grow">All running jobs</span>
+              {canPause > 0 && (
+                <button className="secondary" onClick={() => useStore.getState().pauseAllJobs(true)} title="Pause every running copy and move">
+                  <Icon name="pause" size={12} /> Pause all ({canPause})
+                </button>
+              )}
+              {canResume > 0 && (
+                <button className="secondary" onClick={() => useStore.getState().pauseAllJobs(false)} title="Carry on with every paused copy and move">
+                  <Icon name="play" size={12} /> Resume all ({canResume})
+                </button>
+              )}
+              {canStop > 0 && (
+                <button className="secondary" onClick={() => useStore.getState().stopAllJobs()} title="Stop every running job and drop the ones waiting in line. Anything already copied stays.">
+                  <Icon name="close" size={12} /> Stop all ({canStop})
+                </button>
+              )}
+            </div>
+          )}
           {finishedCount > 0 && (
-            <button className="notice-finished" onClick={() => useStore.setState({ finishedOpen: true, transfersOpen: false, noticesOpen: false })} title="The final graph and every detail of the copies, moves and deletes that finished">
-              <Icon name="clock" size={12} /> Graphs and details of finished jobs ({finishedCount})
-            </button>
+            <div className="notice-finished-row">
+              <button className="notice-finished" onClick={() => useStore.setState({ finishedOpen: true, transfersOpen: false, noticesOpen: false })} title="The final graph and every detail of the copies, moves and deletes that finished">
+                <Icon name="clock" size={12} /> Graphs and details of finished jobs ({finishedCount})
+              </button>
+              <button className="secondary" onClick={() => useStore.getState().forgetFinished()} title="Close every graph and forget what these jobs did, until the app is closed anyway">
+                <Icon name="close" size={12} /> Close all graphs
+              </button>
+            </div>
           )}
           {notices.length === 0 && <p className="muted">Nothing yet. Copy, move, delete and rename show up here.</p>}
           {[...notices].reverse().map((n) => (
