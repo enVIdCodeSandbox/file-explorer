@@ -21,7 +21,10 @@ pub const IMAGES: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 /// Kept for callers that only care about pictures.
 pub const SUPPORTED: &[&str] = IMAGES;
 pub const DOCUMENTS: &[&str] = &["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp", "rtf", "epub", "svg"];
-pub const VIDEOS: &[&str] = &["mp4", "m4v", "mov", "mkv", "avi", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "mts", "m2ts"];
+pub const VIDEOS: &[&str] = &["mp4", "m4v", "mov", "mkv", "avi", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "m2ts", "3g2", "ogv", "vob", "asf", "divx", "f4v", "m2t", "m2v", "rm", "rmvb", "mxf", "ogm", "tod"];
+/// Extensions that are a video only when the file's first bytes say so (`.ts` is also TypeScript, `.mod` a music
+/// module…): see `sniff`. They are listed as supported, and `kind_of` looks into the file.
+pub const VIDEOS_BY_CONTENT: &[&str] = &["ts", "mts", "mod"];
 
 /// What kind of preview a file gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +41,7 @@ pub fn kind_of(path: &Path) -> Option<Kind> {
         Some(Kind::Image)
     } else if DOCUMENTS.contains(&ext) {
         Some(Kind::Document)
-    } else if VIDEOS.contains(&ext) {
+    } else if VIDEOS.contains(&ext) || (VIDEOS_BY_CONTENT.contains(&ext) && crate::sniff::is_video(path)) {
         Some(Kind::Video)
     } else {
         None
@@ -60,12 +63,14 @@ pub fn supported_extensions() -> &'static [&'static str] {
         if cfg!(any(windows, target_os = "macos")) {
             v.extend(DOCUMENTS.iter().filter(|e| **e != "svg"));
             v.extend(VIDEOS);
+            v.extend(VIDEOS_BY_CONTENT);
         } else {
             if have("pdftoppm") {
                 v.push("pdf");
             }
             if have("ffmpegthumbnailer") || have("ffmpeg") {
                 v.extend(VIDEOS);
+                v.extend(VIDEOS_BY_CONTENT);
             }
         }
         v
@@ -98,6 +103,8 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension()
         .map(|e| supported_extensions().contains(&e.to_string_lossy().to_lowercase().as_str()))
         .unwrap_or(false)
+        // A name shared with other kinds of file (.ts) counts only when the file really is a video.
+        && kind_of(path).is_some()
 }
 
 fn cache_file(cache_dir: &Path, path: &Path, len: u64, mtime: i64, px: u32, variant: u32) -> PathBuf {

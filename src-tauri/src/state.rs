@@ -57,6 +57,7 @@ pub struct Paths {
     pub update_dir: PathBuf,
     pub update_state: PathBuf,
     /// The terminal host's address file, and what each terminal printed before the app closed.
+    #[cfg_attr(not(desktop), allow(dead_code))]
     pub terminal: PathBuf,
     /// Crash reports (plain text) and the running trail.
     pub crash: PathBuf,

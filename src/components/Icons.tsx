@@ -185,7 +185,7 @@ const PLACE_MARKS: Record<string, { color: string; mark: ReactNode }> = {
   desktop: { color: "#3b82d6", mark: <path d="M5.4 6.2h5.2v3.4H5.4zM7 11h2" /> },
 };
 
-export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?: number; name?: string; /** A folder with something in it: papers show above its front. */ full?: boolean }) {
+export function FileIcon({ kind, size = 16, name, full, look }: { kind: string; size?: number; name?: string; /** A folder with something in it: papers show above its front. */ full?: boolean; /** What the file's start said it is, for a name several kinds of file use (".ts"): a name from SNIFFED_LOOKS. */ look?: string }) {
   // One icon for each kind of folder or file, never for a single one: a well-known folder (Downloads…) has its own.
   const place = kind === "folder" && name && PLACE_MARKS[name.toLowerCase()] ? name.toLowerCase() : "";
   const slot = place ? `place:${place}` : `kind:${kind}`;
@@ -225,12 +225,12 @@ export function FileIcon({ kind, size = 16, name, full }: { kind: string; size?:
       </svg>
     );
   }
-  const type = name ? fileTypeOf(name, kind) : undefined;
+  const type = name ? fileTypeOf(name, kind, look) : undefined;
   const color = type?.color ?? KIND_COLORS[kind] ?? KIND_COLORS.file;
   const glyph = type ? GLYPH_PATHS[type.glyph] : undefined;
   const showLabel = !!type && size >= 28;
   return (
-    <svg className="file-icon" data-kind={kind} data-icon-slot={slot} data-ext={type?.label} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+    <svg className="file-icon" data-kind={kind} data-icon-slot={slot} data-ext={type?.label} data-look={look} width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M3.5 1.5h6l3 3v10h-9z" fill="var(--icon-page)" stroke={color} strokeWidth="1" strokeLinejoin="round" />
       <path d="M9.5 1.5v3h3" fill="none" stroke={color} strokeWidth="1" strokeLinejoin="round" />
       {glyph && !showLabel ? (

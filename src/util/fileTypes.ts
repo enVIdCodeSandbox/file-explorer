@@ -39,7 +39,9 @@ const TYPES: Record<string, FileType> = {
   psd: t("image", "#31a8ff", "PSD"), ai: t("image", "#ff9a00", "AI"), xcf: t("image", "#8b7355", "XCF"), fig: t("image", "#a259ff", "FIG"), sketch: t("image", "#f7b500", "SKT"),
   // Video
   mp4: VIDEO, mkv: t("video", "#8b5cf6", "MKV"), mov: t("video", "#c084fc", "MOV"), avi: VIDEO, webm: t("video", "#9333ea", "WEBM"),
-  wmv: VIDEO, flv: VIDEO, m4v: VIDEO, mpg: VIDEO, mpeg: VIDEO, ts_video: VIDEO, "3gp": VIDEO,
+  wmv: VIDEO, flv: VIDEO, m4v: VIDEO, mpg: VIDEO, mpeg: VIDEO, "3gp": VIDEO, "3g2": VIDEO,
+  m2ts: t("video", "#7c3aed", "M2TS"), m2t: VIDEO, m2v: VIDEO, ogv: VIDEO, ogm: VIDEO, vob: t("video", "#7c3aed", "VOB"), asf: VIDEO, divx: VIDEO,
+  f4v: VIDEO, rm: VIDEO, rmvb: VIDEO, mxf: VIDEO, tod: VIDEO,
   // Audio
   mp3: t("audio", "#f59e0b", "MP3"), flac: t("audio", "#fbbf24", "FLAC"), wav: t("audio", "#facc15", "WAV"), ogg: AUDIO, m4a: AUDIO, aac: AUDIO,
   opus: AUDIO, wma: AUDIO, aiff: AUDIO, mid: t("audio", "#fde047", "MID"), midi: t("audio", "#fde047", "MID"),
@@ -75,7 +77,20 @@ const TYPES: Record<string, FileType> = {
   ipynb: t("code", "#f37626", "NB"), dockerfile: t("config", "#2496ed", "DOCK"),
 };
 
-delete (TYPES as Record<string, FileType | undefined>).ts_video;
+/**
+ * Names that more than one kind of file uses. What the start of the file says (the backend's `sniff`) picks one of
+ * these; with no answer yet, or "default", the name's usual look from `TYPES` is used.
+ */
+export const SNIFFED_LOOKS: Record<string, { category: string; type: FileType }> = {
+  "ts:video": { category: "video", type: t("video", "#a855f7", "VID") },
+  "mts:video": { category: "video", type: t("video", "#a855f7", "VID") },
+  "mod:video": { category: "video", type: t("video", "#a855f7", "VID") },
+  "ts:qt": { category: "file", type: t("data", "#41cd52", "QT") },
+  "mod:music": { category: "audio", type: t("audio", "#eab308", "MOD") },
+  "key:private": { category: "file", type: t("key", "#eab308", "KEY") },
+  "pub:publisher": { category: "doc", type: t("doc", "#1f8f5b", "PUB") },
+  "db:thumbs": { category: "file", type: t("log", "#9ca3af", "THMB") },
+};
 
 /** Files with a well-known name and no extension. */
 const BY_NAME: Record<string, FileType> = {
@@ -91,7 +106,9 @@ const CATEGORY: Record<string, FileType> = {
 };
 
 /** The look of a file, or undefined when it should use the plain page icon. */
-export function fileTypeOf(name: string, category: string): FileType | undefined {
+export function fileTypeOf(name: string, category: string, look?: string): FileType | undefined {
+  const sniffed = look ? SNIFFED_LOOKS[look] : undefined;
+  if (sniffed) return sniffed.type;
   const lower = name.toLowerCase();
   const dot = lower.lastIndexOf(".");
   if (dot > 0 && dot < lower.length - 1) {

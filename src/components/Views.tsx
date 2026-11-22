@@ -27,6 +27,7 @@ import { analyzeLocation, baseName, isRemote, maskAddresses, parentPath } from "
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
+import { sniffedLook } from "../util/sniffCache";
 
 // ---------------------------------------------------------------------------
 // Home: pins and recents. Nothing appears here that the user did not pin or open.
@@ -75,7 +76,7 @@ export function HomeView() {
         <div className="simple-list">
           {recent.slice(0, 40).map((r) => (
             <button key={r.path} className="simple-row" onClick={() => openPath(r.path, r.isDir)} title={r.path}>
-              <FileIcon kind={kindOf(r.path, r.isDir)} name={baseName(r.path)} />
+              <FileIcon kind={kindOf(r.path, r.isDir)} name={baseName(r.path)} look={sniffedLook(r.path)} />
               <span className="grow">{baseName(r.path)}</span>
               <span className="muted path">{parentPath(r.path) ?? ""}</span>
               <span className="muted date">{formatDate(r.at)}</span>

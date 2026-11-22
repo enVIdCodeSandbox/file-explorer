@@ -1117,11 +1117,13 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .activity-row[data-level="hung"] { background: color-mix(in srgb, var(--danger, #d13438) 12%, transparent); }
 
 /* The button while jobs are tucked into it: a ring around it fills as they progress. */
-.notice-bell[data-busy] { border-color: transparent; background: conic-gradient(var(--accent) var(--ring, 0%), var(--border-strong) 0); }
-.notice-bell[data-busy]::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--surface-raised); }
-.notice-bell[data-busy]:hover::before { background: var(--surface-active); }
+.notice-bell[data-busy] { border-color: transparent; }
+/* The ring is its own layer drawn over the edge of the button, so the button, the ring and the count never paint over each other. */
+.notice-bell[data-busy]::before { content: ""; position: absolute; inset: -1px; border-radius: 50%; pointer-events: none; background: conic-gradient(var(--accent) var(--ring, 0%), var(--border-strong) 0); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); }
 .notice-bell[data-busy] > svg { position: relative; }
-.notice-badge[data-running] { background: var(--surface-active); color: var(--text); border: 1px solid var(--accent); }
+/* The count of tucked jobs sits at the lower right, away from where the ring starts (the top), with a gap cut round it. */
+.notice-badge { box-shadow: 0 0 0 2px var(--surface-raised); }
+.notice-badge[data-running] { top: auto; bottom: -5px; right: -5px; background: var(--surface-active); color: var(--text); border: 1px solid var(--accent); }
 
 .speed-graph-box { display: flex; flex-direction: column; gap: 2px; }
 .graph-zoom { display: flex; align-items: center; gap: 6px; font-size: var(--font-size-small); justify-content: flex-end; flex-wrap: wrap; }

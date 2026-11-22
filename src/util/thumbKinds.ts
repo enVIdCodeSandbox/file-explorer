@@ -3,7 +3,9 @@
 
 export const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 export const DOCUMENT_EXTS = ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp", "rtf", "epub", "svg"];
-export const VIDEO_EXTS = ["mp4", "m4v", "mov", "mkv", "avi", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "mts", "m2ts"];
+export const VIDEO_EXTS = ["mp4", "m4v", "mov", "mkv", "avi", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "m2ts", "3g2", "ogv", "vob", "asf", "divx", "f4v", "m2t", "m2v", "rm", "rmvb", "mxf", "ogm", "tod"];
+/** Videos only when the start of the file says so (".ts" is also TypeScript, ".mod" a music module…). */
+export const VIDEO_BY_CONTENT_EXTS = ["ts", "mts", "mod"];
 
 export type ThumbKind = "images" | "documents" | "videos";
 

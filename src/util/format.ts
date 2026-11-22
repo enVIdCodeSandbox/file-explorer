@@ -1,3 +1,5 @@
+import { SNIFFED_LOOKS } from "./fileTypes";
+import { sniffedLook } from "./sniffCache";
 import type { Progress } from "../api";
 
 /** How sizes are written: decimal "MB" (1000), binary "MiB" (1024), or Windows-style "MB" that is really 1024. */
@@ -127,7 +129,7 @@ export function extensionOf(name: string): string {
 
 const KINDS: Record<string, string[]> = {
   image: ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "heic", "avif", "raw"],
-  video: ["mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv"],
+  video: ["mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg", "3gp", "3g2", "m2ts", "m2t", "m2v", "ogv", "ogm", "vob", "asf", "divx", "f4v", "rm", "rmvb", "mxf", "tod"],
   audio: ["mp3", "flac", "wav", "ogg", "m4a", "aac", "opus", "wma"],
   archive: ["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "zst", "iso", "dmg"],
   code: ["ts", "tsx", "js", "jsx", "rs", "py", "go", "c", "cpp", "h", "java", "cs", "html", "css", "scss", "json", "toml", "yaml", "yml", "xml", "sh", "ps1", "sql"],
@@ -143,11 +145,27 @@ for (const [kind, exts] of Object.entries(KINDS)) for (const e of exts) KIND_BY_
 /** Coarse file category used for icons and type labels. */
 export function kindOf(name: string, isDir: boolean): string {
   if (isDir) return "folder";
+  // A name that several kinds of file use (".ts"): what the file's start said, when `name` is the full path and it was looked at.
+  const look = sniffedLook(name);
+  if (look) return SNIFFED_LOOKS[look].category;
   return KIND_BY_EXT.get(extensionOf(name)) ?? "file";
 }
 
+const LOOK_LABELS: Record<string, string> = {
+  "ts:video": "MPEG transport stream video",
+  "mts:video": "AVCHD video",
+  "mod:video": "MOD video",
+  "ts:qt": "Qt translation file",
+  "mod:music": "Tracker music module",
+  "key:private": "Private key",
+  "pub:publisher": "Publisher document",
+  "db:thumbs": "Thumbnail cache",
+};
+
 export function typeLabel(name: string, isDir: boolean): string {
   if (isDir) return "File folder";
+  const look = sniffedLook(name);
+  if (look && LOOK_LABELS[look]) return LOOK_LABELS[look];
   const ext = extensionOf(name);
   return ext ? `${ext.toUpperCase()} File` : "File";
 }

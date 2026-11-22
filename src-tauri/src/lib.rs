@@ -4,6 +4,8 @@ mod commands;
 mod iconpacks;
 mod crash;
 mod launch;
+// Used by the desktop build only; a phone compiles the code but never calls it.
+#[cfg_attr(not(desktop), allow(unused))]
 mod merge;
 mod native_dnd;
 mod remote;
@@ -11,8 +13,12 @@ mod smartclear;
 mod state;
 #[cfg(desktop)]
 mod terminal;
+// Used by the desktop build only; a phone compiles the code but never calls it.
+#[cfg_attr(not(desktop), allow(unused))]
 mod tasks;
 mod tools;
+// Used by the desktop build only; a phone compiles the code but never calls it.
+#[cfg_attr(not(desktop), allow(unused))]
 mod update;
 mod theme;
 
@@ -301,6 +307,7 @@ pub fn run() {
             commands::folder_sizes_start,
             commands::hash_file,
             commands::thumbnail,
+            commands::sniff_types,
             commands::read_for_view,
             commands::get_drives,
             commands::get_devices,

@@ -11,6 +11,8 @@ import { useStore } from "../store";
 import { adv } from "../settings/advanced";
 import { QUALITY, VIEW_SETTING, thumbKind, type ThumbView } from "../util/thumbKinds";
 import { extensionOf, kindOf } from "../util/format";
+import { SNIFFED_LOOKS } from "../util/fileTypes";
+import { isAmbiguousName, useSniffedLook } from "../util/sniff";
 import { isArchiveLoc, isRemote } from "../util/path";
 import { isDevicePath, useThriftyBattery } from "../util/battery";
 import { networkThumbs } from "../util/network";
@@ -176,8 +178,12 @@ export function Thumb({
   setThumbPriority(priority);
   setThumbParallelism(adv<number>(settings, "thumbs.parallel") || priorityParallelism(priority, threads));
   const ext = extensionOf(name);
-  const kind = thumbKind(ext);
   const device = isDevicePath(path);
+  // A name several kinds of file use (".ts": TypeScript, video, a Qt translation): the start of the file says which.
+  // Only a video gets a thumbnail, and each kind has its own icon.
+  const ambiguous = !isDir && isAmbiguousName(name);
+  const look = useSniffedLook(path, modified, size, ambiguous && !isRemote(path) && !device && !isArchiveLoc(path));
+  const kind = ambiguous ? (look?.endsWith(":video") ? "videos" : null) : thumbKind(ext);
   // On a powerful computer (the Full or Manual performance level) the medium, large and extra large views always show
   // thumbnails, whatever the per-view switches say; otherwise those switches decide.
   const strong = useStore((s) => s.budget?.tier === "full" || s.budget?.tier === "manual");
@@ -252,11 +258,11 @@ export function Thumb({
   if (supported && url) {
     return <img className="thumb" src={url} width={size} height={size} alt="" draggable={false} decoding="async" loading="lazy" />;
   }
-  return <FolderOrFile path={path} name={name} isDir={isDir} size={iconSize ?? size} />;
+  return <FolderOrFile path={path} name={name} isDir={isDir} size={iconSize ?? size} look={look} />;
 }
 
 /** The type icon; a folder shows papers when it has files in it (Settings > Advanced > Files and lists). */
-function FolderOrFile({ path, name, isDir, size }: { path: string; name: string; isDir: boolean; size: number }) {
+function FolderOrFile({ path, name, isDir, size, look }: { path: string; name: string; isDir: boolean; size: number; look?: string }) {
   const mode = useStore((s) => adv<string>(s.settings, "files.folderFill"));
   const watch = isDir && mode !== "off" && !isRemote(path) && !isArchiveLoc(path) && !isDevicePath(path);
   const [fill, setFill] = useState<Fill | undefined>(() => (watch ? cachedFill(path) : undefined));
@@ -267,5 +273,6 @@ function FolderOrFile({ path, name, isDir, size }: { path: string; name: string;
     setFill(undefined);
     return askFill(path, setFill);
   }, [path, watch]);
-  return <FileIcon kind={kindOf(name, isDir)} name={name} size={size} full={watch && looksFull(fill, mode)} />;
+  const sniffed = look ? SNIFFED_LOOKS[look] : undefined;
+  return <FileIcon kind={sniffed?.category ?? kindOf(name, isDir)} name={name} look={look} size={size} full={watch && looksFull(fill, mode)} />;
 }

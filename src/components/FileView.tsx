@@ -1005,7 +1005,7 @@ export function FileView({ path }: { path: string }) {
     "data-selected": selected.has(e.name) || undefined,
     "data-cut": cut?.has(fullPath(e.name)) || undefined,
     "data-hidden": e.isHidden || undefined,
-    "data-kind": kindOf(e.name, e.isDir),
+    "data-kind": kindOf(fullPath(e.name), e.isDir),
     onPointerDown: (ev: React.PointerEvent) => {
       clearTimeout(press.current.timer);
       press.current = { x: ev.clientX, y: ev.clientY, held: false };
@@ -1077,7 +1077,7 @@ export function FileView({ path }: { path: string }) {
     "data-selected": selected.has(e.name) || undefined,
     "data-cut": cut?.has(fullPath(e.name)) || undefined,
     "data-hidden": e.isHidden || undefined,
-    "data-kind": kindOf(e.name, e.isDir),
+    "data-kind": kindOf(fullPath(e.name), e.isDir),
     onMouseDown: (ev: React.MouseEvent) => {
       collapseOnClick.current = null;
       const plain = ev.button === 0 && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey;

@@ -30,6 +30,7 @@ import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { FileView } from "./FileView";
 import { FileIcon, Icon } from "./Icons";
 import { SearchView } from "./Views";
+import { sniffedLook } from "../util/sniffCache";
 
 /** The storages as the phone names them, for breadcrumbs and "up". */
 function useRoots(): Root[] {
@@ -89,7 +90,7 @@ function Recents({ limit }: { limit: number }) {
             void openFile(r.path);
           }}
         >
-          <span className="m-item-icon"><FileIcon kind={kindOf(r.path, r.isDir)} name={baseName(r.path)} size={30} /></span>
+          <span className="m-item-icon"><FileIcon kind={kindOf(r.path, r.isDir)} name={baseName(r.path)} look={sniffedLook(r.path)} size={30} /></span>
           <span className="m-item-text">
             <strong>{baseName(r.path)}</strong>
             <span>{formatDate(r.at)}</span>

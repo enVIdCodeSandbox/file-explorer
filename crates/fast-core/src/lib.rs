@@ -49,6 +49,7 @@ pub mod settings;
 pub mod share;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod terminal;
+pub mod sniff;
 pub mod thumbs;
 pub mod trashbin;
 pub mod transfer;

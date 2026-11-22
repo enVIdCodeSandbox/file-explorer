@@ -878,6 +878,8 @@ export const api = {
   getDetails: (path: string) => invoke<Details>("get_details", { path }),
   folderStats: (path: string) => invoke<FolderStats>("folder_stats", { path }),
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
+  /** What files that share a name with other kinds (".ts", ".mod"…) really are: a look's name, "default" or "unknown". */
+  sniffTypes: (paths: string[]) => invoke<string[]>("sniff_types", { paths }),
   thumbnail: (path: string, size: number) => invoke<ArrayBuffer>("thumbnail", { path, size }),
   /** A whole file, for the app's own viewer (phones that cannot hand a file to another app). */
   readForView: (path: string) => invoke<ArrayBuffer>("read_for_view", { path }),

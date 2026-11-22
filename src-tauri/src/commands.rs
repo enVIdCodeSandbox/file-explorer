@@ -563,6 +563,44 @@ pub async fn read_for_view(state: State<'_, Shared>, path: String) -> CmdResult<
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// What each file really is, for names that more than one kind of file uses (`.ts`, `.mod`…): the first bytes are read.
+/// One answer per path: the look's name (`ts:video`), `default` (it is what its name says), or `unknown` (not looked at
+/// this time: busy, unreachable or not answering, so the caller may ask again later).
+#[tauri::command]
+pub async fn sniff_types(state: State<'_, Shared>, paths: Vec<String>) -> CmdResult<Vec<String>> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let mut slow = 0;
+        let mut out = Vec::with_capacity(paths.len());
+        for path in paths {
+            let p = PathBuf::from(&path);
+            if guard(&st, &path).is_err() || fast_core::busy::is_busy(&p) || slow >= 2 {
+                out.push("unknown".to_string());
+                continue;
+            }
+            if fast_core::remote::is_remote(&path) || fast_core::remote::is_device(&path) {
+                out.push("default".to_string());
+                continue;
+            }
+            // A drive that does not answer is not waited for: two in a row and the rest are left for later.
+            let ask = p.clone();
+            match fast_core::transfer::careful::bounded(std::time::Duration::from_secs(4), "reading the start of a file", move || fast_core::sniff::sniff_path(&ask)) {
+                Ok(found) => {
+                    slow = 0;
+                    out.push(found.unwrap_or("default").to_string());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    slow += 1;
+                    out.push("unknown".to_string());
+                }
+                Err(_) => out.push("unknown".to_string()),
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> CmdResult<tauri::ipc::Response> {
     let st = state.inner().clone();
@@ -2618,7 +2656,17 @@ pub async fn smartctl_installed() -> bool {
 /// package manager). The system asks for permission itself where it must.
 #[tauri::command]
 pub async fn install_smartmontools() -> CmdResult<()> {
-    blocking(|| {
+    blocking(install_smartmontools_now).await
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn install_smartmontools_now() -> CmdResult<()> {
+    Err("Drive health is not available on phones.".to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn install_smartmontools_now() -> CmdResult<()> {
+    {
         if which_program("smartctl").is_some() {
             return Ok(());
         }
@@ -2661,12 +2709,9 @@ pub async fn install_smartmontools() -> CmdResult<()> {
                 platform::Elevation::Completed(_) => return Err(format!("The package manager could not install it. {manual}")),
             }
         }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        return Err("Drive health is not available on phones.".to_string());
         // Windows puts the tool where this app's own PATH may not yet include it; which_program looks there too.
         which_program("smartctl").map(|_| ()).ok_or_else(|| format!("It installed, but the app cannot find it yet. Restart the app and try again. {manual}"))
-    })
-    .await
+    }
 }
 
 fn which_program(name: &str) -> Option<PathBuf> {
