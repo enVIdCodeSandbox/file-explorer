@@ -92,10 +92,81 @@ pub fn home_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir()
 }
 
-/// Open a file or folder with the system's default application.
+/// The folder a program started for `path` should run in: the folder the file is in (a folder runs nowhere in particular).
+/// Without this a `.bat` runs in whatever folder this app was started from, and acts on the wrong files.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn run_folder(path: &Path) -> Option<&Path> {
+    if path.is_dir() {
+        return None;
+    }
+    path.parent().filter(|d| !d.as_os_str().is_empty() && d.is_dir())
+}
+
+/// Open a file or folder with the system's default application. Programs and scripts run in their own folder.
+#[cfg(windows)]
 pub fn open_path(path: &Path) -> Result<()> {
-    open::that_detached(path).map_err(|e| CoreError::io(path, e))
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(std::iter::once(0)).collect() };
+    let verb = wide("open".as_ref());
+    let file = wide(path.as_os_str());
+    let dir = run_folder(path).map(|d| wide(d.as_os_str()));
+    // SAFETY: every pointer refers to a NUL-terminated buffer that outlives the call, and `info` is
+    // zero-initialized as the API requires.
+    unsafe {
+        let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOASYNC;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpDirectory = dir.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
+        info.nShow = SW_SHOWNORMAL as i32;
+        if ShellExecuteExW(&mut info) == 0 {
+            return Err(CoreError::io(path, std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(windows), not(any(target_os = "android", target_os = "ios"))))]
+pub fn open_path(path: &Path) -> Result<()> {
+    use std::process::Stdio;
+    let dir = run_folder(path);
+    let mut last: Option<std::io::Error> = None;
+    for mut cmd in open::commands(path) {
+        if let Some(d) = dir {
+            cmd.current_dir(d);
+        }
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        match cmd.spawn() {
+            Ok(mut child) => {
+                // A launcher that fails at once hands over to the next one; one still running has handed the file over.
+                let mut failed = false;
+                for _ in 0..20 {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            failed = !status.success();
+                            break;
+                        }
+                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                        Err(_) => break,
+                    }
+                }
+                if failed {
+                    last = Some(std::io::Error::other("the launcher could not open it"));
+                    continue;
+                }
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(CoreError::io(path, last.unwrap_or_else(|| std::io::Error::other("there is no program to open it with"))))
 }
 
 /// Move to the recycle bin / trash.
@@ -776,5 +847,24 @@ mod tests {
         let here = std::env::current_dir().unwrap();
         let root = drive_root(&here);
         assert!(here.starts_with(&root));
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod run_folder_tests {
+    use super::run_folder;
+
+    #[test]
+    fn a_file_runs_in_its_own_folder() {
+        let dir = std::env::temp_dir().join(format!("fast-runfolder-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("start.bat");
+        std::fs::write(&file, "echo hi").unwrap();
+        assert_eq!(run_folder(&file), Some(dir.as_path()));
+        // A folder is simply opened; it has no folder to run in.
+        assert_eq!(run_folder(&dir), None);
+        // Nothing to run in when the parent is not there.
+        assert_eq!(run_folder(std::path::Path::new("start.bat")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

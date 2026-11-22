@@ -472,7 +472,11 @@ mod platform {
             argv = full;
         }
         let (program, args) = argv.split_first().ok_or(CoreError::Unsupported("empty command"))?;
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+            command.current_dir(dir);
+        }
+        let mut child = command
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -707,7 +711,11 @@ mod platform {
         if let Some(done) = in_shell(path, id) {
             return done;
         }
-        Command::new(id).arg(path).spawn().map(|_| ()).map_err(|e| CoreError::io(Path::new(id), e))
+        let mut cmd = Command::new(id);
+        if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+            cmd.current_dir(dir);
+        }
+        cmd.arg(path).spawn().map(|_| ()).map_err(|e| CoreError::io(Path::new(id), e))
     }
 
     /// Windows' own "How do you want to open this file?" window.
@@ -751,7 +759,11 @@ mod platform {
     }
 
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
-        Command::new("open").args(["-a", id]).arg(path).spawn().map(|_| ()).map_err(|e| CoreError::io(path, e))
+        let mut cmd = Command::new("open");
+        if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+            cmd.current_dir(dir);
+        }
+        cmd.args(["-a", id]).arg(path).spawn().map(|_| ()).map_err(|e| CoreError::io(path, e))
     }
 }
 

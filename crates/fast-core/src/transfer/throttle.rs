@@ -67,20 +67,33 @@ struct Waiter {
     seq: u64,
     priority: Arc<AtomicU8>,
     start_now: Arc<AtomicBool>,
+    /// The hard disks (spinning drives) this transfer reads from or writes to.
+    disks: Vec<String>,
 }
 
 #[derive(Default)]
 struct GateState {
-    running: usize,
+    /// What is working now, and on which hard disks.
+    running: Vec<(u64, Vec<String>)>,
     seq: u64,
     waiting: Vec<Waiter>,
 }
 
+fn share(a: &[String], b: &[String]) -> Option<String> {
+    a.iter().find(|x| b.contains(x)).cloned()
+}
+
 /// Lets `max` transfers work at once (0 = all of them). The rest wait; the highest priority goes first,
 /// and among equals the one that has waited longest.
+///
+/// Transfers on different drives always work at the same time. Two that use the same hard disk take turns
+/// (unless that is switched off), because a spinning disk asked for two things at once spends its time
+/// moving its head between them and both go slower than one after the other.
 #[derive(Default)]
 pub struct Gate {
     max: AtomicUsize,
+    /// Set when transfers on the same hard disk should work together anyway.
+    together: AtomicBool,
     state: Mutex<GateState>,
 }
 
@@ -88,11 +101,32 @@ impl Gate {
     pub fn set_max(&self, max: usize) {
         self.max.store(max, Ordering::Relaxed);
     }
+    /// Whether transfers that use the same hard disk take turns (the default).
+    pub fn set_disk_turns(&self, on: bool) {
+        self.together.store(!on, Ordering::Relaxed);
+    }
     pub fn join(&self, id: u64, priority: Arc<AtomicU8>, start_now: Arc<AtomicBool>) {
+        self.join_on(id, priority, start_now, Vec::new());
+    }
+    /// Join the line, saying which hard disks the transfer works on.
+    pub fn join_on(&self, id: u64, priority: Arc<AtomicU8>, start_now: Arc<AtomicBool>, disks: Vec<String>) {
         let mut s = self.state.lock();
         s.seq += 1;
         let seq = s.seq;
-        s.waiting.push(Waiter { id, seq, priority, start_now });
+        s.waiting.push(Waiter { id, seq, priority, start_now, disks });
+    }
+    /// A hard disk that `w` has to wait for: one a working transfer is using, or one that a transfer
+    /// ahead of it in the line is going to use first.
+    fn busy_disk(&self, s: &GateState, w: &Waiter) -> Option<String> {
+        if self.together.load(Ordering::Relaxed) || w.disks.is_empty() {
+            return None;
+        }
+        let key = |w: &Waiter| (std::cmp::Reverse(w.priority.load(Ordering::Relaxed)), w.seq);
+        let mine = key(w);
+        s.running
+            .iter()
+            .find_map(|(_, d)| share(d, &w.disks))
+            .or_else(|| s.waiting.iter().filter(|o| o.id != w.id && key(o) < mine && !o.start_now.load(Ordering::Relaxed)).find_map(|o| share(&o.disks, &w.disks)))
     }
     /// True when it is `id`'s turn; it then counts as running until `leave`.
     pub fn try_enter(&self, id: u64) -> bool {
@@ -100,10 +134,17 @@ impl Gate {
         let mut s = self.state.lock();
         let Some(pos) = s.waiting.iter().position(|w| w.id == id) else { return true };
         let forced = s.waiting[pos].start_now.load(Ordering::Relaxed);
-        let first = s.waiting.iter().filter(|w| !w.start_now.load(Ordering::Relaxed)).min_by_key(|w| (std::cmp::Reverse(w.priority.load(Ordering::Relaxed)), w.seq)).map(|w| w.id);
-        if forced || max == 0 || (s.running < max && first == Some(id)) {
-            s.waiting.remove(pos);
-            s.running += 1;
+        // The first in line among those that are not held back by a disk.
+        let first = s
+            .waiting
+            .iter()
+            .filter(|w| !w.start_now.load(Ordering::Relaxed) && self.busy_disk(&s, w).is_none())
+            .min_by_key(|w| (std::cmp::Reverse(w.priority.load(Ordering::Relaxed)), w.seq))
+            .map(|w| w.id);
+        let free = self.busy_disk(&s, &s.waiting[pos]).is_none();
+        if forced || (free && (max == 0 || (s.running.len() < max && first == Some(id)))) {
+            let w = s.waiting.remove(pos);
+            s.running.push((w.id, w.disks));
             true
         } else {
             false
@@ -113,9 +154,11 @@ impl Gate {
     pub fn withdraw(&self, id: u64) {
         self.state.lock().waiting.retain(|w| w.id != id);
     }
-    pub fn leave(&self) {
+    pub fn leave(&self, id: u64) {
         let mut s = self.state.lock();
-        s.running = s.running.saturating_sub(1);
+        if let Some(i) = s.running.iter().position(|(r, _)| *r == id) {
+            s.running.remove(i);
+        }
     }
     /// How many are ahead of `id` in the queue.
     pub fn ahead_of(&self, id: u64) -> u32 {
@@ -124,6 +167,12 @@ impl Gate {
         let key = |w: &Waiter| (std::cmp::Reverse(w.priority.load(Ordering::Relaxed)), w.seq);
         let mine = key(me);
         s.waiting.iter().filter(|w| w.id != id && key(w) < mine).count() as u32
+    }
+    /// The hard disk `id` is waiting for another transfer to finish with, if that is what it waits for.
+    pub fn waiting_for_disk(&self, id: u64) -> Option<String> {
+        let s = self.state.lock();
+        let me = s.waiting.iter().find(|w| w.id == id)?;
+        self.busy_disk(&s, me)
     }
 }
 
@@ -164,13 +213,13 @@ mod tests {
         g.join(4, normal.clone(), f());
         assert!(!g.try_enter(2) && !g.try_enter(3), "one at a time");
         assert_eq!(g.ahead_of(2), 2);
-        g.leave();
+        g.leave(1);
         assert!(!g.try_enter(2) && !g.try_enter(4), "the high one is first");
         assert!(g.try_enter(3));
-        g.leave();
+        g.leave(3);
         assert!(!g.try_enter(2), "normal before low");
         assert!(g.try_enter(4));
-        g.leave();
+        g.leave(4);
         // A priority changed while waiting counts at once.
         low.store(HIGH, Ordering::Relaxed);
         assert!(g.try_enter(2));
@@ -191,5 +240,59 @@ mod tests {
         g.join(4, p(NORMAL), f());
         g.withdraw(4);
         assert!(g.try_enter(4), "not waiting any more, nothing to hold");
+    }
+
+    fn hdd(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn transfers_on_the_same_hard_disk_take_turns_but_others_run_together() {
+        let g = Gate::default();
+        g.join_on(1, p(NORMAL), f(), hdd(&["d:\\"]));
+        assert!(g.try_enter(1));
+        // Another copy on the same hard disk waits; one on an SSD, or on another hard disk, does not.
+        g.join_on(2, p(NORMAL), f(), hdd(&["d:\\", "e:\\"]));
+        g.join_on(3, p(NORMAL), f(), Vec::new());
+        g.join_on(4, p(NORMAL), f(), hdd(&["f:\\"]));
+        assert!(!g.try_enter(2));
+        assert_eq!(g.waiting_for_disk(2).as_deref(), Some("d:\\"));
+        assert!(g.try_enter(3) && g.try_enter(4));
+        // Those that wait for the same disk keep their order.
+        g.join_on(5, p(NORMAL), f(), hdd(&["d:\\"]));
+        g.leave(1);
+        assert!(!g.try_enter(5), "2 was first");
+        assert!(g.try_enter(2));
+        assert!(!g.try_enter(5), "2 is working on it now");
+        g.leave(2);
+        assert!(g.try_enter(5));
+    }
+
+    #[test]
+    fn the_same_hard_disk_can_be_shared_when_asked_for_or_when_started_by_hand() {
+        let g = Gate::default();
+        g.join_on(1, p(NORMAL), f(), hdd(&["d:\\"]));
+        assert!(g.try_enter(1));
+        let now = f();
+        g.join_on(2, p(NORMAL), now.clone(), hdd(&["d:\\"]));
+        assert!(!g.try_enter(2));
+        now.store(true, Ordering::Relaxed);
+        assert!(g.try_enter(2), "start now does not wait for the disk");
+        g.set_disk_turns(false);
+        g.join_on(3, p(NORMAL), f(), hdd(&["d:\\"]));
+        assert!(g.try_enter(3), "turned off: they work together");
+        assert_eq!(g.waiting_for_disk(3), None);
+    }
+
+    #[test]
+    fn a_disk_wait_does_not_hold_up_a_transfer_that_could_go_with_a_limit_of_one_more() {
+        let g = Gate::default();
+        g.set_max(2);
+        g.join_on(1, p(NORMAL), f(), hdd(&["d:\\"]));
+        assert!(g.try_enter(1));
+        g.join_on(2, p(NORMAL), f(), hdd(&["d:\\"])); // held back by the disk
+        g.join_on(3, p(NORMAL), f(), Vec::new()); // free, and there is room
+        assert!(!g.try_enter(2));
+        assert!(g.try_enter(3), "the one behind it is not stuck behind a disk wait");
     }
 }

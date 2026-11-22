@@ -238,6 +238,8 @@ pub struct AppState {
     pub watcher: fast_core::watch::Watcher,
     /// The folders each window has open, by window label.
     pub watch_sets: Mutex<HashMap<String, Vec<PathBuf>>>,
+    /// Which window started each job: only that window is asked "replace this file?".
+    pub job_owners: Mutex<HashMap<u64, String>>,
     pub thumb_permits: Arc<tokio::sync::Semaphore>,
     /// Videos and documents render slowly, so they have their own lane and never hold up the pictures.
     pub slow_thumb_permits: Arc<tokio::sync::Semaphore>,

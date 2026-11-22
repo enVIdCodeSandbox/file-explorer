@@ -95,6 +95,7 @@ pub fn run() {
                     })
                 },
                 watch_sets: Mutex::new(HashMap::new()),
+                job_owners: Mutex::new(HashMap::new()),
                 predictor: Mutex::new(Predictor::load(&paths.predictor)),
                 history: Mutex::new(History::load(&paths.history)),
                 deletes: Mutex::new(HashMap::new()),
@@ -183,6 +184,7 @@ pub fn run() {
                     sets.values().flatten().cloned().collect()
                 };
                 st.watcher.set_dirs(all);
+                commands::hand_over_jobs(window.app_handle(), &st, window.label());
             }
             #[cfg(desktop)]
             if matches!(event, tauri::WindowEvent::Moved(_)) {
@@ -199,6 +201,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::claim_job,
             tools::tool_run,
             tools::tool_cancel,
             tools::view_info,

@@ -440,7 +440,7 @@ impl Job {
                 items_total: 1,
                 items_done: u64::from(phase == DeletePhase::Done),
                 current: current.to_string(),
-                errors: error.map(|m| vec![fast_core::transfer::engine::TransferError { path: self.name.clone(), message: m.to_string(), needs_elevation: false }]).unwrap_or_default(),
+                errors: error.map(|m| vec![fast_core::transfer::engine::TransferError { path: self.name.clone(), message: m.to_string(), needs_elevation: false, dest: None }]).unwrap_or_default(),
                 error_count: u64::from(error.is_some()),
                 elapsed_secs: self.started.elapsed().as_secs_f64(),
                 first_name: self.name.clone(),

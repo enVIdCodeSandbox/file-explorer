@@ -85,7 +85,7 @@ impl Method {
         self == Method::Rclone
     }
 
-    fn is_robocopy(self) -> bool {
+    pub fn is_robocopy(self) -> bool {
         self == Method::Robocopy || (self == Method::Smb && cfg!(windows))
     }
 }
@@ -471,6 +471,35 @@ pub fn parse(method: Method, line: &str) -> Event {
     }
 }
 
+/// A file or folder Robocopy says it could not handle.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RobocopyFailure {
+    /// The Windows error number (5: access denied, 32: in use by another program).
+    pub code: u32,
+    /// The path as Robocopy printed it.
+    pub path: String,
+}
+
+/// Robocopy reports a problem as `2024/11/21 18:00:01 ERROR 32 (0x00000020) Copying File C:\src\a.bin`, with the
+/// reason on the next line. The word ERROR and the action are in the language of the system, so the line is
+/// recognised by the error number in brackets and the path is whatever starts with a drive or a server name.
+pub fn robocopy_failure(line: &str) -> Option<RobocopyFailure> {
+    let open = line.find("(0x")?;
+    let hex = line.get(open + 3..open + 11)?;
+    let code = u32::from_str_radix(hex, 16).ok()?;
+    if line.get(open + 11..open + 12)? != ")" {
+        return None;
+    }
+    let rest = &line[open + 12..];
+    let bytes = rest.as_bytes();
+    let start = (0..bytes.len()).find(|&i| {
+        let at_word = i == 0 || bytes[i - 1] == b' ';
+        at_word && (rest[i..].starts_with("\\\\") || (bytes[i].is_ascii_alphabetic() && rest[i..].get(1..3) == Some(":\\")))
+    })?;
+    let path = rest[start..].trim().to_string();
+    (!path.is_empty()).then_some(RobocopyFailure { code, path })
+}
+
 /// Did the tool succeed? Robocopy uses bit flags: below 8 means nothing failed.
 pub fn succeeded(method: Method, code: i32) -> bool {
     if method.is_robocopy() {
@@ -494,6 +523,18 @@ mod tests {
         assert_eq!(parse(Method::Robocopy, "\t    same      \t\t      12\ta.txt"), Event::Nothing);
         assert_eq!(parse(Method::Robocopy, "\t  *EXTRA File \t\t      12\ta.txt"), Event::Nothing);
         assert_eq!(parse(Method::Robocopy, ""), Event::Nothing);
+    }
+
+    #[test]
+    fn finds_the_file_robocopy_could_not_copy() {
+        let f = robocopy_failure("2024/11/21 18:00:01 ERROR 32 (0x00000020) Copying File C:\\src\\survival lol\\region\\r.0.0.mca").unwrap();
+        assert_eq!(f, RobocopyFailure { code: 32, path: "C:\\src\\survival lol\\region\\r.0.0.mca".into() });
+        // Another language puts other words around the same number.
+        let de = robocopy_failure("2024/11/21 18:00:01 FEHLER 5 (0x00000005) Zieldatei kopieren \\\\nas\\share\\a.txt").unwrap();
+        assert_eq!((de.code, de.path.as_str()), (5, "\\\\nas\\share\\a.txt"));
+        assert_eq!(robocopy_failure("\t    New File  \t\t  1048576\tbig.bin"), None);
+        assert_eq!(robocopy_failure("The process cannot access the file because it is being used by another process."), None);
+        assert_eq!(robocopy_failure("ERROR 5 (0x00000005) with no path"), None);
     }
 
     #[test]

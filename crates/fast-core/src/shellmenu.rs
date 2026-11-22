@@ -216,7 +216,7 @@ mod imp {
     struct Active {
         menu: IContextMenu,
         hmenu: HMENU,
-        /// Folder whose background the menu is for (the working directory).
+        /// The folder things the menu starts run in: the background's own folder, or the folder the selection is in.
         dir: Option<PathBuf>,
     }
 
@@ -330,7 +330,9 @@ mod imp {
                 }
                 let parent = parent.ok_or_else(|| Error::Invalid("nothing selected".into()))?;
                 let menu: IContextMenu = parent.GetUIObjectOf(HWND::default(), &children, None).map_err(win_err)?;
-                Ok((menu, None))
+                // Programs the menu starts (a .bat above all) run in the folder the selection is in,
+                // not wherever this app happens to have been started.
+                Ok((menu, first.parent().map(Path::to_path_buf)))
             }
         })();
         let (menu, dir) = match result {
@@ -731,7 +733,11 @@ mod imp {
         let (exec, files) = LAST.lock().get((id as usize).wrapping_sub(1)).cloned().ok_or_else(|| Error::Invalid("the menu is no longer open".into()))?;
         let args = command_for(&exec, &files);
         let (program, rest) = args.split_first().ok_or_else(|| Error::Invalid("empty command".into()))?;
-        Command::new(program)
+        let mut command = Command::new(program);
+        if let Some(dir) = files.first().and_then(|f| f.parent()).filter(|d| d.is_dir()) {
+            command.current_dir(dir);
+        }
+        command
             .args(rest)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

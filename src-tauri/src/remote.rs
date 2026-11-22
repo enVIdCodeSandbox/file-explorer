@@ -393,7 +393,7 @@ impl Reporter {
                 items_total: items.1,
                 items_done: items.0,
                 current: current.to_string(),
-                errors: errors.iter().take(50).map(|(p, m)| TransferError { path: p.clone(), message: m.clone(), needs_elevation: false }).collect(),
+                errors: errors.iter().take(50).map(|(p, m)| TransferError { path: p.clone(), message: m.clone(), needs_elevation: false, dest: None }).collect(),
                 error_count: errors.len() as u64,
                 elapsed_secs: self.started.elapsed().as_secs_f64(),
                 first_name: self.first_name.clone(),

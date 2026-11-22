@@ -324,6 +324,8 @@ pub struct Transfer {
     pub default_priority: String,
     /// How many transfers work at once; the rest wait their turn. 0 = all of them.
     pub max_active: usize,
+    /// Transfers that use the same hard disk take turns; everything else works at the same time.
+    pub same_disk_turns: bool,
 }
 
 impl Default for Transfer {
@@ -344,6 +346,7 @@ impl Default for Transfer {
             on_time_limit: "pause".into(),
             default_priority: "normal".into(),
             max_active: 0,
+            same_disk_turns: true,
         }
     }
 }

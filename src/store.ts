@@ -5,6 +5,8 @@ import { isMobileOs, openOutside } from "./util/native";
 import { create } from "zustand";
 import {
   api,
+  onJobClaimed,
+  ownsJob,
   type AppInfo,
   type Budget,
   type Conflict,
@@ -28,6 +30,7 @@ import {
   type TransferSpec,
 } from "./api";
 import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
+import { failedGroups } from "./util/retryFailed";
 import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
 import { isPerFolder, scopesSignature } from "./util/folderMemory";
 import { columnsPerFolder, loadViews, saveViews, withView, withoutColumns, type FolderViews } from "./folderViews";
@@ -1261,7 +1264,7 @@ export const useStore = create<State>((set, get) => ({
       lastDestRefresh[p.id] = Date.now();
       get().bumpDirs([p.destDir]);
     }
-    if (p.conflict && !detachedView) void askAboutConflict(p.id, p.conflict, get().dialog == null);
+    if (p.conflict && !detachedView && ownsJob(p.id)) void askAboutConflict(p.id, p.conflict, get().dialog == null);
     // A job that ended cleanly leaves at once (failures stay until dismissed); its last state is kept to look at again.
     if (p.phase === "cancelled" && p.errorCount === 0) get().finishJob("transfer", p);
     if (p.phase === "done" && p.errorCount === 0) {
@@ -1307,7 +1310,7 @@ export const useStore = create<State>((set, get) => ({
     set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown }, series });
     if (p.method && p.phase === "running") noteMethod(get, set, jobGroup(p.action, p.permanent), p.method, p.firstName);
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
-    if (p.conflict && !detachedView && p.phase === "running") void askAboutConflict(p.id, p.conflict, get().dialog == null);
+    if (p.conflict && !detachedView && p.phase === "running" && ownsJob(p.id)) void askAboutConflict(p.id, p.conflict, get().dialog == null);
     if ((p.phase === "done" || p.phase === "cancelled") && p.errorCount === 0 && p.action !== "update") get().finishJob("delete", p);
     if (p.action === "delete" && p.phase === "failed") {
       deletedFrom.delete(p.id);
@@ -1420,7 +1423,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   // Opens on that job, whatever else is on screen; the running jobs' own window makes room.
-  showFinished: (key) => set({ finishedPick: key, finishedOpen: true, transfersOpen: false }),
+  showFinished: (key) => set({ finishedPick: key, finishedOpen: true, transfersOpen: false, noticesOpen: false }),
 
   forgetFinished: (key) => {
     if (!key) return set({ finished: {}, finishedOpen: false });
@@ -1810,6 +1813,16 @@ const askedConflicts = new Set<string>();
 const lastDestRefresh: Record<number, number> = {};
 
 /** "This file already exists": Replace, Skip, Keep both, each for this file or for all that follow. */
+// A job can ask before the call that started it has answered with its number: ask as soon as the job is ours.
+onJobClaimed((id) => {
+  const st = useStore.getState();
+  if (detachedView) return;
+  const t = st.transfers[id];
+  if (t?.conflict) void askAboutConflict(id, t.conflict, st.dialog == null);
+  const d = st.deletes[id];
+  if (d?.conflict && d.phase === "running") void askAboutConflict(id, d.conflict, st.dialog == null);
+});
+
 async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
   const key = `${id}:${c.number}`;
   if (askedConflicts.has(key) || !canShow) return; // asked already, or another dialog is open: the next progress update retries
@@ -1936,6 +1949,27 @@ export async function guardAccess(job: Job, what: string): Promise<"normal" | "e
 export async function runElevated(job: Job): Promise<JobFinished> {
   const id = await api.elevatedStart(job);
   return jobResult(id);
+}
+
+/** Run the failed items of a transfer again, and only those: each goes to the folder it was headed for. */
+export async function retryFailedItems(p: Progress, spec?: TransferSpec): Promise<boolean> {
+  const groups = failedGroups(p.errors, spec);
+  if (!groups.length) return false;
+  const s = useStore.getState();
+  for (const g of groups) {
+    // What failed may have left a half-written file behind: the new copy replaces it.
+    const job: Job = { kind: "transfer", spec: { sources: g.sources, destDir: g.destDir, op: p.op === "move" ? "move" : "copy", conflict: "overwrite", skipIdentical: false } };
+    try {
+      const mode = await guardAccess(job, `Retrying ${describeItems(g.sources)}`);
+      if (mode === "cancel") return false;
+      const id = mode === "elevated" ? await api.elevatedStart(job) : await api.transferStart(job.spec);
+      useStore.setState({ specs: { ...useStore.getState().specs, [id]: job.spec } });
+    } catch (e) {
+      s.showToast(String(e));
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Retry a transfer that failed for lack of permission. */

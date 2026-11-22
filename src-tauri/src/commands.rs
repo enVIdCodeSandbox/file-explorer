@@ -1340,7 +1340,7 @@ pub async fn archive_start(app: AppHandle, state: State<'_, Shared>, action: Str
                 items_total: total,
                 items_done: done,
                 current: current.to_string(),
-                errors: error.iter().map(|m| fast_core::transfer::engine::TransferError { path: first_name.clone(), message: m.clone(), needs_elevation: false }).collect(),
+                errors: error.iter().map(|m| fast_core::transfer::engine::TransferError { path: first_name.clone(), message: m.clone(), needs_elevation: false, dest: None }).collect(),
                 error_count: error.iter().count() as u64,
                 elapsed_secs: started.elapsed().as_secs_f64(),
                 first_name: first_name.clone(),
@@ -1599,6 +1599,7 @@ pub fn apply_transfer_limits(st: &Shared) {
     let s = st.settings.read();
     transfer::throttle::global_limiter().set_rate(s.transfer.max_speed_kb * 1024);
     transfer::throttle::gate().set_max(s.transfer.max_active);
+    transfer::throttle::gate().set_disk_turns(s.transfer.same_disk_turns);
 }
 
 /// Ask an administrator helper to stop (it cannot be signalled directly).
@@ -1929,7 +1930,7 @@ pub fn rename_by_copy(app: AppHandle, state: State<'_, Shared>, path: String, ne
                     items_total: 1,
                     items_done: u64::from(phase == ops::DeletePhase::Done),
                     current: name.clone(),
-                    errors: error.map(|m| vec![transfer::engine::TransferError { path: name.clone(), message: m.to_string(), needs_elevation: false }]).unwrap_or_default(),
+                    errors: error.map(|m| vec![transfer::engine::TransferError { path: name.clone(), message: m.to_string(), needs_elevation: false, dest: None }]).unwrap_or_default(),
                     error_count: u64::from(error.is_some()),
                     elapsed_secs: started.elapsed().as_secs_f64(),
                     first_name: name.clone(),
@@ -3477,6 +3478,38 @@ pub async fn run_custom_action(state: State<'_, Shared>, id: String, paths: Vec<
         Ok(())
     })
     .await
+}
+
+/// The window that asks for a job remembers it as its own, so the question "this file already exists, replace it?"
+/// is put to that window alone and not to every window that is open.
+#[tauri::command]
+pub fn claim_job(state: State<'_, Shared>, window: tauri::WebviewWindow, id: u64) {
+    state.job_owners.lock().insert(id, window.label().to_string());
+}
+
+/// A window that is closed leaves its jobs running. The main window (or the oldest one left) takes them over,
+/// so a question they ask still has somebody to answer it.
+pub fn hand_over_jobs(app: &AppHandle, state: &Shared, closed: &str) {
+    let orphans: Vec<u64> = {
+        let mut owners = state.job_owners.lock();
+        let ids: Vec<u64> = owners.iter().filter(|(_, l)| l.as_str() == closed).map(|(id, _)| *id).collect();
+        for id in &ids {
+            owners.remove(id);
+        }
+        ids
+    };
+    if orphans.is_empty() {
+        return;
+    }
+    if let Some(label) = crate::launch::receiver_label(app) {
+        {
+            let mut owners = state.job_owners.lock();
+            for id in &orphans {
+                owners.insert(*id, label.clone());
+            }
+        }
+        let _ = app.emit_to(label.as_str(), "job-adopted", orphans);
+    }
 }
 
 /// Start a program with the given arguments in a folder (a user command or the command line). Never through a shell.

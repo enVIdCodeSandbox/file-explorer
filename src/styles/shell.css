@@ -265,6 +265,8 @@
 .notice-list .notice { box-shadow: none; background: var(--surface); }
 .notice-list-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 4px; }
 .notice-bell { position: relative; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow); }
+.notice-finished { display: flex; align-items: center; gap: 6px; width: 100%; margin: 2px 0 8px; padding: 6px 10px; font-size: var(--font-size-small); text-align: left; color: var(--text); background: var(--surface-active); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.notice-finished:hover { border-color: var(--border-strong); }
 .notice-bell:hover { background: var(--surface-active); }
 .notice-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
 

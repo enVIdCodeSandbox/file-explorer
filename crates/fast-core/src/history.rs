@@ -641,6 +641,7 @@ mod tests {
             max_secs: 0,
             timed_out: false,
             queued_ahead: 0,
+            queued_disk: None,
             active_files: Vec::new(),
             counting: false,
             method: Some(Method::Native),

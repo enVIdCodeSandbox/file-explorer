@@ -90,6 +90,8 @@ export function Notices() {
   const notices = useStore((s) => s.notices);
   const open = useStore((s) => s.noticesOpen);
   const unread = useStore((s) => s.unreadNotices);
+  // What finished is part of the same list: its graphs and details open from here, not from a bar of their own.
+  const finishedCount = useStore((s) => Object.keys(s.finished).length);
   const { clearNotices } = useStore.getState();
   const box = useRef<HTMLDivElement>(null);
 
@@ -112,8 +114,8 @@ export function Notices() {
     };
   }, [position, enabled, popups.length, open]);
 
-  if (!enabled && !notices.length) return null;
-  const showBell = bell || notices.length > 0;
+  if (!enabled && !notices.length && !finishedCount) return null;
+  const showBell = bell || notices.length > 0 || finishedCount > 0;
 
   return (
     <div className="notices" data-position={position} data-size={adv<string>(settings, "notify.size")} ref={box} aria-live="polite">
@@ -128,6 +130,11 @@ export function Notices() {
               <Icon name="close" size={12} />
             </button>
           </div>
+          {finishedCount > 0 && (
+            <button className="notice-finished" onClick={() => useStore.setState({ finishedOpen: true, transfersOpen: false, noticesOpen: false })} title="The final graph and every detail of the copies, moves and deletes that finished">
+              <Icon name="clock" size={12} /> Graphs and details of finished jobs ({finishedCount})
+            </button>
+          )}
           {notices.length === 0 && <p className="muted">Nothing yet. Copy, move, delete and rename show up here.</p>}
           {[...notices].reverse().map((n) => (
             <NoticeRow key={n.id} n={n} />

@@ -2,7 +2,7 @@ import { useT } from "./i18n";
 import { onSuspendChange, isSuspended, startUnloader, rememberScrolls, restoreScrolls, keepSelection } from "./util/unload";
 import { dropThumbCache } from "./components/Thumb";
 import { Suspense, lazy, useEffect, useState, useSyncExternalStore } from "react";
-import { api, on } from "./api";
+import { adoptJobs, api, on } from "./api";
 import { adv } from "./settings/advanced";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
@@ -234,6 +234,7 @@ function AppInner() {
     const subscriptions = [
       on("transfer-progress", (p) => useStore.getState().onProgress(p)),
       on("delete-progress", (p) => useStore.getState().onDeleteProgress(p)),
+      on("job-adopted", (ids) => adoptJobs(ids)),
       on("job-finished", onJobFinished),
       on("fs-changed", (dirs) => useStore.getState().bumpDirs(dirs)),
       on("dir-updated", (l) => useStore.getState().bumpDirs([l.path])),

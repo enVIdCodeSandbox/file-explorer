@@ -251,9 +251,12 @@ export interface TransferSpec {
 }
 
 export interface TransferError {
+  /** What failed: the file (or folder) that was being read. */
   path: string;
   message: string;
   needsElevation: boolean;
+  /** Where it was being written, when known. */
+  dest?: string | null;
 }
 
 /** One thing in the Recycle Bin / Trash. */
@@ -285,6 +288,8 @@ export interface Progress {
   maxSecs?: number;
   timedOut?: boolean;
   queuedAhead?: number;
+  /** The hard disk it waits for another transfer to finish with. */
+  queuedDisk?: string | null;
   /** The files being copied right now (as many as the settings ask for). */
   activeFiles?: { path: string; size: number }[];
   /** Copying has begun while the folders are still being counted: totals are what has been found so far. */
@@ -576,6 +581,7 @@ export interface Settings {
     onTimeLimit: "stop" | "pause";
     defaultPriority: "low" | "normal" | "high";
     maxActive: number;
+    sameDiskTurns: boolean;
     method: "auto" | "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs";
     tryOtherMethods: boolean;
     progressIntervalMs: number;
@@ -785,6 +791,32 @@ export interface AppInfo {
 
 export type TerminalMode = "here" | "home" | "driveRoot" | "admin";
 
+// Jobs this window asked for. Progress reaches every window, but the question "this file already exists, replace it?"
+// belongs to the window that started the job and to no other.
+const ownJobs = new Set<number>();
+const claimListeners = new Set<(id: number) => void>();
+export const ownsJob = (id: number): boolean => ownJobs.has(id);
+/** Called when this window comes to own a job (it started it, or took it over from a window that was closed). */
+export const onJobClaimed = (fn: (id: number) => void): void => void claimListeners.add(fn);
+export function adoptJobs(ids: number[]): void {
+  for (const id of ids) {
+    ownJobs.add(id);
+    claimListeners.forEach((f) => f(id));
+  }
+}
+function claimed(started: Promise<number>): Promise<number> {
+  return started.then((id) => {
+    ownJobs.add(id);
+    try {
+      void Promise.resolve(invoke<void>("claim_job", { id })).catch(() => {});
+    } catch {
+      /* the backend only uses this to hand a job over when its window is closed */
+    }
+    claimListeners.forEach((f) => f(id));
+    return id;
+  });
+}
+
 export const api = {
   /** With a ticket, the folder's items also arrive as `dir-chunk` events while it is read. */
   listDir: (path: string, ticket?: number) => invoke<Listing>("list_dir", { path, ticket }),
@@ -795,17 +827,17 @@ export const api = {
   remoteMkdir: (parent: string, name: string) => invoke<string>("remote_mkdir", { parent, name }),
   remoteRename: (from: string, newName: string) => invoke<string>("remote_rename", { from, newName }),
   /** Copy items out of an archive into a folder, or (open) fetch one file to a temporary place and open it. */
-  archiveCopyStart: (sources: string[], dest: string, open = false, remove = false) => invoke<number>("archive_copy_start", { sources, dest, open, remove }),
+  archiveCopyStart: (sources: string[], dest: string, open = false, remove = false) => claimed(invoke<number>("archive_copy_start", { sources, dest, open, remove })),
   /** Put things into an archive or move them inside it. `op` "move" takes the originals away afterwards. */
-  archivePasteStart: (sources: string[], dest: string, op: "copy" | "move") => invoke<number>("archive_paste_start", { sources, dest, op }),
+  archivePasteStart: (sources: string[], dest: string, op: "copy" | "move") => claimed(invoke<number>("archive_paste_start", { sources, dest, op })),
   archiveDelete: (locs: string[]) => invoke<void>("archive_delete", { locs }),
   archiveRename: (loc: string, newName: string) => invoke<string>("archive_rename", { loc, newName }),
   archiveCreate: (dir: string, name: string, folder: boolean) => invoke<string>("archive_create", { dir, name, folder }),
   /** Unpack items to a staging folder so real files can go on the system clipboard. */
   archiveStage: (sources: string[]) => invoke<string[]>("archive_stage", { sources }),
   /** Fetch server or phone items into real files; the finished job lists them (one per line) in its result. */
-  remoteStageStart: (sources: string[], maxMb?: number, allowFolders?: boolean) => invoke<number>("remote_stage_start", { sources, maxMb: maxMb ?? null, allowFolders: allowFolders ?? null }),
-  remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => invoke<number>("remote_copy_start", { sources, dest, mv, open }),
+  remoteStageStart: (sources: string[], maxMb?: number, allowFolders?: boolean) => claimed(invoke<number>("remote_stage_start", { sources, maxMb: maxMb ?? null, allowFolders: allowFolders ?? null })),
+  remoteCopyStart: (sources: string[], dest: string, mv: boolean, open = false) => claimed(invoke<number>("remote_copy_start", { sources, dest, mv, open })),
   remoteRemoveStart: (paths: string[]) => invoke<number>("remote_remove_start", { paths }),
   serversList: () => invoke<SavedServer[]>("servers_list"),
   serversSave: (entry: SavedServer) => invoke<SavedServer[]>("servers_save", { entry }),
@@ -842,11 +874,11 @@ export const api = {
   trashRestore: (ids: string[], parents: string[]) => invoke<number>("trash_restore", { ids, parents }),
   trashPurge: (ids: string[]) => invoke<number>("trash_purge", { ids }),
   trashEmpty: () => invoke<number>("trash_empty"),
-  archiveStart: (action: "compress" | "extract", paths: string[], here = false) => invoke<number>("archive_start", { action, paths, here }),
+  archiveStart: (action: "compress" | "extract", paths: string[], here = false) => claimed(invoke<number>("archive_start", { action, paths, here })),
   watchDirs: (dirs: string[]) => invoke<void>("watch_dirs", { dirs }),
   checkConflicts: (sources: string[], destDir: string) =>
     invoke<string[]>("check_conflicts", { sources, destDir }),
-  transferStart: (spec: TransferSpec) => invoke<number>("transfer_start", { spec }),
+  transferStart: (spec: TransferSpec) => claimed(invoke<number>("transfer_start", { spec })),
   /** Put files on the system clipboard, so other programs can paste them. */
   clipboardSetFiles: (paths: string[]) => invoke<void>("clipboard_set_files", { paths }),
   clipboardGetFiles: () => invoke<string[]>("clipboard_get_files"),
@@ -887,8 +919,8 @@ export const api = {
   transferControl: (id: number, action: "pause" | "resume" | "cancel") =>
     invoke<void>("transfer_control", { id, action }),
   checkAccess: (job: Job) => invoke<AccessCheck>("check_access", { job }),
-  elevatedStart: (job: Job) => invoke<number>("elevated_start", { job }),
-  deleteStart: (paths: string[], permanent: boolean) => invoke<number>("delete_start", { paths, permanent }),
+  elevatedStart: (job: Job) => claimed(invoke<number>("elevated_start", { job })),
+  deleteStart: (paths: string[], permanent: boolean) => claimed(invoke<number>("delete_start", { paths, permanent })),
   deleteControl: (id: number, action: "cancel") => invoke<void>("delete_control", { id, action }),
   showProperties: (paths: string[]) => invoke<boolean>("show_properties", { paths }),
   historyInfo: () => invoke<HistoryInfo>("history_info"),
@@ -923,7 +955,7 @@ export const api = {
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
   driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),
   renameItem: (path: string, newName: string) => invoke<string>("rename_item", { path, newName }),
-  renameByCopy: (path: string, newName: string) => invoke<number>("rename_by_copy", { path, newName }),
+  renameByCopy: (path: string, newName: string) => claimed(invoke<number>("rename_by_copy", { path, newName })),
   createItem: (dir: string, name: string, folder: boolean) =>
     invoke<string>("create_item", { dir, name, folder }),
   /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */
@@ -1109,6 +1141,7 @@ export interface BackendEvents {
   "update-ready": UpdateInfo;
   "transfer-progress": Progress;
   "delete-progress": DeleteProgress;
+  "job-adopted": number[];
   "job-finished": JobFinished;
   "analysis-progress": AnalysisProgress;
   "analysis-done": AnalysisResult;

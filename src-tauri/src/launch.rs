@@ -30,6 +30,12 @@ fn receiver(app: &AppHandle) -> Option<WebviewWindow> {
     })
 }
 
+/// Label of the window `receiver` picks.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub fn receiver_label(app: &AppHandle) -> Option<String> {
+    receiver(app).map(|w| w.label().to_string())
+}
+
 /// Queue requests and bring the window that will show them to the front.
 /// With nothing to show (the app was simply started a second time) the window still comes forward.
 #[cfg_attr(target_os = "android", allow(dead_code))]

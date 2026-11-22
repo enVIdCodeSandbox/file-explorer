@@ -212,6 +212,7 @@ impl DeleteCtx {
                 path: path.to_string_lossy().into_owned(),
                 message: e.to_string(),
                 needs_elevation: e.kind() == io::ErrorKind::PermissionDenied,
+                dest: None,
             });
         }
     }

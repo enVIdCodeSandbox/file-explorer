@@ -149,9 +149,13 @@ pub enum Phase {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferError {
+    /// What failed: the file (or folder) that was being read.
     pub path: String,
     pub message: String,
     pub needs_elevation: bool,
+    /// Where it was being written, when that is known. A retry of just this item needs it.
+    #[serde(default)]
+    pub dest: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -209,6 +213,9 @@ pub struct Progress {
     pub timed_out: bool,
     /// While queued: how many transfers go first.
     pub queued_ahead: u32,
+    /// While queued: the hard disk it is waiting for another transfer to finish with, when that is the reason.
+    #[serde(default)]
+    pub queued_disk: Option<String>,
     /// The files being copied right now, one per busy worker (as many as `TransferSpec::active_files` allows).
     #[serde(default)]
     pub active_files: Vec<ActiveFile>,
@@ -427,7 +434,16 @@ impl Shared {
                 path: path.to_string_lossy().into_owned(),
                 message: e.to_string(),
                 needs_elevation: e.kind() == io::ErrorKind::PermissionDenied,
+                dest: None,
             });
+        }
+    }
+    /// A failure whose destination is known, with the reason as the tool gave it.
+    fn error_to(&self, path: &Path, dest: &Path, message: String, needs_elevation: bool) {
+        self.error_count.fetch_add(1, Ordering::Relaxed);
+        let mut errs = self.errors.lock();
+        if errs.len() < MAX_REPORTED_ERRORS {
+            errs.push(TransferError { path: path.to_string_lossy().into_owned(), message, needs_elevation, dest: Some(dest.to_string_lossy().into_owned()) });
         }
     }
 }
@@ -456,7 +472,7 @@ impl TransferHandle {
     pub fn abandon(&self) {
         self.cancel();
         if self.shared.run_started.lock().is_some() && !self.shared.gate_released.swap(true, Ordering::SeqCst) {
-            throttle::gate().leave();
+            throttle::gate().leave(self.id);
         }
     }
     /// Answer the conflict that `Progress::conflict` is showing. With `all`,
@@ -706,13 +722,25 @@ fn run(
         max_secs: 0,
         timed_out: false,
         queued_ahead: 0,
+        queued_disk: None,
         active_files: Vec::new(),
         counting: false,
     };
     // Wait for a turn when too many transfers are already working.
     {
         let gate = throttle::gate();
-        gate.join(id, shared.priority.clone(), shared.start_now.clone());
+        // Spinning disks this transfer would keep busy: another transfer on the same one waits its turn.
+        let mut disks: Vec<String> = spec
+            .sources
+            .iter()
+            .chain(std::iter::once(&spec.dest_dir))
+            .filter_map(|p| drives::volume_for(p, &drives))
+            .filter(|d| d.media == drives::Media::Hdd)
+            .map(|d| d.mount.to_lowercase())
+            .collect();
+        disks.sort();
+        disks.dedup();
+        gate.join_on(id, shared.priority.clone(), shared.start_now.clone(), disks);
         let mut last = Instant::now() - Duration::from_secs(1);
         while !gate.try_enter(id) {
             if shared.cancelled() {
@@ -726,22 +754,24 @@ fn run(
                 last = Instant::now();
                 progress.phase = Phase::Queued;
                 progress.queued_ahead = gate.ahead_of(id);
+                progress.queued_disk = gate.waiting_for_disk(id);
                 shared.fill(&mut progress);
                 on_progress(progress.clone());
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         progress.queued_ahead = 0;
+        progress.queued_disk = None;
     }
-    struct Turn(Arc<Shared>);
+    struct Turn(Arc<Shared>, u64);
     impl Drop for Turn {
         fn drop(&mut self) {
             if !self.0.gate_released.swap(true, Ordering::SeqCst) {
-                throttle::gate().leave();
+                throttle::gate().leave(self.1);
             }
         }
     }
-    let _turn = Turn(shared.clone());
+    let _turn = Turn(shared.clone(), id);
     *shared.run_started.lock() = Some(Instant::now());
     shared.fill(&mut progress);
     on_progress(progress.clone());
@@ -1341,6 +1371,9 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
             // it has begun are followed by their size on disk: the speed graph then shows a real
             // speed, not the whole file at once when it starts.
             let mut flights: Vec<Flight> = Vec::new();
+            // The files Robocopy says it could not copy, each with the reason it gave on the line after.
+            let mut failures: Vec<(method::RobocopyFailure, String)> = Vec::new();
+            let mut awaiting_reason = false;
             let mut polled = Instant::now();
             let mut interrupted = false;
             loop {
@@ -1349,7 +1382,21 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
                     Flight::settle(&mut flights, shared, false);
                 }
                 match rx.recv_timeout(Duration::from_millis(40)) {
-                    Ok(line) => match method::parse(method, &line) {
+                    Ok(line) => match {
+                        let event = method::parse(method, &line);
+                        if method.is_robocopy() && failures.len() < 200 {
+                            if let Some(f) = method::robocopy_failure(&line) {
+                                failures.push((f, String::new()));
+                                awaiting_reason = true;
+                            } else if awaiting_reason && matches!(event, method::Event::Nothing) && !line.trim().is_empty() {
+                                if let Some(last) = failures.last_mut() {
+                                    last.1 = line.trim().to_string();
+                                }
+                                awaiting_reason = false;
+                            }
+                        }
+                        event
+                    } {
                         method::Event::Started { size, name } => {
                             flights.push(Flight { dst: flight_destination(top, &name), size, credited: 0, born: Instant::now() });
                             Flight::settle(&mut flights, shared, false);
@@ -1393,11 +1440,50 @@ fn run_tool(method: Method, tops: &[method::Top], spec: &TransferSpec, plan: &Pl
             }
             match status {
                 Ok(st) if method::succeeded(method, st.code().unwrap_or(-1)) => {}
+                Ok(st) if method.is_robocopy() && !failures.is_empty() => report_robocopy_failures(shared, top, failures, st.code().unwrap_or(-1)),
                 Ok(st) => shared.error(&top.src, &io::Error::other(format!("{} stopped with code {}", method.label(), st.code().unwrap_or(-1)))),
                 Err(e) => shared.error(&top.src, &e),
             }
             break;
         }
+    }
+}
+
+/// The parts of `path` below `base`, ignoring case and the kind of slash (Windows paths).
+fn below(path: &str, base: &Path) -> Option<Vec<String>> {
+    let norm = |s: &str| s.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let (p, b) = (norm(path), norm(&base.to_string_lossy()));
+    let rest = if p == b { "" } else { p.strip_prefix(&b)?.strip_prefix('\\')? };
+    // The names are taken from the original spelling; lowercasing does not change where the parts split.
+    let cut = path.trim_end_matches(['/', '\\']).len().saturating_sub(rest.len());
+    let original = path.trim_end_matches(['/', '\\']).get(cut..)?;
+    Some(original.split(['/', '\\']).filter(|c| !c.is_empty()).map(str::to_string).collect())
+}
+
+fn join_parts(base: &Path, parts: &[String]) -> PathBuf {
+    parts.iter().fold(base.to_path_buf(), |p, c| p.join(c))
+}
+
+/// Robocopy stopped with failures: name each file (or folder) that failed, where it was being read and
+/// where it was going, instead of blaming the whole folder it was asked to copy.
+fn report_robocopy_failures(shared: &Shared, top: &method::Top, failures: Vec<(method::RobocopyFailure, String)>, code: i32) {
+    let mut seen: Vec<(PathBuf, PathBuf, String, bool)> = Vec::new();
+    for (f, reason) in failures {
+        let (src, dst) = if let Some(rel) = below(&f.path, &top.src).or_else(|| below(&f.path, &top.dst)) {
+            (join_parts(&top.src, &rel), join_parts(&top.dst, &rel))
+        } else {
+            (top.src.clone(), top.dst.clone())
+        };
+        let message = if reason.is_empty() { format!("Robocopy could not copy it (error {}, code {code})", f.code) } else { reason };
+        // Access denied: running it again as an administrator can work.
+        let elevate = f.code == 5;
+        match seen.iter_mut().find(|(s, ..)| *s == src) {
+            Some(entry) => *entry = (src, dst, message, elevate), // the last try is the one that counts
+            None => seen.push((src, dst, message, elevate)),
+        }
+    }
+    for (src, dst, message, elevate) in seen {
+        shared.error_to(&src, &dst, message, elevate);
     }
 }
 
@@ -1616,7 +1702,7 @@ fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
             shared.files_done.fetch_add(1, Ordering::Relaxed);
             if spec.op == Op::Move {
                 if let Err(e) = fs::remove_file(&item.src) {
-                    shared.error(&item.src, &e);
+                    shared.error_to(&item.src, &item.dst, e.to_string(), e.kind() == io::ErrorKind::PermissionDenied);
                 }
             }
         }
@@ -1626,7 +1712,7 @@ fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
         }
         Err(e) => {
             let _ = fs::remove_file(&dst);
-            shared.error(&item.src, &e);
+            shared.error_to(&item.src, &item.dst, e.to_string(), e.kind() == io::ErrorKind::PermissionDenied);
         }
     }
 }
@@ -1879,6 +1965,32 @@ mod tests {
         h.wait();
         let p = last.lock().unwrap().clone().unwrap();
         p
+    }
+
+    #[test]
+    fn a_robocopy_failure_names_the_file_and_where_it_was_going() {
+        let shared = test_shared();
+        let top = method::Top { src: PathBuf::from("C:\\src\\survival lol"), dst: PathBuf::from("D:\\copy\\survival lol"), is_dir: true };
+        let f = |code, path: &str| method::RobocopyFailure { code, path: path.into() };
+        report_robocopy_failures(
+            &shared,
+            &top,
+            vec![
+                (f(32, "C:\\src\\Survival Lol\\region\\r.0.0.mca"), "in use".into()),
+                (f(32, "C:\\src\\survival lol\\region\\r.0.0.mca"), "still in use".into()), // the retry of the same file
+                (f(5, "D:\\copy\\survival lol\\data"), String::new()),
+            ],
+            9,
+        );
+        let errs = shared.errors.lock();
+        assert_eq!(shared.error_count.load(Ordering::Relaxed), 2);
+        assert_eq!(errs[0].path.replace('/', "\\"), "C:\\src\\survival lol\\region\\r.0.0.mca");
+        assert_eq!(errs[0].dest.as_deref().unwrap().replace('/', "\\"), "D:\\copy\\survival lol\\region\\r.0.0.mca");
+        assert_eq!(errs[0].message, "still in use");
+        assert!(!errs[0].needs_elevation);
+        assert_eq!(errs[1].path.replace('/', "\\"), "C:\\src\\survival lol\\data");
+        assert!(errs[1].needs_elevation);
+        assert!(errs[1].message.contains("error 5"));
     }
 
     #[test]

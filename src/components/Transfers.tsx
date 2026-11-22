@@ -4,10 +4,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type DeleteProgress, type Progress } from "../api";
-import { retryTransferAsAdmin, useStore, type Sample } from "../store";
+import { retryFailedItems, retryTransferAsAdmin, useStore, type Sample } from "../store";
 import { reportFiles, reportOf } from "../util/jobReport";
 import { formatCount, formatDuration, formatEta, formatRate, formatSize } from "../util/format";
 import { baseName } from "../util/path";
+import { failedGroups, folderOf } from "../util/retryFailed";
 import { adv } from "../settings/advanced";
 import { metricOn } from "../settings/transferMetrics";
 import { METHOD_NAME } from "../util/methods";
@@ -56,7 +57,12 @@ function titleOf(j: Job): string {
   const p = j.p;
   const dest = baseName(p.destDir);
   const verb = p.op === "move" ? ["Moving", "Moved"] : ["Copying", "Copied"];
-  if (p.phase === "queued") return `${p.op === "move" ? "Move" : "Copy"} waiting for its turn${p.queuedAhead ? ` (${p.queuedAhead} ahead)` : ""}`;
+  if (p.phase === "queued") {
+    const what = p.op === "move" ? "Move" : "Copy";
+    // Said plainly when it is the hard disk it waits for: that is a choice, and "Start now" overrides it.
+    if (p.queuedDisk) return `${what} waiting for the other transfer on ${p.queuedDisk.toUpperCase()} (a hard disk is faster one at a time)`;
+    return `${what} waiting for its turn${p.queuedAhead ? ` (${p.queuedAhead} ahead)` : ""}`;
+  }
   if (p.phase === "scanning") return `Preparing to ${p.op}…`;
   if (p.phase === "done") return `${verb[1]} ${formatCount(p.filesDone)} item${p.filesDone === 1 ? "" : "s"} to ${dest}`;
   if (p.phase === "cancelled") return `${p.op === "move" ? "Move" : "Copy"} cancelled`;
@@ -97,30 +103,44 @@ function Bar({ fraction, indeterminate }: { fraction: number; indeterminate?: bo
   );
 }
 
-function Issues({ p, retry }: { p: Progress | DeleteProgress; retry?: () => void }) {
+function Issues({ p, retry, retryFailed }: { p: Progress | DeleteProgress; retry?: () => void; retryFailed?: () => void }) {
   if (p.errorCount === 0 && !("skipped" in p && (p.skipped ?? 0) > 0)) return null;
   const skipped = ("skipped" in p ? p.skipped : 0) ?? 0;
+  const first = p.errors[0];
+  const unlisted = p.errorCount - p.errors.length;
   return (
     <div className="transfer-issues">
       {skipped > 0 && <span>{formatCount(skipped)} skipped</span>}
       {p.errorCount > 0 && (
-        <details>
-          <summary>
-            {formatCount(p.errorCount)} item{p.errorCount === 1 ? "" : "s"} failed
-          </summary>
+        <details open={p.errors.length <= 3}>
+          <summary>{p.errorCount === 1 && first ? `Failed: ${baseName(first.path)}` : `${formatCount(p.errorCount)} item${p.errorCount === 1 ? "" : "s"} failed`}</summary>
           <ul>
             {p.errors.slice(0, 20).map((e, i) => (
               <li key={i} title={e.path}>
-                <span className="path">{baseName(e.path)}</span>: {e.message}
+                <span className="path">{baseName(e.path)}</span>
+                {folderOf(e.path) && <span className="muted"> in </span>}
+                {folderOf(e.path) && <span className="path">{folderOf(e.path)}</span>}
+                <div className="muted">{e.message}</div>
               </li>
             ))}
+            {p.errors.length > 20 && <li className="muted">and {p.errors.length - 20} more</li>}
+            {unlisted > 0 && <li className="muted">and {formatCount(unlisted)} more that are not listed</li>}
           </ul>
         </details>
       )}
-      {retry && (
-        <button className="secondary" onClick={retry}>
-          Retry as administrator
-        </button>
+      {(retryFailed || retry) && (
+        <div className="transfer-issue-actions">
+          {retryFailed && (
+            <button className="secondary" onClick={retryFailed} title={unlisted > 0 ? "Tries the items listed above again; the others are not listed" : "Copy only the items that failed again"}>
+              Retry failed {p.errors.length === 1 ? "item" : `items (${formatCount(Math.min(p.errors.length, p.errorCount))})`}
+            </button>
+          )}
+          {retry && (
+            <button className="secondary" onClick={retry}>
+              Retry as administrator
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -203,7 +223,11 @@ function Card({ job }: { job: Job }) {
           )}
         </>
       )}
-      <Issues p={p} retry={needsAdmin && spec ? () => { dismiss(); void retryTransferAsAdmin(spec); } : undefined} />
+      <Issues
+        p={p}
+        retry={needsAdmin && spec ? () => { dismiss(); void retryTransferAsAdmin(spec); } : undefined}
+        retryFailed={job.kind === "transfer" && !active && failedGroups(job.p.errors, spec).length > 0 ? () => void retryFailedItems(job.p, spec).then((started) => started && dismiss()) : undefined}
+      />
     </div>
   );
 }
@@ -801,6 +825,7 @@ function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; pas
               <Issues
                 p={j.p}
                 retry={j.kind === "transfer" && !active && j.p.errors.some((e) => e.needsElevation) && spec[j.p.id] ? () => { const s = spec[j.p.id]; dismissTransfer(j.p.id); void retryTransferAsAdmin(s); } : undefined}
+                retryFailed={j.kind === "transfer" && !active && failedGroups(j.p.errors, spec[j.p.id]).length > 0 ? () => { const jp = j.p; void retryFailedItems(jp, spec[jp.id]).then((started) => started && dismissTransfer(jp.id)); } : undefined}
               />
             </section>
           );
@@ -905,21 +930,13 @@ export function Transfers() {
   const pastOpen = useStore((s) => s.finishedOpen) && past.length > 0;
   if (detached && !pastOpen) return null;
   const running = jobs.length > 0 || waiting;
-  if (!running && !past.length) return null;
+  if (!running && !pastOpen) return null;
   return (
     <div className="transfers" data-open={open || pastOpen || undefined} aria-live="polite">
       {!detached && waiting && <Waiting />}
       {!detached && jobs.length > 0 && (open && !pastOpen ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />))}
-      {/* What finished: the list when asked for (even while other jobs run), otherwise a small way back to it. */}
-      {pastOpen ? (
-        <Window jobs={past} past />
-      ) : (
-        !running && (
-          <button className="transfer-recent" onClick={() => useStore.setState({ finishedOpen: true })} title="Look again at the graphs and details of what finished">
-            <Icon name="clock" size={12} /> Finished ({past.length})
-          </button>
-        )
-      )}
+      {/* What finished: the list when asked for (even while other jobs run). The way back to it is the notices' bell. */}
+      {pastOpen && <Window jobs={past} past />}
     </div>
   );
 }
