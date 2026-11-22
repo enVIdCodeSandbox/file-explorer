@@ -196,6 +196,7 @@ export function Thumb({
   const px = Math.max(16, Math.min(512, Math.round(size * (QUALITY[adv<string>(settings, "thumbs.quality")] ?? 1))));
   const key = `${path}|${modified}|${px}|${adv<number>(settings, "thumbs.videoPercent")}`;
   const [url, setUrl] = useState<string | undefined>(() => cache.get(key));
+  const [again, setAgain] = useState(0);
   // While this tile shows a picture it cannot be thrown out of the cache.
   useEffect(() => {
     if (!url) return;
@@ -220,6 +221,7 @@ export function Thumb({
     setUrl(undefined);
     let alive = true;
     let dequeue: (() => void) | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       dequeue = enqueue({
         key,
@@ -230,8 +232,11 @@ export function Thumb({
             const made = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
             remember(key, made);
             if (alive) setUrl(made);
-          } catch {
-            giveUp(key);
+          } catch (e) {
+            // A drive that a copy is using is left alone for now: try again a little later instead of giving up.
+            if (String(e).includes("drive-busy")) {
+              if (alive) retry = setTimeout(() => setAgain((n) => n + 1), 5000);
+            } else giveUp(key);
           }
         },
       });
@@ -239,9 +244,10 @@ export function Thumb({
     return () => {
       alive = false;
       clearTimeout(timer);
+      clearTimeout(retry);
       dequeue?.();
     };
-  }, [key, path, px, supported, settle]);
+  }, [key, path, px, supported, settle, again]);
 
   if (supported && url) {
     return <img className="thumb" src={url} width={size} height={size} alt="" draggable={false} decoding="async" loading="lazy" />;

@@ -54,6 +54,7 @@ pub mod trashbin;
 pub mod transfer;
 pub mod treemap;
 pub mod activity;
+pub mod busy;
 pub mod crashlog;
 #[cfg(windows)]
 pub mod netdrag;

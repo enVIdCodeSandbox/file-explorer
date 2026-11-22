@@ -651,6 +651,8 @@ pub fn start_with(
     std::thread::Builder::new()
         .name(format!("transfer-{id}"))
         .spawn(move || {
+            // The slow drives this job touches are left alone by the app's own background reading until it is over.
+            let _busy = crate::busy::hold(id, slow_places(&spec, &drives));
             run(id, spec, budget, drives, predict, choose, &shared, &on_progress);
             done.store(true, Ordering::Relaxed);
         })
@@ -681,6 +683,7 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
     let mut tops: Vec<method::Top> = Vec::new();
     let mut files: Vec<Item> = Vec::new();
     let mut clash_possible = false;
+    let mut timeouts = 0u32;
     for src in &spec.sources {
         if shared.cancelled() {
             break;
@@ -702,37 +705,68 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
             }
             dst = unique_name(&dst);
         }
-        // The first look at an item is a request to the drive too: from a stick or card it is not waited for for ever.
-        let looked = if shared.slow_source {
-            let one = src.clone();
-            careful::bounded(careful::LIST_STALL, &src.display().to_string(), move || fs::symlink_metadata(one))
+        // The first look at an item, and whether it already exists at the destination, are requests to the drives too: from or
+        // to a card, stick or network they are not waited for for ever, and the person can skip what is being waited for.
+        let careful_lookup = shared.slow_source || shared.network_dest || shared.removable_dest;
+        let looked = if careful_lookup {
+            let (one, target) = (src.clone(), dst.clone());
+            let skip_from = shared.skip_gen.load(Ordering::Relaxed);
+            careful::bounded_io(
+                careful::LIST_STALL,
+                &src.display().to_string(),
+                &|| shared.skip_gen.load(Ordering::Relaxed) != skip_from,
+                &|| shared.cancelled(),
+                &shared.stalled_lists,
+                move || {
+                    let meta = fs::symlink_metadata(&one)?;
+                    let exists = target.exists();
+                    Ok((meta, exists, exists && target.is_dir()))
+                },
+            )
         } else {
-            fs::symlink_metadata(src)
+            fs::symlink_metadata(src).map(|m| {
+                let exists = dst.exists();
+                (m, exists, exists && dst.is_dir())
+            })
         };
-        let meta = match looked {
-            Ok(m) => m,
+        let (meta, mut dst_exists, dst_is_dir) = match looked {
+            Ok(found) => {
+                timeouts = 0;
+                found
+            }
             Err(e) => {
                 shared.error(src, &e);
+                if e.kind() == io::ErrorKind::TimedOut {
+                    timeouts += 1;
+                    // A drive that has stopped answering will not answer the next item either: stop waiting 20 seconds for each.
+                    if timeouts >= 2 {
+                        shared.error(src, &io::Error::new(io::ErrorKind::TimedOut, "The drive has stopped answering, so the rest was not looked at. Take it out and put it back in, then copy again."));
+                        break;
+                    }
+                }
                 continue;
             }
         };
         // With "ask", files are decided one by one while the job runs (in `process`).
-        if dst.exists() {
+        if dst_exists {
             clash_possible = true;
         }
-        if dst.exists() && !(meta.is_dir() && dst.is_dir()) && spec.conflict != Conflict::Ask {
+        if dst_exists && !(meta.is_dir() && dst_is_dir) && spec.conflict != Conflict::Ask {
             match spec.conflict {
                 Conflict::Ask => {}
                 Conflict::Skip => {
                     shared.skipped.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                Conflict::KeepBoth => dst = unique_name(&dst),
+                Conflict::KeepBoth => {
+                    dst = unique_name(&dst);
+                    dst_exists = false;
+                }
                 Conflict::Overwrite => {}
             }
         }
         // A move within one volume is a rename: no data is copied at all.
-        if spec.op == Op::Move && !dst.exists() && fs::rename(src, &dst).is_ok() {
+        if spec.op == Op::Move && !dst_exists && fs::rename(src, &dst).is_ok() {
             shared.files_done.fetch_add(1, Ordering::Relaxed);
             continue;
         }
@@ -1815,6 +1849,16 @@ fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
             shared.error_to(&item.src, &item.dst, e.to_string(), e.kind() == io::ErrorKind::PermissionDenied);
         }
     }
+}
+
+/// The cards, sticks, hard disks and network places a job reads from or writes to: a drive's root, or the folder on a share.
+fn slow_places(spec: &TransferSpec, drives: &[drives::Drive]) -> Vec<PathBuf> {
+    spec.sources
+        .iter()
+        .chain(std::iter::once(&spec.dest_dir))
+        .filter(|p| matches!(drives::media_for(p, drives), drives::Media::Removable | drives::Media::Hdd | drives::Media::Network))
+        .map(|p| drives::volume_for(p, drives).map(|d| PathBuf::from(&d.mount)).unwrap_or_else(|| p.clone()))
+        .collect()
 }
 
 /// Push what has been written out to the drive, and say so in the activity log when that takes a long time

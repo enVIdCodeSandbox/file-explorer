@@ -101,9 +101,9 @@ function SkipFolder({ p }: { p: Progress }) {
   if (!p.readingStalled || p.phase === "done") return null;
   return (
     <div className="skip-folder">
-      <span>The drive is not answering for this folder.</span>
-      <button className="link-button" onClick={() => void api.transferAdjust(p.id, "skipFolder")} title="Give up on this folder and carry on with the rest. Retry failed items tries it again later.">
-        Skip this folder
+      <span>The drive is not answering for this item.</span>
+      <button className="link-button" onClick={() => void api.transferAdjust(p.id, "skipFolder")} title="Give up on what it is waiting for (a folder or a file) and carry on with the rest. Retry failed items tries it again later.">
+        Skip this item
       </button>
     </div>
   );

@@ -470,6 +470,10 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
             if is_locked(&st, &path.to_string_lossy()) {
                 continue;
             }
+            // Walking a folder on a card or share that a copy is using would compete with it.
+            if fast_core::busy::is_busy(&path) {
+                continue;
+            }
             let remember = policy.remember && !cache_off(&st, &path);
             let remembered = if remember { st.folder_sizes.lock().get(&path) } else { None };
             if let Some(e) = remembered {
@@ -566,6 +570,11 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
         return Err("thumbnails are disabled".into());
     }
     guard(&st, &path)?;
+    // A card or share that a copy is using is left alone: asking it for pictures at the same time can stall the copy.
+    // The interface tries again a little later (it does not treat this as "no thumbnail").
+    if fast_core::busy::is_busy(Path::new(&path)) {
+        return Err("drive-busy".into());
+    }
     // A phone or camera on a cable: ask the device for the preview picture it keeps.
     if fast_core::remote::is_device(&path) {
         // A phone answers one request at a time, so these go through one at a time.

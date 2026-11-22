@@ -566,20 +566,76 @@ pub fn list_dir(path: &Path, stall: Duration, skip: &dyn Fn() -> bool, cancelled
     Err(io::Error::new(io::ErrorKind::TimedOut, "The drive did not answer when this folder was read."))
 }
 
-/// Runs `f` on its own thread and gives up on it after `limit`, leaving it behind. For a single call that a stalled
-/// drive could hold (the first look at an item to copy).
-pub fn bounded<T: Send + 'static>(limit: Duration, what: &str, f: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T> {
-    let (tx, rx) = chan::bounded(1);
+/// Runs one call to a drive (the first look at an item, whether its copy exists) on its own thread, and gives up on it
+/// when the drive does not answer for `limit`: the request is cancelled where the system allows (Windows) and the
+/// thread left behind where it does not. `skip` (the person's wish) ends the wait after 3 seconds. While waiting for a
+/// while, `stalled` is up by one so that the job can say so and offer to skip.
+pub fn bounded_io<T: Send + 'static>(
+    limit: Duration,
+    what: &str,
+    skip: &dyn Fn() -> bool,
+    cancelled: &dyn Fn() -> bool,
+    stalled: &AtomicU64,
+    f: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    enum Got<T> {
+        Handle(Option<Arc<os::ThreadHandle>>),
+        Done(io::Result<T>),
+    }
+    let (tx, rx) = chan::unbounded::<Got<T>>();
     std::thread::Builder::new().name("drive-call".into()).spawn(move || {
-        let _ = tx.send(f());
+        let _ = tx.send(Got::Handle(os::ThreadHandle::current().map(Arc::new)));
+        let _ = tx.send(Got::Done(f()));
     })?;
-    match rx.recv_timeout(limit) {
-        Ok(r) => r,
-        Err(_) => {
-            activity::note(Level::Warn, "drive", "no answer", &format!("{what}: no answer for {} s, left behind", limit.as_secs()));
-            Err(io::Error::new(io::ErrorKind::TimedOut, "The drive did not answer."))
+    let began = Instant::now();
+    let mut handle = None;
+    let mut counted = false;
+    let leave = |counted: bool| {
+        if counted {
+            stalled.fetch_sub(1, Ordering::Relaxed);
+        }
+    };
+    loop {
+        if cancelled() {
+            leave(counted);
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Got::Handle(h)) => handle = h,
+            Ok(Got::Done(r)) => {
+                leave(counted);
+                return r;
+            }
+            Err(chan::RecvTimeoutError::Timeout) => {
+                let waited = began.elapsed();
+                if waited >= LIST_SLOW && !counted {
+                    counted = true;
+                    stalled.fetch_add(1, Ordering::Relaxed);
+                    activity::note(Level::Warn, "drive", "slow to answer", &format!("{what}: no answer for {} s", waited.as_secs()));
+                }
+                let skipped = skip() && waited >= Duration::from_secs(3);
+                if skipped || waited >= limit {
+                    let cancelled_io = handle.as_ref().is_some_and(|h| h.cancel_io());
+                    activity::note(Level::Warn, "drive", if skipped { "skipped" } else { "no answer" }, &format!("{what}: {} s{}", waited.as_secs(), if cancelled_io { ", the request was cancelled" } else { ", left behind" }));
+                    leave(counted);
+                    return Err(if skipped {
+                        io::Error::new(io::ErrorKind::Interrupted, "Skipped because the drive did not answer. Use Retry failed items to try it again.")
+                    } else {
+                        io::Error::new(io::ErrorKind::TimedOut, "The drive did not answer, so this was skipped. Use Retry failed items to try it again.")
+                    });
+                }
+            }
+            Err(chan::RecvTimeoutError::Disconnected) => {
+                leave(counted);
+                return Err(io::Error::other("the drive call ended without an answer"));
+            }
         }
     }
+}
+
+/// `bounded_io` without a person to ask: for a single call that a stalled drive could hold.
+pub fn bounded<T: Send + 'static>(limit: Duration, what: &str, f: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T> {
+    bounded_io(limit, what, &|| false, &|| false, &AtomicU64::new(0), f)
 }
 
 #[cfg(test)]
@@ -722,6 +778,26 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.parent().unwrap().exists());
         let _ = fs::remove_dir_all(a.parent().unwrap());
+    }
+
+    #[test]
+    fn a_call_can_be_skipped_by_the_person_and_says_it_is_waiting() {
+        use std::sync::atomic::AtomicBool;
+        let wish = Arc::new(AtomicBool::new(false));
+        let stalled = Arc::new(AtomicU64::new(0));
+        let (w2, s2) = (wish.clone(), stalled.clone());
+        let t = std::thread::spawn(move || {
+            bounded_io(Duration::from_secs(60), "test", &|| w2.load(Ordering::Relaxed), &|| false, &s2, || -> io::Result<()> {
+                std::thread::sleep(Duration::from_secs(10));
+                Ok(())
+            })
+        });
+        std::thread::sleep(Duration::from_millis(5600));
+        assert_eq!(stalled.load(Ordering::Relaxed), 1, "after a few seconds the job is told");
+        wish.store(true, Ordering::Relaxed);
+        let e = t.join().unwrap().unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(stalled.load(Ordering::Relaxed), 0);
     }
 
     #[test]
