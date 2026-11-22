@@ -279,6 +279,32 @@ export interface Bin {
   label: string;
 }
 
+export type ActivityLevel = "info" | "warn" | "error" | "hung";
+export interface ActivityEvent {
+  seq: number;
+  atMs: number;
+  level: ActivityLevel;
+  area: string;
+  what: string;
+  detail: string;
+  tookMs: number | null;
+}
+export interface ActivityActive {
+  id: number;
+  area: string;
+  what: string;
+  detail: string;
+  ageMs: number;
+  quietMs: number;
+  hung: boolean;
+}
+export interface ActivitySnapshot {
+  events: ActivityEvent[];
+  active: ActivityActive[];
+  lastSeq: number;
+  folder: string;
+}
+
 export interface Progress {
   id: number;
   op: TransferOp;
@@ -294,6 +320,8 @@ export interface Progress {
   activeFiles?: { path: string; size: number }[];
   /** Copying has begun while the folders are still being counted: totals are what has been found so far. */
   counting?: boolean;
+  /** A drive has not answered for a while when asked what is in a folder (offer to skip it). */
+  readingStalled?: boolean;
   strategy: "rename" | "largeSequential" | "smallParallel" | "mixed" | null;
   method?: "native" | "robocopy" | "rsync" | "rclone" | "smb" | "nfs" | null;
   destDir: string;
@@ -825,6 +853,7 @@ export const api = {
   remoteDisconnect: (location: string) => invoke<void>("remote_disconnect", { location }),
   remoteIsConnected: (location: string) => invoke<boolean>("remote_is_connected", { location }),
   remoteMkdir: (parent: string, name: string) => invoke<string>("remote_mkdir", { parent, name }),
+  remoteCreateFile: (parent: string, name: string) => invoke<string>("remote_create_file", { parent, name }),
   remoteRename: (from: string, newName: string) => invoke<string>("remote_rename", { from, newName }),
   /** Copy items out of an archive into a folder, or (open) fetch one file to a temporary place and open it. */
   archiveCopyStart: (sources: string[], dest: string, open = false, remove = false) => claimed(invoke<number>("archive_copy_start", { sources, dest, open, remove })),
@@ -898,6 +927,10 @@ export const api = {
   /** Start the system drag with these files, to drop them into another program. */
   dragOut: (paths: string[]) => invoke<void>("drag_out", { paths }),
   crashReport: (kind: string, message: string) => invoke<void>("crash_report", { kind, message }),
+  activityLog: (after?: number) => invoke<ActivitySnapshot>("activity_log", { after }),
+  activityClear: () => invoke<void>("activity_clear"),
+  activityExport: () => invoke<string>("activity_export"),
+  activityNote: (level: "info" | "warn" | "error", area: string, what: string, detail = "") => invoke<void>("activity_note", { level, area, what, detail }),
   crashLogs: () => invoke<CrashLog[]>("crash_logs"),
   crashLogRead: (name: string) => invoke<string>("crash_log_read", { name }),
   crashSend: (name: string) => invoke<string>("crash_send", { name }),
@@ -914,7 +947,7 @@ export const api = {
   updateDownload: () => invoke<number>("update_download"),
   updateInstall: () => invoke<void>("update_install"),
   updateDiscard: () => invoke<void>("update_discard"),
-  transferAdjust: (id: number, what: "speed" | "priority" | "time" | "startNow", value?: string, stop?: boolean) =>
+  transferAdjust: (id: number, what: "speed" | "priority" | "time" | "startNow" | "skipFolder", value?: string, stop?: boolean) =>
     invoke<void>("transfer_adjust", { id, what, value, stop }),
   transferControl: (id: number, action: "pause" | "resume" | "cancel") =>
     invoke<void>("transfer_control", { id, action }),

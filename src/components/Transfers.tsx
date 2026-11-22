@@ -2,7 +2,7 @@
 // button turns the stack into one larger window that holds every job, with a
 // speed graph for the selected one.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type DeleteProgress, type Progress } from "../api";
 import { retryFailedItems, retryTransferAsAdmin, useStore, type Sample } from "../store";
 import { reportFiles, reportOf } from "../util/jobReport";
@@ -13,6 +13,7 @@ import { adv } from "../settings/advanced";
 import { metricOn } from "../settings/transferMetrics";
 import { METHOD_NAME } from "../util/methods";
 import { finishMark } from "../util/finishMarker";
+import { MIN_SPAN, filesLabel, graphEnd, niceMax, panView, robustMax, timeLabel, viewRange, zoomView, type View } from "../util/graphScale";
 import { Icon } from "./Icons";
 
 const STRATEGY_LABEL: Record<NonNullable<Progress["strategy"]>, string> = {
@@ -95,6 +96,19 @@ function ForceStop({ j }: { j: Job }) {
 }
 
 /** Lets go of every running job (or every one but `keep`) and of the pastes waiting behind them: for when an old job that is stuck holds up the one that matters. */
+/** Shown while a drive has not answered when asked what is in a folder: give up on that folder and carry on. */
+function SkipFolder({ p }: { p: Progress }) {
+  if (!p.readingStalled || p.phase === "done") return null;
+  return (
+    <div className="skip-folder">
+      <span>The drive is not answering for this folder.</span>
+      <button className="link-button" onClick={() => void api.transferAdjust(p.id, "skipFolder")} title="Give up on this folder and carry on with the rest. Retry failed items tries it again later.">
+        Skip this folder
+      </button>
+    </div>
+  );
+}
+
 function StopAll({ jobs, keep }: { jobs: Job[]; keep?: string }) {
   const waiting = useStore((s) => Object.keys(s.queuedJobs).length);
   const others = jobs.filter((j) => isActive(j) && `${j.kind}-${j.p.id}` !== keep).length;
@@ -203,12 +217,18 @@ function Card({ job }: { job: Job }) {
               <Icon name="expand" size={12} />
             </button>
           )}
+          {active && (
+            <button className="icon-button" data-action="minimize" aria-label="Minimize to the notification button" title="Minimize to the notification button" onClick={() => useStore.setState({ transfersHidden: true })}>
+              <Icon name="minimize" size={12} />
+            </button>
+          )}
           <button className="icon-button" data-action={active ? "cancel" : "dismiss"} aria-label={active ? "Cancel" : "Dismiss"} title={active ? "Cancel (Shift-click to force stop)" : "Dismiss"} onClick={(e) => (active ? cancel(job, e.shiftKey) : dismiss())}>
             <Icon name="close" size={12} />
           </button>
         </div>
       </div>
       {active && <ForceStop j={job} />}
+      {active && job.kind === "transfer" && <SkipFolder p={job.p} />}
       {active && (
         <>
           <Bar fraction={fraction} indeterminate={scanning || counting} />
@@ -252,12 +272,6 @@ function Card({ job }: { job: Job }) {
 // Graph: files/s and MB/s over time, the time axis fitted to the job so far
 // ---------------------------------------------------------------------------
 
-function niceMax(v: number): number {
-  if (v <= 0) return 1;
-  const pow = 10 ** Math.floor(Math.log10(v));
-  const n = v / pow;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
-}
 
 const METHOD_LABEL: Record<string, string> = { robocopy: "Robocopy", rsync: "rsync", rclone: "rclone", smb: "SMB-tuned copy", nfs: "NFS-tuned rsync" };
 
@@ -267,67 +281,149 @@ function jobRate(s: { itemsPerSec: number; bytesPerSec: number }): string {
   return s.bytesPerSec > 0 ? `${formatSize(s.bytesPerSec)}/s · ${items}` : items;
 }
 
-export function SpeedGraph({ samples, total, etaSecs, bytes = true, fraction = 0 }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean; fraction?: number }) {
+export function SpeedGraph({ samples, total, etaSecs, bytes = true, fraction = 0, finished = false, ranFor = 0 }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean; fraction?: number; finished?: boolean; ranFor?: number }) {
   const W = 520;
   const H = 150;
   const pad = { l: 46, r: 56, t: 10, b: 22 };
   const w = W - pad.l - pad.r;
   const h = H - pad.t - pad.b;
   const now = samples.at(-1)?.t ?? 0;
-  // Leave empty room on the right (up to the expected finish) so the streak has somewhere to run.
-  const end = Math.max(5, now * 1.15, now + Math.min(etaSecs ?? 0, now * 0.6 + 5), 1);
+  // The axis runs to where the job is heading (now plus the time left shown beside it), and to its last moment once it is over.
+  const end = graphEnd(now, etaSecs, finished, ranFor);
   const last = samples.at(-1);
+  // Which stretch is shown: all of it, or a zoomed one (wheel, drag, the buttons). Zoomed on the latest speeds, the view keeps
+  // its size and slides along as each new measurement arrives.
+  const [view, setView] = useState<View>(null);
+  const [from, to] = viewRange(view, now, end, finished);
+  const span = to - from;
+  const zoomed = view !== null;
+  const following = view !== null && view.start === null && !finished;
+  const clipId = useId();
+  const box = useRef<SVGSVGElement>(null);
+  const latest = useRef({ view, now, end, finished });
+  latest.current = { view, now, end, finished };
+  const drag = useRef<{ x: number; from: number } | null>(null);
+
+  // The wheel zooms around the pointer. It has to be a listener of its own: React's are passive and could not stop the page scrolling.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const frac = (((e.clientX - r.left) / r.width) * W - pad.l) / w;
+      const c = latest.current;
+      setView(zoomView(c.view, Math.exp(Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 120) * 0.004), frac, c.now, c.end, c.finished));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const zoomBy = (factor: number) => setView(zoomView(view, factor, 1, now, end, finished));
+  const showLast = (secs: number) => setView(secs >= end ? null : finished ? { span: secs, start: Math.max(0, end - secs) } : { span: secs, start: null });
+  const onDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!zoomed) return;
+    drag.current = { x: e.clientX, from };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const dt = (-(e.clientX - d.x) / r.width) * (W / w) * span;
+    const c = latest.current;
+    setView(panView({ span, start: d.from }, dt, c.now, c.end, c.finished));
+  };
+  const onUp = () => {
+    drag.current = null;
+  };
+
   // The typical finish gives way to where this transfer is really heading, and meets the end when it ends.
-  const mark = total != null && total > 0 ? finishMark(total, now, etaSecs, fraction) : null;
-  const maxFiles = niceMax(Math.max(1, ...samples.map((s) => s.filesPerSec)));
-  const maxBytes = niceMax(Math.max(1, ...samples.map((s) => s.bytesPerSec)));
-  const x = (t: number) => pad.l + (t / end) * w;
+  const rawMark = !finished && total != null && total > 0 ? finishMark(total, now, etaSecs, fraction) : null;
+  const mark = rawMark != null && rawMark >= from && rawMark <= to ? rawMark : null;
+  // What is in view, with the sample either side so that the line reaches the edges.
+  const inView = useMemo(() => {
+    const i = samples.findIndex((s) => s.t >= from);
+    const j = samples.findIndex((s) => s.t > to);
+    return samples.slice(Math.max(0, (i < 0 ? samples.length : i) - 1), j < 0 ? samples.length : j + 1);
+  }, [samples, from, to]);
+  // A zoomed view is scaled to what is in it; the whole graph ignores a start-up burst.
+  const scale = (pick: (s: Sample) => number, floor: number) => {
+    const v = inView.map(pick);
+    return niceMax(zoomed && v.length ? Math.max(floor, ...v) * 1.1 : robustMax(samples.map(pick), floor));
+  };
+  const maxFiles = scale((s) => s.filesPerSec, 0.05);
+  const maxBytes = scale((s) => s.bytesPerSec, 1);
+  const x = (t: number) => pad.l + ((t - from) / span) * w;
   const line = (pick: (s: Sample) => number, max: number) =>
-    samples.map((s, i) => `${i ? "L" : "M"}${x(s.t).toFixed(1)} ${(pad.t + h - (pick(s) / max) * h).toFixed(1)}`).join(" ");
+    inView.map((s, i) => `${i ? "L" : "M"}${x(s.t).toFixed(1)} ${(pad.t + h - (Math.min(pick(s), max) / max) * h).toFixed(1)}`).join(" ");
   const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const streak = last && inView.length > 0 && !finished && x(last.t) < pad.l + w;
   return (
-    <svg className="speed-graph" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Transfer speed over time">
-      {ticks.map((f) => (
-        <g key={f}>
-          <line x1={pad.l} x2={pad.l + w} y1={pad.t + h - f * h} y2={pad.t + h - f * h} className="graph-grid" />
-          <text x={pad.l - 6} y={pad.t + h - f * h + 3} textAnchor="end" className="graph-label files">
-            {f === 0 ? "0" : formatCount(maxFiles * f)}
-          </text>
-          {bytes && (
-            <text x={pad.l + w + 6} y={pad.t + h - f * h + 3} className="graph-label bytes">
-              {f === 0 ? "0" : formatSize(maxBytes * f).replace(" ", "")}
+    <div className="speed-graph-box">
+      <div className="graph-zoom" role="group" aria-label="Zoom the graph">
+        {([["1 s", 1], ["10 s", 10], ["1 min", 60]] as const).map(([label, secs]) => (
+          <button key={label} className="link-button" data-on={view?.span === secs || undefined} disabled={secs > end} onClick={() => showLast(secs)} title={`Show ${label === "1 s" ? "one second" : label === "10 s" ? "ten seconds" : "one minute"}${finished ? " at the end" : ", following the latest speeds"}`}>
+            {label}
+          </button>
+        ))}
+        <button className="link-button" data-on={!zoomed || undefined} onClick={() => setView(null)} title="Show the whole transfer">All</button>
+        <button className="icon-button" aria-label="Zoom out" title="Zoom out" disabled={!zoomed} onClick={() => zoomBy(2)}><Icon name="minimize" size={11} /></button>
+        <button className="icon-button" aria-label="Zoom in" title="Zoom in (the mouse wheel also zooms, a drag moves along)" disabled={span <= MIN_SPAN} onClick={() => zoomBy(0.5)}><Icon name="plus" size={11} /></button>
+        {zoomed && <span className="muted graph-span">{following ? "latest " : ""}{timeLabel(span, span)}{following ? "" : ` from ${timeLabel(from, span)}`}</span>}
+      </div>
+      <svg ref={box} className="speed-graph" data-zoomed={zoomed || undefined} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Transfer speed over time" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onDoubleClick={() => setView(null)}>
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={pad.l} y={pad.t - 2} width={w} height={h + 4} />
+          </clipPath>
+        </defs>
+        {ticks.map((f) => (
+          <g key={f}>
+            <line x1={pad.l} x2={pad.l + w} y1={pad.t + h - f * h} y2={pad.t + h - f * h} className="graph-grid" />
+            <text x={pad.l - 6} y={pad.t + h - f * h + 3} textAnchor="end" className="graph-label files">
+              {filesLabel(maxFiles * f, maxFiles)}
             </text>
+            {bytes && (
+              <text x={pad.l + w + 6} y={pad.t + h - f * h + 3} className="graph-label bytes">
+                {f === 0 ? "0" : formatSize(maxBytes * f).replace(" ", "")}
+              </text>
+            )}
+          </g>
+        ))}
+        {[0, 0.5, 1].map((f) => (
+          <text key={f} x={pad.l + f * w} y={H - 6} textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"} className="graph-label">
+            {timeLabel(from + span * f, span)}
+          </text>
+        ))}
+        <g clipPath={`url(#${clipId})`}>
+          {inView.length > 1 && (
+            <>
+              {bytes && <path d={line((s) => s.bytesPerSec, maxBytes)} className="graph-line bytes" />}
+              <path d={line((s) => s.filesPerSec, maxFiles)} className="graph-line files" />
+              {zoomed && span <= 20 && inView.map((s) => <circle key={s.t} cx={x(s.t)} cy={pad.t + h - (Math.min(s.bytesPerSec, maxBytes) / maxBytes) * h} r={1.6} className="graph-head bytes" />)}
+            </>
           )}
+          {streak && last && inView.length > 1 && (
+            <>
+              {([["bytes", last.bytesPerSec, maxBytes], ["files", last.filesPerSec, maxFiles]] as const).filter(([k]) => bytes || k === "files").map(([k, v, max]) => {
+                const y = pad.t + h - (Math.min(v, max) / max) * h;
+                return (
+                  <g key={k}>
+                    <line x1={x(last.t)} x2={pad.l + w} y1={y} y2={y} className={`graph-streak ${k}`} />
+                    <circle cx={x(last.t)} cy={y} r={2.5} className={`graph-head ${k}`} />
+                  </g>
+                );
+              })}
+            </>
+          )}
+          {mark != null && mark > 0 && <line x1={x(mark)} x2={x(mark)} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
         </g>
-      ))}
-      {[0, 0.5, 1].map((f) => (
-        <text key={f} x={pad.l + f * w} y={H - 6} textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"} className="graph-label">
-          {formatDuration(end * f) || "0 sec"}
-        </text>
-      ))}
-      {samples.length > 1 && (
-        <>
-          {bytes && <path d={line((s) => s.bytesPerSec, maxBytes)} className="graph-line bytes" />}
-          <path d={line((s) => s.filesPerSec, maxFiles)} className="graph-line files" />
-        </>
-      )}
-      {last && samples.length > 1 && (
-        <>
-          {([["bytes", last.bytesPerSec, maxBytes], ["files", last.filesPerSec, maxFiles]] as const).filter(([k]) => bytes || k === "files").map(([k, v, max]) => {
-            const y = pad.t + h - (v / max) * h;
-            return (
-              <g key={k}>
-                <line x1={x(last.t)} x2={pad.l + w} y1={y} y2={y} className={`graph-streak ${k}`} />
-                <circle cx={x(last.t)} cy={y} r={2.5} className={`graph-head ${k}`} />
-              </g>
-            );
-          })}
-        </>
-      )}
-      {mark != null && mark > 0 && mark < end * 1.5 && <line x1={x(Math.min(mark, end))} x2={x(Math.min(mark, end))} y1={pad.t} y2={pad.t + h} className="graph-typical" />}
-      <text x={pad.l} y={pad.t - 1} className="graph-label files" fontSize="9">files/s</text>
-      {bytes && <text x={pad.l + w} y={pad.t - 1} textAnchor="end" className="graph-label bytes" fontSize="9">MB/s</text>}
-    </svg>
+        <text x={pad.l} y={pad.t - 1} className="graph-label files" fontSize="9">files/s</text>
+        {bytes && <text x={pad.l + w} y={pad.t - 1} textAnchor="end" className="graph-label bytes" fontSize="9">MB/s</text>}
+      </svg>
+    </div>
   );
 }
 
@@ -459,9 +555,10 @@ function TransferDetail({ p, endedAt }: { p: Progress; endedAt?: number }) {
         <span className="muted">{active ? (p.phase === "paused" ? "Paused" : formatRate(p)) : ""}</span>
       </div>
       <Bar fraction={fraction} indeterminate={p.phase === "scanning" || counting} />
+      {active && <SkipFolder p={p} />}
       {on("graph") && (
         <>
-          <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} fraction={fraction} />
+          <SpeedGraph samples={series} total={typical ?? null} etaSecs={p.etaSecs} fraction={fraction} finished={!active} ranFor={p.elapsedSecs} />
           <div className="graph-legend">
             <span className="files">● Files per second</span>
             <span className="bytes">● Megabytes per second</span>
@@ -665,7 +762,7 @@ function DeleteDetail({ p }: { p: DeleteProgress }) {
       <Bar fraction={fraction} indeterminate={p.phase === "scanning"} />
       {stats && (
         <>
-          <SpeedGraph samples={series} total={typical} etaSecs={stats.etaSecs} bytes={hasBytes} fraction={fraction} />
+          <SpeedGraph samples={series} total={typical} etaSecs={stats.etaSecs} bytes={hasBytes} fraction={fraction} finished={!active} ranFor={p.elapsedSecs} />
           <div className="graph-legend">
             <span className="files">● Items per second</span>
             {hasBytes && <span className="bytes">● Megabytes per second</span>}
@@ -795,6 +892,11 @@ function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; pas
             >
               <Icon name="popout" size={13} />
             </button>}
+            {!past && (
+              <button className="icon-button" data-action="minimize" aria-label="Minimize to the notification button" title="Minimize to the notification button" onClick={() => useStore.setState({ transfersHidden: true })}>
+                <Icon name="minimize" size={13} />
+              </button>
+            )}
             <button className="icon-button" aria-label={past ? "Close" : "Collapse to small cards"} title={past ? "Close" : "Collapse"} onClick={() => useStore.setState(past ? { finishedOpen: false } : { transfersOpen: false })}>
               <Icon name="collapse" size={13} />
             </button>
@@ -946,9 +1048,12 @@ export function Transfers() {
   const jobs = useJobs();
   const past = useFinished();
   const pastOpen = useStore((s) => s.finishedOpen) && past.length > 0;
+  const hidden = useStore((s) => s.transfersHidden);
   if (detached && !pastOpen) return null;
   const running = jobs.length > 0 || waiting;
   if (!running && !pastOpen) return null;
+  // Tucked into the notification button: only what was asked for (the finished list) stays.
+  if (hidden && !pastOpen) return null;
   return (
     <div className="transfers" data-open={open || pastOpen || undefined} aria-live="polite">
       {!detached && waiting && <Waiting />}

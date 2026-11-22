@@ -644,6 +644,7 @@ mod tests {
             queued_disk: None,
             active_files: Vec::new(),
             counting: false,
+            reading_stalled: false,
             method: Some(Method::Native),
         }
     }

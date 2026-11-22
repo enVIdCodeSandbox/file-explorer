@@ -260,14 +260,54 @@ pub fn details(st: &Shared, url: &str) -> CmdResult<fast_core::details::Details>
     })
 }
 
+/// A name for something new in `dir` that nothing there has yet: the one asked for, or the same with " (2)", " (3)"...
+fn free_child(s: &mut dyn Session, dir: &Location, name: &str) -> Location {
+    let name = remote::safe_name(name).to_string_lossy().into_owned();
+    let taken = |s: &mut dyn Session, loc: &Location| s.exists(&loc.path).unwrap_or(false);
+    let first = dir.child(&name);
+    if !taken(s, &first) {
+        return first;
+    }
+    for n in 2..1000 {
+        let next = dir.child(&remote::numbered_name(&name, n));
+        if !taken(s, &next) {
+            return next;
+        }
+    }
+    first
+}
+
 #[tauri::command]
 pub async fn remote_mkdir(state: State<'_, Shared>, parent: String, name: String) -> CmdResult<String> {
     let st = state.inner().clone();
     blocking(move || {
         let dir = Location::parse(&parent).map_err(err)?;
-        let made = dir.child(remote::safe_name(&name).to_string_lossy().as_ref());
-        with_session(&st, &dir.key(), |s| s.mkdir(&made.path))?;
+        let made = with_session(&st, &dir.key(), |s| {
+            let made = free_child(s, &dir, &name);
+            s.mkdir(&made.path)?;
+            Ok(made)
+        })?;
         Ok(made.url())
+    })
+    .await
+}
+
+/// An empty file on a server: an upload of nothing, under a name nothing there has.
+#[tauri::command]
+pub async fn remote_create_file(state: State<'_, Shared>, parent: String, name: String) -> CmdResult<String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let dir = Location::parse(&parent).map_err(err)?;
+        let empty = std::env::temp_dir().join(format!("fast-empty-{}-{}", std::process::id(), st.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        std::fs::File::create(&empty).map_err(err)?;
+        let result = with_session(&st, &dir.key(), |s| {
+            let made = free_child(s, &dir, &name);
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            s.upload(&empty, &made.path, &Control { cancel: &cancel, on_bytes: &|_| {} })?;
+            Ok(made)
+        });
+        let _ = std::fs::remove_file(&empty);
+        Ok(result?.url())
     })
     .await
 }
@@ -667,7 +707,27 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
                             let name = sloc.name().to_string();
                             *current.lock() = name.clone();
                             let unique = remote::free_name(&name, |n| remote_taken(dst.get(), &dloc.path, n));
-                            remote::relay_tree_as(src.get(), &sloc.path, *is_dir, *size, dst.get(), &dloc.path, &unique, false, &ctl, &mut tally).map_err(err)?;
+                            let before = tally.failed.len();
+                            let relayed = remote::relay_tree_as(src.get(), &sloc.path, *is_dir, *size, dst.get(), &dloc.path, &unique, false, &ctl, &mut tally);
+                            let went_wrong = relayed.is_err() || tally.failed.len() > before;
+                            if went_wrong && !rep.cancel.load(Ordering::Relaxed) && fast_core::transfer::careful::stage_mode() != fast_core::transfer::careful::Stage::Never {
+                                // Passing the file straight through did not work: bring it to this computer first, then send it on.
+                                let why = relayed.as_ref().err().map(|e| e.to_string()).or_else(|| tally.failed.last().map(|f| f.1.clone())).unwrap_or_default();
+                                fast_core::activity::note(fast_core::activity::Level::Warn, "copy", "direct pass-through failed, trying by way of this computer", &format!("{name}: {why}"));
+                                tally.failed.truncate(before);
+                                let target = format!("{}/{}", dloc.path.trim_end_matches('/'), unique);
+                                let _ = remote::remove_tree(dst.get(), &target, *is_dir, &ctl);
+                                let tmp = stage.clone().expect("staging folder");
+                                let local_name = remote::free_name(&name, |n| tmp.join(remote::safe_name(n)).exists());
+                                remote::download_tree_as(src.get(), &sloc.path, *is_dir, &tmp, &local_name, false, &ctl, &mut tally).map_err(err)?;
+                                let staged = tmp.join(remote::safe_name(&local_name));
+                                if staged.exists() && tally.failed.len() == before {
+                                    remote::upload_tree_as(dst.get(), &staged, &dloc.path, &unique, false, &ctl, &mut tally).map_err(err)?;
+                                }
+                                let _ = if staged.is_dir() { std::fs::remove_dir_all(&staged) } else { std::fs::remove_file(&staged) };
+                            } else {
+                                relayed.map_err(err)?;
+                            }
                         }
                         if mv && tally.failed.is_empty() {
                             for (sloc, is_dir, _) in &items {

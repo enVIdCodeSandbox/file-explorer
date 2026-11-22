@@ -19,6 +19,7 @@ export type Control =
   | { type: "imports" }
   | { type: "layout" }
   | { type: "storage" }
+  | { type: "activityLog" }
   | { type: "perfPresets" }
   | { type: "uiPresets" }
   | { type: "profiles" }
@@ -57,6 +58,7 @@ export const SECTIONS = [
   "Thumbnails",
   "Performance",
   "Storage",
+  "Logs",
   "Privacy and locks",
   "File transfers",
   "Search",
@@ -151,6 +153,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "performance.thumbnailSize", section: "Thumbnails", label: "Preview size in the details pane and elsewhere", description: "How large previews are made when no icon size applies.", control: { type: "number", min: 48, max: 256, step: 16, unit: "px" } },
 
   // ---- Storage ----
+  { key: "logs.console", section: "Logs", label: "Activity log", description: "Every action the app takes, as it happens, with how long it took and whether it stopped making progress (HUNG). Save it as a text file to send along with a bug report.", control: { type: "activityLog" }, keywords: "log console hung stall freeze debug events activity trace diagnostics" },
   { key: "storage.caches", section: "Storage", label: "What the app stores", description: "Each kind of cache, how much space it takes, and a button to clear just that one.", control: { type: "storage" }, keywords: "cache clear thumbnails index disk usage snapshots history space" },
 
   // ---- Updates ----
@@ -214,7 +217,7 @@ const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes"];
 const SHOWN_IN_FOLDER_VIEWS = ["files.scope.sort", "files.scope.filter", "files.scope.columns", "files.scope.view", "files.sortKey", "files.sortAsc", "files.rememberSort", "files.keepFilter"];
 const SHOWN_IN_PERFORMANCE = ["perf.uiUnload", "perf.shellMenuCache", "perf.shellMenuPrefetch", "perf.loadRefresh", "perf.compactWhenIdle"];
 const sectionOf = (d: (typeof ADVANCED)[number]) =>
-  SHOWN_IN_PERFORMANCE.includes(d.key) ? "Performance" : SHOWN_IN_GENERAL.includes(d.key) ? "General" : SHOWN_IN_FOLDER_VIEWS.includes(d.key) ? "Folder views" : d.group === "Terminal panel" ? "Terminal" : d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
+  SHOWN_IN_PERFORMANCE.includes(d.key) ? "Performance" : SHOWN_IN_GENERAL.includes(d.key) ? "General" : SHOWN_IN_FOLDER_VIEWS.includes(d.key) ? "Folder views" : d.group === "Terminal panel" ? "Terminal" : d.group === "Logs" ? "Logs" : d.key.startsWith("cache.") ? "Storage" : d.key.startsWith("locks.") ? "Privacy and locks" : d.group === "Notifications" || d.group === "Navigation pane" || d.group === "General" || d.group === "Thumbnails" ? d.group : ["tabs.width", "tabs.minWidth", "tabs.height"].includes(d.key) ? "Appearance" : "Advanced";
 
 for (const d of ADVANCED) {
   SETTINGS.push({ key: `advanced.${d.key}`, section: sectionOf(d), label: d.label, description: d.description, control: d.control as Control, keywords: `${d.group} advanced` });

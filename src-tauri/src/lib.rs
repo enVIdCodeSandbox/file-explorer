@@ -58,6 +58,9 @@ pub fn run() {
                     let _ = w.show();
                 }
             }
+            // The activity log first of all, so everything after it is on record.
+            fast_core::activity::init(paths.activity.clone());
+            fast_core::transfer::careful::sweep_stage_dirs();
             // Crash logging next, so even a failure while starting is written down.
             let webview = tauri::webview_version().unwrap_or_default();
             fast_core::crashlog::install_panic_hook();
@@ -244,6 +247,7 @@ pub fn run() {
             remote::remote_disconnect,
             remote::remote_is_connected,
             remote::remote_mkdir,
+            remote::remote_create_file,
             remote::remote_rename,
             remote::remote_copy_start,
             remote::archive_copy_start,
@@ -317,6 +321,10 @@ pub fn run() {
             commands::restore_from_trash,
             commands::transfer_start,
             commands::transfer_control,
+            commands::activity_log,
+            commands::activity_clear,
+            commands::activity_export,
+            commands::activity_note,
             commands::transfer_adjust,
             update::update_check,
             update::update_status,

@@ -1,5 +1,6 @@
 //! File transfers: strategy selection, the copy engine and time estimation.
 
+pub mod careful;
 pub mod engine;
 pub mod eta;
 pub mod method;

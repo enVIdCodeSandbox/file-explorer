@@ -4,6 +4,7 @@
 
 use super::eta::{blend_estimates, DisplayMode, EtaModel, EtaParams, EtaTracker, LiveRate};
 use crate::history::{Prediction, Query, Route};
+use super::careful;
 use super::method::{self, Method, MethodChooser, MethodPref};
 use super::probe;
 use super::strategy::{self, JobProfile, Plan, Strategy};
@@ -223,6 +224,9 @@ pub struct Progress {
     /// and there is no time estimate yet.
     #[serde(default)]
     pub counting: bool,
+    /// A drive has not answered for a while when asked what is in a folder; *Skip this folder* gives up on it.
+    #[serde(default)]
+    pub reading_stalled: bool,
 }
 
 /// Asked once, after the sources are scanned, what similar past transfers say.
@@ -293,6 +297,16 @@ struct Shared {
     /// A source on a memory stick, card or spinning disk: folders are read one or two at a time there, because
     /// reading many at once makes such a device slower, not faster.
     slow_source: bool,
+    /// A source is on a memory stick or card, which can stop answering: it is read in the careful way (Windows).
+    removable_source: bool,
+    /// The destination is a network drive.
+    network_dest: bool,
+    /// Room on the disk the staged copies go to (`u64::MAX` when that is not known).
+    stage_room: u64,
+    /// Goes up when the person asks to skip the folder being waited for.
+    skip_gen: AtomicU64,
+    /// How many folder listings have been waiting on a drive for a while.
+    stalled_lists: AtomicU64,
 }
 
 thread_local! {
@@ -370,6 +384,7 @@ impl Shared {
         p.limit_bps = self.limiter.rate();
         p.max_secs = self.max_secs.load(Ordering::Relaxed);
         p.timed_out = self.timed_out.load(Ordering::Relaxed);
+        p.reading_stalled = self.stalled_lists.load(Ordering::Relaxed) > 0;
     }
 
     /// What to do about `dst`, which already exists. With the Ask policy this
@@ -453,6 +468,9 @@ impl Shared {
     }
 
     fn error(&self, path: &Path, e: &io::Error) {
+        if self.error_count.load(Ordering::Relaxed) < 200 {
+            crate::activity::note(crate::activity::Level::Error, "transfer", "item failed", &format!("{}: {e}", path.display()));
+        }
         self.error_count.fetch_add(1, Ordering::Relaxed);
         let mut errs = self.errors.lock();
         if errs.len() < MAX_REPORTED_ERRORS {
@@ -466,6 +484,9 @@ impl Shared {
     }
     /// A failure whose destination is known, with the reason as the tool gave it.
     fn error_to(&self, path: &Path, dest: &Path, message: String, needs_elevation: bool) {
+        if self.error_count.load(Ordering::Relaxed) < 200 {
+            crate::activity::note(crate::activity::Level::Error, "transfer", "item failed", &format!("{}: {message}", path.display()));
+        }
         self.error_count.fetch_add(1, Ordering::Relaxed);
         let mut errs = self.errors.lock();
         if errs.len() < MAX_REPORTED_ERRORS {
@@ -491,6 +512,11 @@ impl TransferHandle {
     }
     pub fn cancel(&self) {
         self.shared.control.store(ST_CANCEL, Ordering::Relaxed);
+    }
+    /// Give up on the folder a drive has not answered for (and carry on with the rest). Folders that are
+    /// being answered normally are not affected.
+    pub fn skip_folder(&self) {
+        self.shared.skip_gen.fetch_add(1, Ordering::Relaxed);
     }
     /// Let go of a job that is stuck waiting for a drive: cancel it, and give its place in the queue to the
     /// next one, so a job stuck on a dead share does not hold up every copy after it. The job itself ends
@@ -599,6 +625,11 @@ pub fn start_with(
         slots: Mutex::new(Vec::new()),
         reading: Mutex::new((String::new(), Instant::now())),
         slow_source: spec.sources.iter().any(|p| matches!(drives::media_for(p, &drives), drives::Media::Removable | drives::Media::Hdd)),
+        removable_source: spec.sources.iter().any(|p| drives::media_for(p, &drives) == drives::Media::Removable),
+        network_dest: drives::media_for(&spec.dest_dir, &drives) == drives::Media::Network,
+        stage_room: drives::volume_for(&std::env::temp_dir(), &drives).map(|d| d.available).unwrap_or(u64::MAX),
+        skip_gen: AtomicU64::new(0),
+        stalled_lists: AtomicU64::new(0),
     });
     let done = Arc::new(AtomicBool::new(false));
     let handle = TransferHandle { id, shared: shared.clone(), done: done.clone() };
@@ -656,7 +687,14 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
             }
             dst = unique_name(&dst);
         }
-        let meta = match fs::symlink_metadata(src) {
+        // The first look at an item is a request to the drive too: from a stick or card it is not waited for for ever.
+        let looked = if shared.slow_source {
+            let one = src.clone();
+            careful::bounded(careful::LIST_STALL, &src.display().to_string(), move || fs::symlink_metadata(one))
+        } else {
+            fs::symlink_metadata(src)
+        };
+        let meta = match looked {
             Ok(m) => m,
             Err(e) => {
                 shared.error(src, &e);
@@ -754,6 +792,7 @@ fn run(
         queued_disk: None,
         active_files: Vec::new(),
         counting: false,
+        reading_stalled: false,
     };
     // Wait for a turn when too many transfers are already working.
     {
@@ -952,9 +991,9 @@ fn run(
             Some(m) if can.contains(&m) => m,
             Some(_) => Method::Native, // asked for a tool this computer or route cannot use
             None => match choose {
-                // A tool needs the whole count first, and a memory stick or card can take minutes to list: copying
-                // by itself while the count goes on is the better start there.
-                Some(choose) if can.len() > 1 && !(go_early && profile.src == drives::Media::Removable) => choose(
+                // A memory stick or card can stop answering, and only the built-in engine can notice that and read
+                // differently; it also starts copying while the count goes on, where a tool needs the whole count first.
+                Some(choose) if can.len() > 1 && profile.src != drives::Media::Removable => choose(
                     &Query {
                         route: route.clone(),
                         files: items.len() as u64,
@@ -1176,6 +1215,7 @@ fn run(
         let mut last = Instant::now();
         let (mut last_bytes, mut last_files) = (0u64, renamed);
         let (mut bps, mut fps) = (0f64, 0f64);
+        let mut file_rate = FileRate::new();
         let mut tracker = EtaTracker::with_head_start(head_start);
         let mut live = LiveRate::default();
         loop {
@@ -1195,7 +1235,7 @@ fn run(
             if state == ST_RUN && dt > 0.0 {
                 let alpha = 0.3;
                 bps = bps * (1.0 - alpha) + (bytes - last_bytes) as f64 / dt * alpha;
-                fps = fps * (1.0 - alpha) + (files - last_files) as f64 / dt * alpha;
+                fps = file_rate.observe(copy_started.elapsed().as_secs_f64(), files);
             }
             last = now;
             last_bytes = bytes;
@@ -1645,30 +1685,36 @@ fn scan_dir(src: &Path, dst: &Path, shared: &Shared, tx: &chan::Sender<Found>, m
     shared.reading_now(src);
     let _ = tx.send(Found::Dirs(vec![dst.to_path_buf()]));
     moved.lock().push(src.to_path_buf());
-    let rd = match fs::read_dir(src) {
-        Ok(rd) => rd,
-        Err(e) => {
-            shared.error(src, &e);
-            return;
-        }
-    };
     let mut subdirs: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut batch: Vec<Item> = Vec::new();
-    for e in rd.filter_map(|e| e.ok()) {
-        let path = e.path();
-        let target = dst.join(e.file_name());
-        match e.file_type() {
-            Ok(ft) if ft.is_dir() => subdirs.push((path, target)),
-            Ok(_) => {
-                let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-                shared.scanned.fetch_add(1, Ordering::Relaxed);
-                shared.scan_bytes.fetch_add(size, Ordering::Relaxed);
-                batch.push(Item { src: path, dst: target, size });
-                if batch.len() >= SCAN_BATCH {
-                    let _ = tx.send(Found::Items(std::mem::take(&mut batch)));
+    let skip_from = shared.skip_gen.load(Ordering::Relaxed);
+    let listed = careful::list_dir(
+        src,
+        careful::LIST_STALL,
+        &|| shared.skip_gen.load(Ordering::Relaxed) != skip_from,
+        &|| shared.cancelled() || shared.scan_abort.load(Ordering::Relaxed),
+        &shared.stalled_lists,
+        &mut |found| {
+            for l in found {
+                if let Some(err) = &l.error {
+                    shared.error(&l.path, err);
+                } else if l.is_dir {
+                    subdirs.push((l.path, dst.join(&l.name)));
+                } else {
+                    shared.scanned.fetch_add(1, Ordering::Relaxed);
+                    shared.scan_bytes.fetch_add(l.size, Ordering::Relaxed);
+                    batch.push(Item { src: l.path, dst: dst.join(&l.name), size: l.size });
+                    if batch.len() >= SCAN_BATCH {
+                        let _ = tx.send(Found::Items(std::mem::take(&mut batch)));
+                    }
                 }
             }
-            Err(err) => shared.error(&path, &err),
+        },
+    );
+    if let Err(e) = listed {
+        // A cancelled job just stops; anything else is reported against the folder, and the rest carries on.
+        if e.kind() != io::ErrorKind::Interrupted || !shared.cancelled() {
+            shared.error(src, &e);
         }
     }
     if !batch.is_empty() {
@@ -1756,8 +1802,120 @@ fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
     }
 }
 
+/// Files finished per second over the last few seconds. A rate taken over a moment is 0 while one big file is copied
+/// and jumps when it ends; over a window it is the real pace (0.04 files/s for a file every 25 seconds).
+struct FileRate {
+    window: std::collections::VecDeque<(f64, u64)>,
+    last: f64,
+}
+
+impl FileRate {
+    /// The pace is taken over this long, or over `LONG` when only a file or two finished in it.
+    const SPAN: f64 = 12.0;
+    const LONG: f64 = 60.0;
+    fn new() -> FileRate {
+        FileRate { window: Default::default(), last: 0.0 }
+    }
+    /// `at`: seconds since copying began; `files`: finished so far.
+    fn observe(&mut self, at: f64, files: u64) -> f64 {
+        self.window.push_back((at, files));
+        // Keep one point from before the long window so that it always has a start.
+        while self.window.len() > 2 && self.window[1].0 <= at - Self::LONG {
+            self.window.pop_front();
+        }
+        let over = |span: f64, w: &std::collections::VecDeque<(f64, u64)>| {
+            // The newest point that is at least `span` back (or the oldest there is).
+            let start = w.iter().rev().find(|(t, _)| *t <= at - span).copied().unwrap_or(w[0]);
+            (start, at - start.0)
+        };
+        let (short_start, short_len) = over(Self::SPAN, &self.window);
+        let (start, len) = if files.saturating_sub(short_start.1) < 3 { over(Self::LONG, &self.window) } else { (short_start, short_len) };
+        // The first second or so says little: carry on with what there was.
+        if len >= 1.0 {
+            self.last = files.saturating_sub(start.1) as f64 / len;
+        }
+        self.last
+    }
+}
+
 /// Copy one file. Returns Ok(false) if cancelled part-way.
+///
+/// From a card or stick to a network drive, and wherever a direct copy has just failed on such a drive, the file
+/// goes by way of a temporary copy on this computer's disk: the card is read in one step and the network written
+/// in another, so a stall in one cannot hold the other.
 fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec, shared: &Shared) -> io::Result<bool> {
+    use careful::Stage;
+    let mode = careful::stage_mode();
+    let involved = shared.removable_source || shared.network_dest;
+    let first = match mode {
+        Stage::Never => false,
+        Stage::Always => involved,
+        Stage::Auto => shared.removable_source && shared.network_dest,
+    };
+    let fits = size.saturating_add(256 * 1024 * 1024) <= shared.stage_room;
+    if first && fits && size > 0 {
+        match copy_via_local(src, dst, size, plan, spec, shared) {
+            Ok(done) => return Ok(done),
+            // Not possible here (no room, no temp folder): the direct way is still there.
+            Err(StageError::Unavailable(why)) => {
+                crate::activity::note(crate::activity::Level::Warn, "copy", "staging not possible", &format!("{}: {why}", src.display()));
+            }
+            Err(StageError::Failed(e)) => return Err(e),
+        }
+    }
+    match copy_direct(src, dst, size, plan, spec, shared) {
+        Err(e) if mode != Stage::Never && involved && fits && careful::worth_staging(&e) => {
+            crate::activity::note(crate::activity::Level::Warn, "copy", "direct copy failed, trying by way of this computer", &format!("{} -> {}: {e}", src.display(), dst.display()));
+            match copy_via_local(src, dst, size, plan, spec, shared) {
+                Ok(done) => Ok(done),
+                Err(StageError::Unavailable(_)) => Err(e),
+                Err(StageError::Failed(e2)) => Err(e2),
+            }
+        }
+        other => other,
+    }
+}
+
+enum StageError {
+    /// The temporary copy could not even be started.
+    Unavailable(String),
+    /// It went wrong part-way.
+    Failed(io::Error),
+}
+
+/// Source -> a temporary file on this computer's disk -> destination. Bytes are counted once: the first step is
+/// taken back out of the count when it ends.
+fn copy_via_local(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec, shared: &Shared) -> Result<bool, StageError> {
+    let tmp = careful::stage_path(src.file_name().unwrap_or_default());
+    if let Some(dir) = tmp.parent() {
+        fs::create_dir_all(dir).map_err(|e| StageError::Unavailable(e.to_string()))?;
+    }
+    let cleanup = |tmp: &Path| {
+        let _ = fs::remove_file(tmp);
+    };
+    let first = copy_direct(src, &tmp, size, plan, spec, shared);
+    match first {
+        Ok(true) => {}
+        Ok(false) => {
+            cleanup(&tmp);
+            return Ok(false);
+        }
+        Err(e) => {
+            cleanup(&tmp);
+            // A failure reading the source is the source's; one writing the temporary file means there is no room.
+            return Err(if e.kind() == io::ErrorKind::StorageFull { StageError::Unavailable(e.to_string()) } else { StageError::Failed(e) });
+        }
+    }
+    let staged = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    // The first step is not part of the progress: only what reaches the destination is.
+    let now = shared.bytes_done.load(Ordering::Relaxed);
+    shared.bytes_done.fetch_sub(staged.min(now), Ordering::Relaxed);
+    let second = copy_direct(&tmp, dst, staged, plan, spec, shared);
+    cleanup(&tmp);
+    second.map_err(StageError::Failed)
+}
+
+fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec, shared: &Shared) -> io::Result<bool> {
     let meta = fs::symlink_metadata(src)?;
     if meta.file_type().is_symlink() {
         copy_symlink(src, dst)?;
@@ -1780,7 +1938,10 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         }
     }
 
-    if size < plan.large_threshold && !shared.limited() {
+    // From a memory stick or card on Windows every read goes through the careful reader, which the system's own
+    // one-call copy cannot do.
+    let careful_source = cfg!(windows) && shared.removable_source;
+    if size < plan.large_threshold && !shared.limited() && !careful_source {
         // 2. Small/medium file: one call into the OS fast path
         //    (copy_file_range on Linux, CopyFileEx on Windows, fcopyfile on macOS).
         let n = fs::copy(src, dst)?;
@@ -1789,12 +1950,16 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
         // 3. Large file: chunked copy with big buffers so progress, pause and
         //    cancel stay responsive within one file.
         let mut input = fs::File::open(src)?;
+        let mut careful_reader = if careful_source { Some(careful::SourceReader::new(src, input.try_clone()?)) } else { None };
         let mut output = fs::File::create(dst)?;
         // Reserve the space up front where that really allocates (Windows). On
         // Unix, extending the length only makes a sparse file, which measured
         // slower to fill, so it is left out there.
+        // Not on a network drive: some servers fill the whole file with zeros first, which looks like a stall.
         #[cfg(not(unix))]
-        let _ = output.set_len(size);
+        if !shared.network_dest {
+            let _ = output.set_len(size);
+        }
         let mut chunk_start = Instant::now();
         let block = shared.chunk_len(plan.buffer_bytes);
         // Linux: let the kernel move each chunk without bringing it into this
@@ -1824,7 +1989,11 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
             }
             // Everything that is not a kernel-side copy: read ahead on a second thread while
             // this one writes, so the source and the destination are busy at the same time.
-            match pipelined_copy(&mut input, &mut output, block, shared, &mut chunk_start)? {
+            let finished = match careful_reader.as_mut() {
+                Some(reader) => pipelined_copy(reader, &mut output, block, shared, &mut chunk_start)?,
+                None => pipelined_copy(&mut input, &mut output, block, shared, &mut chunk_start)?,
+            };
+            match finished {
                 true => break,
                 false => return Ok(false),
             }
@@ -1846,7 +2015,7 @@ fn copy_one(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSpec,
 
 /// Copy the rest of `input` to `output` with reading and writing overlapped: a helper thread
 /// reads the next block while this one writes the last. Returns Ok(false) if cancelled.
-fn pipelined_copy(input: &mut fs::File, output: &mut fs::File, block: usize, shared: &Shared, chunk_start: &mut Instant) -> io::Result<bool> {
+fn pipelined_copy(input: &mut (dyn Read + Send), output: &mut fs::File, block: usize, shared: &Shared, chunk_start: &mut Instant) -> io::Result<bool> {
     // Three blocks circulate: one being read, one being written, one waiting.
     const IN_FLIGHT: usize = 3;
     let (full_tx, full_rx) = chan::bounded::<io::Result<Vec<u8>>>(IN_FLIGHT);
@@ -2102,6 +2271,11 @@ mod tests {
             slots: Mutex::new(Vec::new()),
             reading: Mutex::new((String::new(), Instant::now())),
             slow_source: false,
+            removable_source: false,
+            network_dest: false,
+            stage_room: u64::MAX,
+            skip_gen: AtomicU64::new(0),
+            stalled_lists: AtomicU64::new(0),
         }
     }
 
@@ -2148,6 +2322,48 @@ mod tests {
         assert!(t.elapsed() >= Duration::from_millis(700), "1 MB at 1 MB/s took {:?}", t.elapsed());
         assert_eq!(fs::read(&b).unwrap(), data);
         assert_eq!(shared.bytes_done.load(Ordering::Relaxed), 1_000_000);
+    }
+
+    #[test]
+    fn a_file_from_a_card_to_a_network_drive_goes_by_way_of_this_computer_and_is_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let data: Vec<u8> = (0..3_000_000usize).map(|i| (i * 13 % 251) as u8).collect();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        fs::write(&a, &data).unwrap();
+        let mut shared = test_shared();
+        shared.removable_source = true;
+        shared.network_dest = true;
+        shared.clone_ok.store(false, Ordering::Relaxed);
+        let plan = strategy::choose(&JobProfile { file_count: 1, total_bytes: 3_000_000, large_bytes: 0, large_count: 0, same_volume: false, is_move: false, src: crate::drives::Media::Removable, dst: crate::drives::Media::Network }, &Budget::minimal(), 64 * 1024 * 1024, 0);
+        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 1_000_000, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false, early_start_ms: 0 };
+        assert!(copy_one(&a, &b, 3_000_000, &plan, &spec, &shared).unwrap());
+        assert_eq!(fs::read(&b).unwrap(), data);
+        assert_eq!(shared.bytes_done.load(Ordering::Relaxed), 3_000_000, "the temporary step is not counted");
+        // Nothing is left behind in the temporary folder.
+        let left = fs::read_dir(std::env::temp_dir().join(format!("fast-stage-{}", std::process::id()))).map(|r| r.count()).unwrap_or(0);
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn files_per_second_is_the_pace_over_a_few_seconds_not_a_blip_when_one_big_file_ends() {
+        let mut r = FileRate::new();
+        // A file every 25 seconds: the rate is about 0.04, never 0 for long and never a spike.
+        let mut seen = Vec::new();
+        for i in 0..=200u64 {
+            let at = i as f64 * 0.5;
+            let files = (at / 25.0) as u64;
+            seen.push(r.observe(at, files));
+        }
+        let late = &seen[60..];
+        assert!(late.iter().all(|&v| v <= 0.2), "no spikes: {late:?}");
+        assert!(late.iter().any(|&v| v > 0.0));
+        // Many small files: the plain rate.
+        let mut r = FileRate::new();
+        let mut v = 0.0;
+        for i in 0..=40u64 {
+            v = r.observe(i as f64 * 0.5, i * 50);
+        }
+        assert!((v - 100.0).abs() < 1.0, "{v}");
     }
 
     #[test]

@@ -39,14 +39,19 @@ Every call the interface makes into the Rust shell. Generated from `src-tauri/sr
 | `remote_disconnect` | `remoteDisconnect` | `location: String` | `()` | Forget a server's login and close its connections. |
 | `remote_is_connected` | `remoteIsConnected` | `location: String` | `bool` | Whether a login for this server is held in memory. |
 | `remote_mkdir` | `remoteMkdir` | `parent: String, name: String` | `String` | Make a folder on a server; returns its address. |
+| `remote_create_file` | `remoteCreateFile` | `parent: String, name: String` | `String` | Make an empty file on a server (an upload of nothing); returns its address. |
 | `remote_rename` | `remoteRename` | `from: String, new_name: String` | `String` | Rename on a server; returns the new address. |
 | `remote_copy_start` | `remoteCopyStart` | `sources: Vec<String>, dest: String, mv: bool, open: bool` | `u64` | Upload, download, or copy between servers, as a background job reporting through `delete-progress` (`action` "upload", "download" or "open"; `bytes_done`/`bytes_total` set). Name clashes get "name (2)". With `mv`, originals are deleted only after their copy fully succeeded; inside one server it is a rename. With `open`, one file is fetched to a temporary place and the finished event's `result` is its path. |
 | `remote_remove_start` | `remoteRemoveStart` | `paths: Vec<String>` | `u64` | Delete files and folders on a server (no trash). Progress as `action` "remote-delete". |
 | `servers_list` / `servers_save` / `servers_remove` | `serversList` / `serversSave` / `serversRemove` | | `Vec<SavedServer>` | The server addresses kept in the sidebar (never passwords). |
 | `servers_forget_host` | `serversForgetHost` | `host: String, port: u16` | `()` | Drop a remembered SFTP fingerprint. |
 | `transfer_start` | `transferStart` | `mut spec: TransferSpec` | `u64` |  |
+| `activity_log` | `activityLog` | `after: Option<u64>` | `ActivitySnapshot` | The activity log (Settings → Logs): events after sequence number `after`, what is running now (with `hung` and `quietMs`), the newest sequence number and the folder the log file is in. |
+| `activity_clear` | `activityClear` | — | `()` | Empty the list (the files on disk are kept). |
+| `activity_export` | `activityExport` | — | `String` | The whole log as text, for copying or saving. |
+| `activity_note` | `activityNote` | `level: String, area: String, what: String, detail: String` | `()` | Add a line from the interface. |
 | `transfer_control` | `transferControl` | `id: u64, action: String` | `()` |  |
-| `transfer_adjust` | `transferAdjust` | `id: u64, what: String, value: Option<String>, stop: Option<bool>` | `()` | Change a running transfer: `speed` (KB/s, 0 = none), `priority` (`low`/`normal`/`high`), `time` (minutes, 0 = none; `stop` picks stop or pause at the end) or `startNow` (leave the queue). |
+| `transfer_adjust` | `transferAdjust` | `id: u64, what: String, value: Option<String>, stop: Option<bool>` | `()` | Change a running transfer: `speed` (KB/s, 0 = none), `priority` (`low`/`normal`/`high`), `time` (minutes, 0 = none; `stop` picks stop or pause at the end) `startNow` (leave the queue) or `skipFolder` (give up on the folder a drive has not answered for). |
 | `update_check` / `update_status` | `updateCheck` / `updateStatus` | | `UpdateInfo` | Look for a newer build now (network) / what is known without looking. |
 | `update_download` | `updateDownload` | | `u64` | Download the newest build as a job on the Transfers card (`delete-progress` with `action: "update"`); `update-ready` follows. |
 | `update_install` / `update_discard` | `updateInstall` / `updateDiscard` | | `()` | Install the downloaded build and restart / throw it away. |

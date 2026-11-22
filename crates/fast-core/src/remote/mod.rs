@@ -580,6 +580,14 @@ pub fn remove_tree(s: &mut dyn Session, path: &str, is_dir: bool, ctl: &Control)
 }
 
 /// A server can send any name; never let one write outside the target folder.
+/// `name` with " (n)" before its extension: "New file.txt" becomes "New file (2).txt".
+pub fn numbered_name(name: &str, n: u32) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{} ({n}){}", &name[..i], &name[i..]),
+        _ => format!("{name} ({n})"),
+    }
+}
+
 pub fn safe_name(name: &str) -> PathBuf {
     let cleaned: String = name.chars().map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c }).collect();
     let cleaned = match cleaned.as_str() {
@@ -891,5 +899,18 @@ mod tests {
         assert_eq!(got.last().unwrap().1.done, 5);
         assert_eq!(got[0].1.total, 7);
         assert!(got.iter().all(|g| !g.1.restart));
+    }
+}
+
+#[cfg(test)]
+mod numbered_name_tests {
+    use super::numbered_name;
+
+    #[test]
+    fn the_number_goes_before_the_extension() {
+        assert_eq!(numbered_name("New file.txt", 2), "New file (2).txt");
+        assert_eq!(numbered_name("New folder", 3), "New folder (3)");
+        assert_eq!(numbered_name(".hidden", 2), ".hidden (2)");
+        assert_eq!(numbered_name("a.tar.gz", 2), "a.tar (2).gz");
     }
 }

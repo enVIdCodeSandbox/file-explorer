@@ -25,7 +25,7 @@ describe("the graph of a job that is not a copy", () => {
   it("collects a sample per update and follows the measured fraction", () => {
     const s = useStore.getState();
     s.onDeleteProgress(progress({ elapsedSecs: 1 }));
-    s.onDeleteProgress(progress({ elapsedSecs: 1.1 })); // too soon after the last one: no new point
+    s.onDeleteProgress(progress({ elapsedSecs: 1.02 })); // too soon after the last one: no new point
     s.onDeleteProgress(progress({ elapsedSecs: 2, stats: stats({ itemsPerSec: 800, fraction: 0.5 }) }));
     const { series, shown } = useStore.getState();
     expect(series[5].map((x) => x.t)).toEqual([1, 2]);

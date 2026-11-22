@@ -41,7 +41,7 @@ const col = (def: string, key: string, group: string, label: string, description
   key, group, label, description, control: { type: "color" }, default: def,
 });
 
-export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Copy window", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks", "Terminal panel"] as const;
+export const ADVANCED_GROUPS = ["Privacy and caches", "Interface", "Files and lists", "Tabs", "Transfers", "Copy window", "Search", "Notifications", "Navigation pane", "Speed and memory", "Thumbnails", "Tasks", "Terminal panel", "Logs"] as const;
 
 export const ADVANCED: AdvDef[] = [
   // ---- Terminal panel (the built-in terminal; the Terminal section is for the outside one) ----
@@ -64,6 +64,10 @@ export const ADVANCED: AdvDef[] = [
   sel("block", "terminal.cursor", "Terminal panel", "Cursor", [["block", "Block"], ["bar", "Bar"], ["underline", "Underline"]]),
   yn(true, "terminal.cursorBlink", "Terminal panel", "Blinking cursor"),
   yn(false, "terminal.copyOnSelect", "Terminal panel", "Copy text when it is selected", "Selecting text copies it, as in many Linux terminals. Ctrl+Shift+C and Ctrl+Shift+V always copy and paste."),
+  // ---- Logs ----
+  yn(true, "logs.toFile", "Logs", "Also write the log to a file", "Every action is kept in the list in memory; this also writes it to a file in the app's logs folder (up to about 10 MB, newest kept), so it is still there if the app freezes or closes."),
+  yn(false, "logs.everything", "Logs", "Record every quick, successful action too", "By default only actions that change something, take a noticeable time, fail or hang are recorded. Turn this on to record everything, such as every folder opened. The log grows much faster."),
+  num(15, "logs.hungSecs", "Logs", "Call an action hung after", 3, 3600, "seconds", "An action that has made no progress for this long is marked HUNG in the log, and again as it goes on."),
   // ---- Tasks (the rest is in the Tasks window) ----
   yn(true, "tasks.enabled", "Tasks", "Run automated tasks", "Turns every automated task on or off. The tasks keep their settings while this is off. Used by the Tasks window and its scheduler."),
   yn(true, "tasks.showButton", "Tasks", "Show the Tasks button in the toolbar", "The button next to Share that opens the Tasks window. The window can also be opened from the right-click menu of a folder."),
@@ -235,6 +239,7 @@ export const ADVANCED: AdvDef[] = [
   ...TRANSFER_METRICS.map((m) => yn(m.on, `transfer.show.${m.id}`, "Copy window", m.label, m.description)),
   num(4, "transfer.activeFilesCount", "Copy window", "Files listed as being copied right now", 1, 16, "files", "How many of the files in flight are listed (one for each stream, at most). Takes effect on the next transfer."),
   sel("auto", "transfer.activeFilesRefreshMs", "Copy window", "How often the file list refreshes", [["auto", "Automatic (follows the performance preset)"], ["100", "10 times a second"], ["250", "4 times a second"], ["500", "Twice a second"], ["1000", "Every second"], ["2000", "Every 2 seconds"]], "Automatic: about 5 times a second on Full, 2 to 3 on Balanced, once a second on Saver."),
+  sel("auto", "transfer.stageLocally", "Transfers", "Copy by way of this computer's disk first", [["auto", "Automatically (SD cards and sticks to network drives, and after a failure)"], ["always", "Always, for anything involving a card, stick or network drive"], ["never", "Never, copy directly"]], "Reading a card and writing to a network drive at the same moment lets either one stall the other. By way of this computer, the file is copied to a temporary place on its own disk first and from there to the destination, so each step stands alone. It needs free space for the largest file (and is skipped when there is not enough). Automatically: used from a card or stick to a network drive, and as a second try when a direct copy to or from such a drive fails, including files passed between a phone or server and another server. Takes effect on the next transfer."),
   yn(false, "transfers.speedTest", "Transfers", "Test the drives' speed before a big copy", "A short test that writes a few megabytes next to the destination, to start the time estimate better informed. It delays the start of the copy, so it is off: earlier transfers on the same route and the first seconds of the copy tell nearly as much."),
   yn(true, "ops.checkAccess", "Transfers", "Check permissions before starting", "Looks quickly whether the job needs administrator rights, so you are asked before anything happens. Network folders are not checked either way (a refusal there is offered as a retry as administrator). Off, jobs start at once and a refusal is offered as a retry afterwards."),
   yn(true, "live.enabled", "Files and lists", "Follow files that are being written or copied", "A file that is growing (a download, a recording, a copy) is checked again and again, just that file, so its size and speed stay up to date. Nothing else in the folder is checked."),

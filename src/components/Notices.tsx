@@ -94,6 +94,17 @@ export function Notices() {
   const finishedCount = useStore((s) => Object.keys(s.finished).length);
   const { clearNotices } = useStore.getState();
   const box = useRef<HTMLDivElement>(null);
+  // Jobs tucked away into the button: how many, and how far along they are together.
+  const tucked = useStore((s) => s.transfersHidden);
+  const live = (s: ReturnType<typeof useStore.getState>) => [...Object.values(s.transfers), ...Object.values(s.deletes)].filter((p) => p.phase === "running" || p.phase === "scanning" || p.phase === "queued" || p.phase === "paused");
+  const count = useStore((s) => live(s).length);
+  // Whole percent, so the button is not redrawn on every tiny step.
+  const percent = useStore((s) => {
+    const l = live(s);
+    return l.length ? Math.round((l.reduce((sum, p) => sum + (s.shown[p.id] ?? 0), 0) / l.length) * 100) : 0;
+  });
+  const running = { count, done: percent / 100 };
+  const hiddenJobs = tucked ? running.count : 0;
 
   const enabled = adv<boolean>(settings, "notify.enabled");
   const position = adv<string>(settings, "notify.position");
@@ -114,8 +125,8 @@ export function Notices() {
     };
   }, [position, enabled, popups.length, open]);
 
-  if (!enabled && !notices.length && !finishedCount) return null;
-  const showBell = bell || notices.length > 0 || finishedCount > 0;
+  if (!enabled && !notices.length && !finishedCount && !hiddenJobs) return null;
+  const showBell = bell || notices.length > 0 || finishedCount > 0 || hiddenJobs > 0;
 
   return (
     <div className="notices" data-position={position} data-size={adv<string>(settings, "notify.size")} ref={box} aria-live="polite">
@@ -130,6 +141,11 @@ export function Notices() {
               <Icon name="close" size={12} />
             </button>
           </div>
+          {hiddenJobs > 0 && (
+            <button className="notice-finished" onClick={() => useStore.setState({ transfersHidden: false, noticesOpen: false })} title="Bring the running copies, moves and deletes back onto the screen">
+              <Icon name="expand" size={12} /> Show running jobs ({hiddenJobs}) · {Math.round(running.done * 100)}%
+            </button>
+          )}
           {finishedCount > 0 && (
             <button className="notice-finished" onClick={() => useStore.setState({ finishedOpen: true, transfersOpen: false, noticesOpen: false })} title="The final graph and every detail of the copies, moves and deletes that finished">
               <Icon name="clock" size={12} /> Graphs and details of finished jobs ({finishedCount})
@@ -145,12 +161,14 @@ export function Notices() {
       {showBell && (
         <button
           className="notice-bell"
-          aria-label={`Recent actions${unread ? `, ${unread} new` : ""}`}
-          title="Recent actions"
+          data-busy={hiddenJobs > 0 || undefined}
+          style={hiddenJobs > 0 ? ({ "--ring": `${Math.round(running.done * 100)}%` } as React.CSSProperties) : undefined}
+          aria-label={`Recent actions${unread ? `, ${unread} new` : ""}${hiddenJobs ? `, ${hiddenJobs} running, ${Math.round(running.done * 100)}% done` : ""}`}
+          title={hiddenJobs ? `${hiddenJobs} running (${Math.round(running.done * 100)}%): click for the list` : "Recent actions"}
           onClick={() => useStore.setState({ noticesOpen: !open, unreadNotices: 0 })}
         >
           <Icon name="info" size={15} />
-          {unread > 0 && <span className="notice-badge">{unread > 9 ? "9+" : unread}</span>}
+          {unread > 0 ? <span className="notice-badge">{unread > 9 ? "9+" : unread}</span> : hiddenJobs > 0 ? <span className="notice-badge" data-running>{hiddenJobs > 9 ? "9+" : hiddenJobs}</span> : null}
         </button>
       )}
     </div>

@@ -27,8 +27,96 @@ use tauri::{AppHandle, Emitter, State};
 
 pub type CmdResult<T> = Result<T, String>;
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+/// Runs a command's work off the main thread, noting it in the activity log (Settings > Logs): when it started,
+/// how long it took, how it ended, and whether it stopped making progress.
+async fn blocking<T: Send + 'static, F: FnOnce() -> CmdResult<T> + Send + 'static>(f: F) -> CmdResult<T> {
+    let name = fast_core::activity::command_name(std::any::type_name::<F>());
+    let span = fast_core::activity::begin("command", &name, "", fast_core::activity::is_action(&name));
+    let ran = tauri::async_runtime::spawn_blocking(move || {
+        span.enter();
+        let r = f();
+        match &r {
+            Ok(_) => span.ok(),
+            Err(e) => span.fail(e),
+        }
+        r
+    })
+    .await;
+    ran.map_err(|e| e.to_string())?
+}
+
+/// Follows one transfer for the activity log: progress restarts the hung clock, waiting on purpose does not count.
+struct TransferWatch {
+    span: Option<fast_core::activity::Span>,
+    seen: (u64, u64, String, u64),
+    phase: Option<Phase>,
+}
+
+impl TransferWatch {
+    fn observe(&mut self, p: &Progress) {
+        use fast_core::activity::{note, Level};
+        let Some(span) = self.span.as_ref() else { return };
+        let moved = (p.files_done, p.bytes_done, p.current.clone(), p.files_total);
+        if moved != self.seen {
+            span.beat();
+            if p.current != self.seen.2 {
+                span.detail(&p.current);
+            }
+            self.seen = moved;
+        }
+        span.waiting(matches!(p.phase, Phase::Queued | Phase::Paused));
+        if self.phase != Some(p.phase) {
+            let method = p.method.map(|m| format!(", {m:?}")).unwrap_or_default();
+            note(
+                Level::Info,
+                "transfer",
+                &format!("#{} {:?}", p.id, p.phase),
+                &format!("{} of {} files, {} of {} bytes{method}", p.files_done, p.files_total, p.bytes_done, p.bytes_total),
+            );
+            self.phase = Some(p.phase);
+        }
+        if p.reading_stalled {
+            span.detail(&format!("waiting for the drive: {}", p.current));
+        }
+        match p.phase {
+            Phase::Done => self.span.take().unwrap().ok(),
+            Phase::Cancelled => self.span.take().unwrap().fail("cancelled"),
+            Phase::Failed => {
+                let why = p.errors.first().map(|e| format!("{}: {}", e.path, e.message)).unwrap_or_else(|| "failed".into());
+                self.span.take().unwrap().fail(&why)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What the person is looking at in the activity log (Settings > Logs).
+#[tauri::command]
+pub fn activity_log(after: Option<u64>) -> fast_core::activity::Snapshot {
+    fast_core::activity::snapshot(after.unwrap_or(0))
+}
+
+#[tauri::command]
+pub fn activity_clear() {
+    fast_core::activity::clear();
+}
+
+/// The whole log as text, for saving.
+#[tauri::command]
+pub fn activity_export() -> String {
+    fast_core::activity::export()
+}
+
+/// Notes from the interface itself (a click that did nothing, a screen that stayed blank).
+#[tauri::command]
+pub fn activity_note(level: String, area: String, what: String, detail: String) {
+    use fast_core::activity::Level;
+    let level = match level.as_str() {
+        "warn" => Level::Warn,
+        "error" => Level::Error,
+        _ => Level::Info,
+    };
+    fast_core::activity::note(level, &area, &what, &detail);
 }
 
 fn now_secs() -> i64 {
@@ -1551,7 +1639,18 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, Shared>, mut spec: 
 
     let touched = Job::Transfer { spec: spec.clone() }.touched_dirs();
     let st2 = st.clone();
+    // The activity log follows the job from start to finish and flags it hung when nothing moves.
+    let what = format!(
+        "{} {} item(s) to {}",
+        format!("{:?}", spec.op).to_lowercase(),
+        spec.sources.len(),
+        spec.dest_dir.display()
+    );
+    let first = spec.sources.first().map(|p| p.display().to_string()).unwrap_or_default();
+    let span = fast_core::activity::begin("transfer", &format!("#{id} {what}"), &first, true);
+    let watch = parking_lot::Mutex::new(TransferWatch { span: Some(span), seen: (0, 0, String::new(), 0), phase: None });
     let on_progress = move |p: Progress| {
+        watch.lock().observe(&p);
         let finished = matches!(p.phase, Phase::Done | Phase::Cancelled | Phase::Failed);
         if finished {
             st2.transfers.lock().remove(&p.id);
@@ -1589,6 +1688,7 @@ pub fn transfer_adjust(state: State<'_, Shared>, id: u64, what: String, value: O
         "priority" => h.set_priority(transfer::throttle::priority_from(value.as_deref().unwrap_or("normal"))),
         "time" => h.set_time_limit(number()? * 60, stop.unwrap_or(false)),
         "startNow" => h.start_now(),
+        "skipFolder" => h.skip_folder(),
         other => return Err(format!("unknown setting {other}")),
     }
     Ok(())
@@ -1600,6 +1700,12 @@ pub fn apply_transfer_limits(st: &Shared) {
     transfer::throttle::global_limiter().set_rate(s.transfer.max_speed_kb * 1024);
     transfer::throttle::gate().set_max(s.transfer.max_active);
     transfer::throttle::gate().set_disk_turns(s.transfer.same_disk_turns);
+    transfer::careful::set_stage(transfer::careful::stage_from_setting(&adv_text(&s, "transfer.stageLocally")));
+    fast_core::activity::configure(
+        s.advanced.get("logs.toFile").and_then(|v| v.as_bool()).unwrap_or(true),
+        s.advanced.get("logs.everything").and_then(|v| v.as_bool()).unwrap_or(false),
+        adv_num(&s, "logs.hungSecs", 15),
+    );
 }
 
 /// Ask an administrator helper to stop (it cannot be signalled directly).

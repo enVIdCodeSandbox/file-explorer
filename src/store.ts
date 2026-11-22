@@ -30,6 +30,7 @@ import {
   type TransferSpec,
 } from "./api";
 import { METHOD_NAME, jobGroup, noteMethod } from "./util/methods";
+import { thinSeries } from "./util/graphScale";
 import { failedGroups } from "./util/retryFailed";
 import { DEFAULT_SET, normalizeSet, setFromLegacyWidths, type ColumnSet } from "./util/columns";
 import { isPerFolder, scopesSignature } from "./util/folderMemory";
@@ -209,6 +210,8 @@ interface State {
   shown: Record<number, number>;
   /** The transfers window is expanded (otherwise just the small cards). */
   transfersOpen: boolean;
+  /** The running jobs are tucked away into the round notification button (until a new one starts). */
+  transfersHidden: boolean;
   /** Jobs that ended cleanly, kept in memory (not saved) until the app is closed, so the graphs and details can be looked at again. */
   finished: Record<string, FinishedJob>;
   /** The list of finished jobs is open. */
@@ -649,6 +652,7 @@ export const useStore = create<State>((set, get) => ({
   lastMethods: {},
   shown: {},
   transfersOpen: false,
+  transfersHidden: false,
   detached: { settings: false, transfers: false },
   settingsPos: { x: 0, y: 0 },
   isSecondary: false,
@@ -1244,10 +1248,10 @@ export const useStore = create<State>((set, get) => ({
     let series = get().series;
     // With the speed graph switched off nothing is collected for it.
     const graphOn = metricOn(get().settings, "graph");
-    if (graphOn && p.phase === "running" && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.2) {
+    if (graphOn && p.phase === "running" && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.05) {
       const next = [...list, { t: p.elapsedSecs, filesPerSec: p.filesPerSec, bytesPerSec: p.bytesPerSec }];
-      // Keep the graph light on very long jobs: thin out every other sample.
-      series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
+      // Keep the graph light on very long jobs: the older part is thinned, the recent part stays whole for zooming in.
+      series = { ...series, [p.id]: thinSeries(next) };
     }
     // A job that was over before a second sample could be taken (an instant move, one small file)
     // still gets a graph: from nothing to its average speed.
@@ -1255,7 +1259,9 @@ export const useStore = create<State>((set, get) => ({
       const t = Math.max(p.elapsedSecs, 0.05);
       series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t, filesPerSec: p.avgFilesPerSec, bytesPerSec: p.avgBytesPerSec }] };
     }
-    set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series });
+    // A job that has only just appeared brings the cards back, so it is not missed.
+    const fresh = !get().transfers[p.id];
+    set({ transfers: { ...get().transfers, [p.id]: p }, shown: { ...get().shown, [p.id]: fraction }, series, ...(fresh ? { transfersHidden: false } : {}) });
     if (p.method && p.phase === "running") noteMethod(get, set, "Copy and move", METHOD_NAME[p.method], `to ${p.destDir}`);
     if (p.phase === "done" || p.phase === "cancelled" || p.phase === "failed") {
       inFlight.delete(`t${p.id}`);
@@ -1302,14 +1308,15 @@ export const useStore = create<State>((set, get) => ({
     // The same speed graph a transfer has: items (shown as files) and bytes per second over time.
     let series = get().series;
     const list = series[p.id] ?? [];
-    if (p.phase === "running" && p.stats && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.2) {
+    if (p.phase === "running" && p.stats && p.elapsedSecs > (list.at(-1)?.t ?? -1) + 0.05) {
       const next = [...list, { t: p.elapsedSecs, filesPerSec: p.stats.itemsPerSec, bytesPerSec: p.stats.bytesPerSec }];
-      series = { ...series, [p.id]: next.length > 900 ? next.filter((_, i) => i % 2 === 0 || i === next.length - 1) : next };
+      series = { ...series, [p.id]: thinSeries(next) };
     }
     if (p.phase === "done" && p.stats && (series[p.id]?.length ?? 0) < 2) {
       series = { ...series, [p.id]: [{ t: 0, filesPerSec: 0, bytesPerSec: 0 }, { t: Math.max(p.elapsedSecs, 0.05), filesPerSec: p.stats.avgItemsPerSec, bytesPerSec: p.stats.avgBytesPerSec }] };
     }
-    set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown }, series });
+    const fresh = !get().deletes[p.id];
+    set({ deletes: { ...get().deletes, [p.id]: p }, shown: { ...get().shown, [p.id]: shown }, series, ...(fresh ? { transfersHidden: false } : {}) });
     if (p.method && p.phase === "running") noteMethod(get, set, jobGroup(p.action, p.permanent), p.method, p.firstName);
     // Copying out of an archive asks the same "this file already exists" question a transfer does.
     if (p.conflict && !detachedView && p.phase === "running" && ownsJob(p.id)) void askAboutConflict(p.id, p.conflict, get().dialog == null);
@@ -1454,7 +1461,7 @@ export const useStore = create<State>((set, get) => ({
     else get().dismissTransfer(p.id);
     // Nothing left to show: the window closes now, not after a delay.
     const s = get();
-    if (!Object.keys(s.transfers).length && !Object.keys(s.deletes).length) set({ transfersOpen: false });
+    if (!Object.keys(s.transfers).length && !Object.keys(s.deletes).length) set({ transfersOpen: false, transfersHidden: false });
   },
 
   // Opens on that job, whatever else is on screen; the running jobs' own window makes room.
@@ -2239,13 +2246,9 @@ export async function createPath(dir: string, name: string, folder: boolean): Pr
     }
   }
   if (isRemote(dir)) {
-    if (!folder) {
-      showToast("New files can't be made on a server. Make a folder, or copy a file into it.");
-      return null;
-    }
     try {
-      const made = await api.remoteMkdir(dir, name);
-      useStore.getState().notify("create", `Created folder "${baseName(made)}"`, undefined, { facts: [["Action", "Create"], ["Name", baseName(made)], ["Location", parentPath(made) ?? ""]] });
+      const made = await (folder ? api.remoteMkdir(dir, name) : api.remoteCreateFile(dir, name));
+      useStore.getState().notify("create", `Created ${folder ? "folder" : "file"} "${baseName(made)}"`, undefined, { facts: [["Action", "Create"], ["Name", baseName(made)], ["Location", parentPath(made) ?? ""]] });
       refreshRemoteTabs();
       return made;
     } catch (e) {

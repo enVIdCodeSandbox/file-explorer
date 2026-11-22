@@ -24,6 +24,9 @@ describe("format", () => {
     const base = { bytesPerSec: 100e6, filesPerSec: 842 };
     expect(formatRate({ ...base, display: "bytes" })).toBe("100 MB/s");
     expect(formatRate({ ...base, display: "files" })).toBe("842 files/s");
+    // Big files finish less than one a second: per minute, not 0.0.
+    expect(formatRate({ ...base, display: "files", filesPerSec: 0.04 })).toBe("2.4 files/min");
+    expect(formatRate({ ...base, display: "files", filesPerSec: 0.3 })).toBe("18 files/min");
     expect(formatRate({ ...base, display: "mixed" })).toBe("842 files/s · 100 MB/s");
   });
 
