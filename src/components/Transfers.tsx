@@ -940,7 +940,7 @@ function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; pas
                 </button>
               </div>
               {active && <ForceStop j={j} />}
-              {expanded && active && <StopAll jobs={jobs} keep={keyOf(j)} />}
+              {expanded && active && <div className="stop-all-row" data-in-card><StopAll jobs={jobs} keep={keyOf(j)} /></div>}
               {expanded && (j.kind === "transfer" ? <TransferDetail p={j.p} endedAt={j.at} /> : <DeleteDetail p={j.p} />)}
               <Issues
                 p={j.p}
