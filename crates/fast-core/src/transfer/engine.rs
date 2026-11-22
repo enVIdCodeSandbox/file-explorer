@@ -301,6 +301,8 @@ struct Shared {
     removable_source: bool,
     /// The destination is a network drive.
     network_dest: bool,
+    /// The destination is a card or stick.
+    removable_dest: bool,
     /// Room on the disk the staged copies go to (`u64::MAX` when that is not known).
     stage_room: u64,
     /// Goes up when the person asks to skip the folder being waited for.
@@ -467,6 +469,18 @@ impl Shared {
         }
     }
 
+    /// How much may be written before it is pushed out to the drive. To a network drive or a card the system takes
+    /// writes into memory at once and sends them later: the copy seems fast for the first gigabytes, then stops
+    /// moving while that memory drains, and closing the file waits for what is left. Pushing out as it goes keeps the
+    /// speed shown true, and keeps the end from being one long stop. 0: leave it to the system.
+    fn flush_every(&self) -> u64 {
+        if self.network_dest || self.removable_dest {
+            32 * 1024 * 1024
+        } else {
+            0
+        }
+    }
+
     fn error(&self, path: &Path, e: &io::Error) {
         if self.error_count.load(Ordering::Relaxed) < 200 {
             crate::activity::note(crate::activity::Level::Error, "transfer", "item failed", &format!("{}: {e}", path.display()));
@@ -627,6 +641,7 @@ pub fn start_with(
         slow_source: spec.sources.iter().any(|p| matches!(drives::media_for(p, &drives), drives::Media::Removable | drives::Media::Hdd)),
         removable_source: spec.sources.iter().any(|p| drives::media_for(p, &drives) == drives::Media::Removable),
         network_dest: drives::media_for(&spec.dest_dir, &drives) == drives::Media::Network,
+        removable_dest: drives::media_for(&spec.dest_dir, &drives) == drives::Media::Removable,
         stage_room: drives::volume_for(&std::env::temp_dir(), &drives).map(|d| d.available).unwrap_or(u64::MAX),
         skip_gen: AtomicU64::new(0),
         stalled_lists: AtomicU64::new(0),
@@ -1802,6 +1817,16 @@ fn process(item: &Item, plan: &Plan, spec: &TransferSpec, shared: &Shared) {
     }
 }
 
+/// Push what has been written out to the drive, and say so in the activity log when that takes a long time
+/// (the drive, or the network, is the slow part, not this program).
+fn flush_out(output: &fs::File, what: &str) {
+    let t = Instant::now();
+    let _ = output.sync_data();
+    if t.elapsed() >= Duration::from_secs(5) {
+        crate::activity::note(crate::activity::Level::Warn, "copy", "slow to take the data", &format!("{what}: the destination took {} s to accept the last 32 MB", t.elapsed().as_secs()));
+    }
+}
+
 /// Files finished per second over the last few seconds. A rate taken over a moment is 0 while one big file is copied
 /// and jumps when it ends; over a window it is the real pace (0.04 files/s for a file every 25 seconds).
 struct FileRate {
@@ -1961,6 +1986,8 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
             let _ = output.set_len(size);
         }
         let mut chunk_start = Instant::now();
+        #[allow(unused_mut, unused_variables)]
+        let mut kernel_since_flush = 0u64;
         let block = shared.chunk_len(plan.buffer_bytes);
         // Linux: let the kernel move each chunk without bringing it into this
         // program (measured about 1.6x faster than read and write here).
@@ -1974,6 +2001,11 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
                     Ok(0) => break,
                     Ok(n) => {
                         shared.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
+                        kernel_since_flush += n as u64;
+                        if shared.flush_every() > 0 && kernel_since_flush >= shared.flush_every() {
+                            kernel_since_flush = 0;
+                            flush_out(&output, "writing");
+                        }
                         let now = Instant::now();
                         shared.model.lock().observe_chunk(n as u64, now.duration_since(chunk_start).as_secs_f64());
                         chunk_start = now;
@@ -2001,7 +2033,14 @@ fn copy_direct(src: &Path, dst: &Path, size: u64, plan: &Plan, spec: &TransferSp
         // The source may have shrunk while copying.
         let written = output.stream_position_or(size);
         let _ = output.set_len(written);
+        if shared.flush_every() > 0 {
+            flush_out(&output, "finishing");
+        }
+        let closing = Instant::now();
         drop(output);
+        if closing.elapsed() >= Duration::from_secs(2) {
+            crate::activity::note(crate::activity::Level::Warn, "copy", "slow to close", &format!("{} took {} s to close: the drive was still taking the last data", dst.display(), closing.elapsed().as_secs()));
+        }
         let _ = fs::set_permissions(dst, meta.permissions());
     }
 
@@ -2063,6 +2102,8 @@ fn pipelined_copy(input: &mut (dyn Read + Send), output: &mut fs::File, block: u
                 }
             }
         });
+        let flush_every = shared.flush_every();
+        let mut since_flush = 0u64;
         let result = (|| -> io::Result<bool> {
             loop {
                 if !shared.checkpoint() {
@@ -2073,6 +2114,11 @@ fn pipelined_copy(input: &mut (dyn Read + Send), output: &mut fs::File, block: u
                 let buf = next?;
                 output.write_all(&buf)?;
                 shared.bytes_done.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                since_flush += buf.len() as u64;
+                if flush_every > 0 && since_flush >= flush_every {
+                    since_flush = 0;
+                    flush_out(output, "writing");
+                }
                 let now = Instant::now();
                 shared.model.lock().observe_chunk(buf.len() as u64, now.duration_since(*chunk_start).as_secs_f64());
                 *chunk_start = now;
@@ -2273,6 +2319,7 @@ mod tests {
             slow_source: false,
             removable_source: false,
             network_dest: false,
+            removable_dest: false,
             stage_room: u64::MAX,
             skip_gen: AtomicU64::new(0),
             stalled_lists: AtomicU64::new(0),
@@ -2364,6 +2411,23 @@ mod tests {
             v = r.observe(i as f64 * 0.5, i * 50);
         }
         assert!((v - 100.0).abs() < 1.0, "{v}");
+    }
+
+    #[test]
+    fn a_big_file_to_a_network_drive_is_pushed_out_as_it_goes_and_arrives_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let data: Vec<u8> = (0..70_000_000usize).map(|i| (i * 7 % 251) as u8).collect();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        fs::write(&a, &data).unwrap();
+        let mut shared = test_shared();
+        shared.network_dest = true;
+        shared.clone_ok.store(false, Ordering::Relaxed);
+        assert_eq!(shared.flush_every(), 32 * 1024 * 1024);
+        let plan = strategy::choose(&JobProfile { file_count: 1, total_bytes: 70_000_000, large_bytes: 70_000_000, large_count: 1, same_volume: false, is_move: false, src: crate::drives::Media::Ssd, dst: crate::drives::Media::Network }, &Budget::minimal(), 64 * 1024 * 1024, 0);
+        let spec = TransferSpec { sources: vec![], dest_dir: dir.path().to_path_buf(), op: Op::Copy, conflict: Conflict::Overwrite, preserve_times: false, large_threshold: 1_000_000, max_parallel: 0, method: MethodPref::Native, skip_identical: true, active_files: 0, speed_test: false, early_start_ms: 0 };
+        assert!(copy_one(&a, &b, 70_000_000, &plan, &spec, &shared).unwrap());
+        assert!(fs::read(&b).unwrap() == data);
+        assert_eq!(shared.bytes_done.load(Ordering::Relaxed), 70_000_000);
     }
 
     #[test]
