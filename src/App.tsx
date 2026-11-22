@@ -50,6 +50,7 @@ const Setup = lazy(() => import("./components/Setup").then((m) => ({ default: m.
 const SettingsView = lazy(() => import("./components/SettingsView").then((m) => ({ default: m.SettingsView })));
 const TerminalPanel = lazy(() => import("./components/Terminal").then((m) => ({ default: m.TerminalPanel })));
 const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({ default: m.BatchRename })));
+const NetworkSignIn = lazy(() => import("./components/NetworkSignIn").then((m) => ({ default: m.NetworkSignIn })));
 const ConnectServer = lazy(() => import("./components/ConnectServer").then((m) => ({ default: m.ConnectServer })));
 const ShareDialog = lazy(() => import("./components/Share").then((m) => ({ default: m.ShareDialog })));
 const AnalyzerView = lazy(() => import("./components/Analyzer").then((m) => ({ default: m.AnalyzerView })));
@@ -432,6 +433,7 @@ function AppInner() {
             <Part later><ShareDialog /></Part>
             <Part later><BatchRename /></Part>
             <Part later><ConnectServer /></Part>
+            <Part later><NetworkSignIn /></Part>
             <Dialog />
             <Toast />
           </>
@@ -524,6 +526,7 @@ function AppInner() {
       <Part later><ShareDialog /></Part>
       <Part later><BatchRename /></Part>
       <Part later><ConnectServer /></Part>
+            <Part later><NetworkSignIn /></Part>
       <DragOverlay />
       <Tooltips />
       <Dialog />

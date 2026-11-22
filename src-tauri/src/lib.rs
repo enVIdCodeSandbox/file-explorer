@@ -389,6 +389,7 @@ pub fn run() {
             commands::app_info,
             commands::cache_usage,
             commands::network_map,
+            commands::network_relogin,
             commands::shell_menu,
             commands::run_custom_action,
             commands::config_folder,

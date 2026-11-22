@@ -620,3 +620,161 @@ mod tests {
         assert!(drives.iter().all(|d| d.available <= d.total));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Windows `net use`: what is asked of it, kept apart so it can be tested anywhere
+// ---------------------------------------------------------------------------
+
+/// The arguments that connect `remote` (`\\server\share`) to a drive letter (`letter` like "Z:", or "*" for a free one;
+/// `None` connects it with no letter), signed in as `login` (user name, password) when given. The password goes
+/// before the switches, as `net use` wants it; an empty one is passed as an empty argument (a blank password).
+pub fn net_use_connect(letter: Option<&str>, remote: &str, login: Option<(&str, &str)>) -> Vec<String> {
+    let mut args = vec!["use".to_string()];
+    if let Some(l) = letter {
+        args.push(l.to_string());
+    }
+    args.push(remote.to_string());
+    if let Some((user, password)) = login {
+        args.push(password.to_string());
+        args.push(format!("/user:{user}"));
+    }
+    args.push("/persistent:yes".to_string());
+    args
+}
+
+/// The arguments that disconnect a drive letter ("Z:") or a share (`\\server\share`), even with files open.
+pub fn net_use_delete(target: &str) -> Vec<String> {
+    vec!["use".into(), target.trim_end_matches('\\').to_string(), "/delete".into(), "/y".into()]
+}
+
+/// The drive letter ("Z:") a mount point stands for, when it is one.
+pub fn drive_letter_of(mount: &str) -> Option<String> {
+    let b = mount.as_bytes();
+    (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':').then(|| mount[..2].to_ascii_uppercase())
+}
+
+/// The server of `\\server\share`.
+pub fn unc_server(remote: &str) -> Option<&str> {
+    remote.strip_prefix("\\\\")?.split('\\').next().filter(|s| !s.is_empty())
+}
+
+/// What happened to one drive when signing in again.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginOutcome {
+    pub mount: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Sign in again to existing network drives with a new login, without making them again. Every drive is let go of
+/// first (so the server sees no sign-in under the old name, which it would refuse a second one beside), then each is
+/// connected again at its letter, with its address, kept for next time. A drive that cannot be signed in is put back
+/// the way it was connected, so a wrong password does not cost the drive. `run` carries out one `net use`; `busy` says
+/// whether a copy is using a drive (such a drive is left alone).
+pub fn relogin(
+    drives: &[Drive],
+    mounts: &[String],
+    user: &str,
+    password: &str,
+    busy: &dyn Fn(&str) -> bool,
+    run: &mut dyn FnMut(Vec<String>) -> std::result::Result<String, String>,
+) -> Vec<ReloginOutcome> {
+    let fail = |mount: &str, why: String| ReloginOutcome { mount: mount.to_string(), ok: false, error: Some(why) };
+    let mut out = Vec::new();
+    let mut jobs: Vec<(String, Option<String>, String)> = Vec::new();
+    for mount in mounts {
+        let remote = drives.iter().find(|d| &d.mount == mount && d.media == Media::Network).and_then(|d| d.remote.clone());
+        match remote {
+            _ if busy(mount) => out.push(fail(mount, "A copy is using this drive. Sign in again when it has finished.".into())),
+            Some(remote) => jobs.push((mount.clone(), drive_letter_of(mount), remote)),
+            None => out.push(fail(mount, "Windows did not say where this drive points, so it cannot be signed in again.".into())),
+        }
+    }
+    for (_, letter, remote) in &jobs {
+        let _ = run(net_use_delete(letter.as_deref().unwrap_or(remote)));
+    }
+    for (mount, letter, remote) in jobs {
+        match run(net_use_connect(letter.as_deref(), &remote, Some((user, password)))) {
+            Ok(_) => out.push(ReloginOutcome { mount, ok: true, error: None }),
+            Err(e) => {
+                let restored = run(net_use_connect(letter.as_deref(), &remote, None)).is_ok();
+                let note = if restored { "The drive is connected again with its earlier sign-in." } else { "The drive is now disconnected: use Map network drive to add it again." };
+                out.push(fail(&mount, format!("{e} {note}")));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod net_use_tests {
+    use super::*;
+
+    fn net(mount: &str, remote: &str) -> Drive {
+        Drive { name: mount.into(), mount: mount.into(), fs: "smb".into(), total: 0, available: 0, media: Media::Network, removable: false, read_only: false, online: true, remote: Some(remote.into()) }
+    }
+
+    #[test]
+    fn signing_in_again_lets_go_of_all_first_then_connects_each_with_the_new_login() {
+        let drives = [net(r"S:\", r"\\nas\games"), net(r"T:\", r"\\nas\media")];
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        let out = relogin(&drives, &[r"S:\".into(), r"T:\".into()], "me", "pw", &|_| false, &mut |a| {
+            seen.push(a);
+            Ok(String::new())
+        });
+        assert!(out.iter().all(|o| o.ok));
+        let verbs: Vec<&str> = seen.iter().map(|a| a.get(2).map(String::as_str).unwrap_or("")).collect();
+        assert_eq!(&verbs[..2], ["/delete", "/delete"], "both are let go of before any is connected: {seen:?}");
+        assert_eq!(seen[2], ["use", "S:", r"\\nas\games", "pw", "/user:me", "/persistent:yes"]);
+        assert_eq!(seen[3], ["use", "T:", r"\\nas\media", "pw", "/user:me", "/persistent:yes"]);
+    }
+
+    #[test]
+    fn a_refused_login_puts_the_drive_back_as_it_was() {
+        let drives = [net(r"S:\", r"\\nas\games")];
+        let mut calls = 0;
+        let out = relogin(&drives, &[r"S:\".into()], "me", "wrong", &|_| false, &mut |a| {
+            calls += 1;
+            if a.iter().any(|x| x == "/user:me") { Err("System error 1326 has occurred.".into()) } else { Ok(String::new()) }
+        });
+        assert!(!out[0].ok);
+        let e = out[0].error.as_deref().unwrap();
+        assert!(e.contains("1326") && e.contains("earlier sign-in"), "{e}");
+        assert_eq!(calls, 3, "delete, failed connect, restore");
+    }
+
+    #[test]
+    fn a_drive_that_is_busy_or_unknown_is_left_alone() {
+        let drives = [net(r"S:\", r"\\nas\games")];
+        let mut ran = 0;
+        let out = relogin(&drives, &[r"S:\".into(), r"Q:\".into()], "me", "pw", &|m| m == r"S:\", &mut |_| {
+            ran += 1;
+            Ok(String::new())
+        });
+        assert_eq!(ran, 0);
+        assert!(out.iter().all(|o| !o.ok));
+        assert!(out[0].error.as_deref().unwrap().contains("copy is using"));
+    }
+
+    #[test]
+    fn connecting_puts_the_password_before_the_switches() {
+        assert_eq!(net_use_connect(Some("Z:"), r"\\nas\media", Some(("me", "pw"))), ["use", "Z:", r"\\nas\media", "pw", "/user:me", "/persistent:yes"]);
+        assert_eq!(net_use_connect(Some("*"), r"\\nas\media", None), ["use", "*", r"\\nas\media", "/persistent:yes"]);
+        assert_eq!(net_use_connect(None, r"\\nas\media", Some(("D\\me", ""))), ["use", r"\\nas\media", "", r"/user:D\me", "/persistent:yes"]);
+    }
+
+    #[test]
+    fn disconnecting_names_the_letter_or_share() {
+        assert_eq!(net_use_delete("Z:\\"), ["use", "Z:", "/delete", "/y"]);
+        assert_eq!(net_use_delete(r"\\nas\media"), ["use", r"\\nas\media", "/delete", "/y"]);
+    }
+
+    #[test]
+    fn letters_and_servers_are_read_from_mounts_and_addresses() {
+        assert_eq!(drive_letter_of(r"z:\"), Some("Z:".into()));
+        assert_eq!(drive_letter_of(r"\\nas\media"), None);
+        assert_eq!(unc_server(r"\\nas\media"), Some("nas"));
+        assert_eq!(unc_server("nas:/export"), None);
+    }
+}

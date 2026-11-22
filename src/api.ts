@@ -992,6 +992,8 @@ export const api = {
   termTranscript: (sid: string, forget: boolean) => invoke<string | null>("term_transcript", { sid, forget }),
   termSweepTranscripts: (keep: string[]) => invoke<void>("term_sweep_transcripts", { keep }),
   columnValues: (dir: string, names: string[], keys: string[]) => invoke<{ name: string; values: Record<string, string> }[]>("column_values", { dir, names, keys }),
+  /** Sign in again to existing network drives (Windows) with a new login: one result per drive. */
+  networkRelogin: (mounts: string[], user: string, password: string) => invoke<{ mount: string; ok: boolean; error: string | null }[]>("network_relogin", { mounts, user, password }),
   networkMap: (remote: string, letter: string | null, user?: string, password?: string) => invoke<string | null>("network_map", { remote, letter, user: user || null, password: password || null }),
   networkDisconnect: (mount: string) => invoke<void>("network_disconnect", { mount }),
   driveEject: (mount: string) => invoke<void>("drive_eject", { mount }),

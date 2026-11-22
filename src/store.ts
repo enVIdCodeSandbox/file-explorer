@@ -263,6 +263,9 @@ interface State {
   servers: SavedServer[];
   /** The "Connect to server" dialog, with what to fill in. */
   connect: ConnectRequest | null;
+  /** The "Sign in again" window for network drives: which drives start ticked. */
+  signIn: { preselect: string[] } | null;
+  openSignIn: (preselect?: string[]) => void;
   /** While set, the window is choosing a file for a form (see util/pickFile.ts): opening a file picks it. */
   picker: PickRequest | null;
   openConnect: (request?: ConnectRequest) => void;
@@ -691,6 +694,8 @@ export const useStore = create<State>((set, get) => ({
   batchRename: null,
   servers: [],
   connect: null,
+  signIn: null,
+  openSignIn: (preselect = []) => set({ signIn: { preselect } }),
   picker: null,
   openConnect: (request = {}) => set({ connect: request }),
   closeConnect: () => set({ connect: null }),

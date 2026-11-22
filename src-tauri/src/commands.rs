@@ -3291,13 +3291,8 @@ pub async fn network_map(app: AppHandle, state: State<'_, Shared>, remote: Strin
             // `net use` asks for a name and password on its console, and there is none here (the window is hidden), so it
             // gives up at once with "error 1223". The person is asked in the app and the answer is handed over here.
             let user = user.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
-            let mut args: Vec<String> = vec!["use".into(), target, remote];
-            if let Some(user) = user {
-                // The password goes before the switches, as `net use` wants it; an empty one is given as "" (a blank password).
-                args.push(password.unwrap_or_default());
-                args.push(format!("/user:{user}"));
-            }
-            args.push("/persistent:yes".into());
+            let password = password.unwrap_or_default();
+            let args = fast_core::drives::net_use_connect(Some(&target), &remote, user.as_deref().map(|u| (u, password.as_str())));
             run_net(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
             *st.drives.write() = fast_core::drives::list_drives();
             Ok(())
@@ -3369,6 +3364,36 @@ pub async fn network_disconnect(app: AppHandle, state: State<'_, Shared>, mount:
     .await?;
     let _ = app.emit("fs-changed", Vec::<String>::new());
     Ok(())
+}
+
+/// Sign in again to existing network drives with a new user name and password, without making them again: each one
+/// is disconnected and connected again at the same drive letter, with the same address, kept for next time. Windows
+/// allows one sign-in per server, so every drive on a server has to be in the list for the new one to be accepted.
+/// A drive that cannot be signed in is put back the way it was connected before, so it is not lost.
+#[tauri::command]
+pub async fn network_relogin(app: AppHandle, state: State<'_, Shared>, mounts: Vec<String>, user: String, password: String) -> CmdResult<Vec<fast_core::drives::ReloginOutcome>> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state, mounts, user, password);
+        Err("Signing in again to network drives is available on Windows. On this system, disconnect the share and connect it again.".into())
+    }
+    #[cfg(windows)]
+    {
+        let st = state.inner().clone();
+        let user = user.trim().to_string();
+        if user.is_empty() {
+            return Err("Enter a user name.".into());
+        }
+        let results = blocking(move || {
+            let known = st.drives.read().clone();
+            let results = fast_core::drives::relogin(&known, &mounts, &user, &password, &|m| fast_core::busy::is_busy(Path::new(m)), &mut |args| run_net(&args.iter().map(String::as_str).collect::<Vec<_>>()));
+            *st.drives.write() = fast_core::drives::list_drives();
+            Ok(results)
+        })
+        .await?;
+        let _ = app.emit("fs-changed", Vec::<String>::new());
+        Ok(results)
+    }
 }
 
 /// The block device behind a Linux mount point, from /proc/mounts.

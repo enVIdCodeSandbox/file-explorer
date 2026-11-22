@@ -240,6 +240,11 @@ export function DrivesView() {
                 <button className="section-fold" aria-expanded={!folded[title]} onClick={() => setFolded({ ...folded, [title]: !folded[title] })}>
                   <Icon name={folded[title] ? "chevron" : "expand"} size={10} /> {title} <span className="muted">({list.length})</span>
                 </button>
+                {title === "Network locations" && os === "windows" && (
+                  <button className="link-button section-action" title="Connect again to some or all of these with a new user name and password" onClick={() => useStore.getState().openSignIn()}>
+                    Sign in again…
+                  </button>
+                )}
               </h3>
               {!folded[title] && <div className="card-grid drives">
                 {list.map((d) => {

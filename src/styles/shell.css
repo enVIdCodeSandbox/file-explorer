@@ -1142,3 +1142,16 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 /* "Stop all the other jobs" inside an open card: its own line under the header, right-aligned, clear of what follows. */
 .stop-all-row[data-in-card] { flex: none; display: flex; justify-content: flex-end; align-items: center; padding: 2px 12px 6px; margin: 0; }
 .stop-all-row[data-in-card] .stop-all { margin-left: 0; padding: 2px 6px; line-height: 1.3; white-space: nowrap; }
+
+/* Sign in again to network drives. */
+.signin-dialog { width: min(520px, calc(100vw - 32px)); }
+.signin-tools { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: var(--font-size-small); }
+.signin-list { margin-top: 6px; max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-small); }
+.signin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.signin-row + .signin-row { border-top: 1px solid var(--border); }
+.signin-row:hover { background: var(--surface-hover); }
+.signin-status { font-size: var(--font-size-small); }
+.signin-row[data-result="ok"] .signin-status { color: var(--success, #2e9e5b); }
+.signin-row[data-result="failed"] .signin-status { color: var(--danger); }
+.signin-why { flex-basis: 100%; padding-left: 24px; font-size: var(--font-size-small); }
+.drives-view h3 .section-action { margin-left: 12px; font-weight: 400; font-size: var(--font-size-small); }

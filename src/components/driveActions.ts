@@ -143,6 +143,9 @@ export function driveMenuItems(d: Drive, extra: { os: string | undefined; drives
     });
   }
   items.push({ id: "addNetwork", label: "Add a network location…", icon: "network", separatorBefore: true, run: () => void mapNetworkDrive(drives, true, os) });
+  if (windows && drives.some((x) => x.media === "network")) {
+    items.push({ id: "signInAgain", label: d.media === "network" ? "Sign in again…" : "Sign in again to network drives…", icon: "network", run: () => useStore.getState().openSignIn(d.media === "network" ? [d.mount] : []) });
+  }
   if (windows) items.push({ id: "mapDrive", label: "Map network drive…", icon: "network", run: () => void mapNetworkDrive(drives, false, os) });
   items.push({
     id: "disconnectOther",
@@ -165,6 +168,7 @@ export function networkMenuItems(drives: Drive[], os: string | undefined, appear
   return [
     { id: "addNetwork", label: "Add a network location…", icon: "network", run: () => void mapNetworkDrive(drives, true, os) },
     ...(windows ? [{ id: "mapDrive", label: "Map network drive…", icon: "network", run: () => void mapNetworkDrive(drives, false, os) } as MenuItem] : []),
+    ...(windows && network.length > 0 ? [{ id: "signInAgain", label: "Sign in again to network drives…", icon: "network", run: () => useStore.getState().openSignIn() } as MenuItem] : []),
     {
       id: "disconnect",
       label: windows ? "Disconnect network drive" : "Disconnect network location",
