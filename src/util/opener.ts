@@ -16,7 +16,8 @@ const inflight = new Map<string, Promise<Opener>>();
 export function openerKey(path: string): string {
   const name = baseName(path).toLowerCase();
   const i = name.lastIndexOf(".");
-  return i > 0 ? name.slice(i) : `p:${path}`;
+  // ".ts" is TypeScript and also video: what is inside decides, so each file is asked about on its own.
+  return i > 0 && name.slice(i) !== ".ts" ? name.slice(i) : `p:${path}`;
 }
 
 /** Whether the app should show this at all: the setting is on and the file is one on this computer. */
@@ -47,9 +48,17 @@ export function loadOpener(path: string, wantIcon = false): Promise<Opener> {
   return p;
 }
 
+const listeners = new Set<() => void>();
+/** Called whenever the answers are forgotten, so what shows one can ask again. Returns the way to stop. */
+export function onOpenersForgotten(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => void listeners.delete(fn);
+}
+
 /** Forget every answer (the default for some kind of file was just changed). */
 export function forgetOpeners() {
   memo.clear();
+  for (const fn of [...listeners]) fn();
 }
 
 /** The words for a menu hint: only when a program really is set. */

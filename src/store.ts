@@ -385,7 +385,9 @@ interface State {
   cancelling: Record<number, number>;
   requestCancel: (kind: "transfer" | "delete", id: number) => void;
   /** Abandon a job right now, without waiting for it to respond. */
-  forceStop: (kind: "transfer" | "delete", id: number) => void;
+  forceStop: (kind: "transfer" | "delete", id: number, quiet?: boolean) => void;
+  /** Let go of every running job and drop every paste waiting in line (except the one job `keep` names, "transfer-12" / "delete-12"). Returns how many were stopped. */
+  stopAllJobs: (keep?: string) => number;
   dismissTransfer: (id: number) => void;
   dismissDelete: (id: number) => void;
   /** A job that ended cleanly: its card goes away at once and its final state is kept until the app closes. */
@@ -1378,7 +1380,7 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  forceStop: (kind, id) => {
+  forceStop: (kind, id, quiet = false) => {
     forcedJobs.add(id);
     const spec = get().specs[id];
     void (kind === "delete" ? api.deleteControl(id, "cancel") : api.transferForceStop(id)).catch(() => {});
@@ -1387,8 +1389,41 @@ export const useStore = create<State>((set, get) => ({
     const cancelling = { ...get().cancelling };
     delete cancelling[id];
     set({ cancelling });
+    // What reports from a job that was let go of is ignored, so it can never say it has ended: without this, a paste
+    // that was waiting for it would wait for ever.
+    inFlight.delete(`${kind === "delete" ? "d" : "t"}${id}`);
+    wake();
     if (spec) get().bumpDirs([spec.destDir, ...spec.sources.map((p) => parentOf(p))].filter((d): d is string => !!d));
-    get().notify("info", "Stopped", "Anything already copied stays where it is. The drive may take a while to let go.");
+    if (!quiet) get().notify("info", "Stopped", "Anything already copied stays where it is. The drive may take a while to let go.");
+  },
+
+  stopAllJobs: (keep) => {
+    const live = (phase: string) => phase === "running" || phase === "scanning" || phase === "queued" || phase === "paused";
+    let stopped = 0;
+    for (const p of Object.values(get().transfers)) {
+      if (live(p.phase) && `transfer-${p.id}` !== keep) {
+        get().forceStop("transfer", p.id, true);
+        stopped++;
+      }
+    }
+    for (const p of Object.values(get().deletes)) {
+      if (live(p.phase) && `delete-${p.id}` !== keep) {
+        get().forceStop("delete", p.id, true);
+        stopped++;
+      }
+    }
+    // Pastes waiting in line for those jobs go too.
+    const waiting = Object.keys(get().queuedJobs).length;
+    if (waiting > 0) set({ queuedJobs: {} });
+    wake();
+    if (stopped + waiting > 0) {
+      get().notify(
+        "info",
+        keep ? "Stopped the other jobs" : "Stopped all jobs",
+        `${stopped} running${waiting ? ` and ${waiting} waiting` : ""} stopped. Anything already copied stays where it is. A drive may take a while to let go.`,
+      );
+    }
+    return stopped + waiting;
   },
 
   dismissTransfer: (id) => {

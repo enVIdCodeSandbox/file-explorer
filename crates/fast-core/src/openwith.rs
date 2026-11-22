@@ -707,7 +707,24 @@ mod platform {
         Some(cmd.spawn().map(|_| ()).map_err(|e| CoreError::io(Path::new(id), e)))
     }
 
-    pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
+    /// Windows keeps the default program for a kind of file where only its own "Default apps" settings can change it
+    /// (the entry is protected so that no program can take over a file type behind the person's back). So "always"
+    /// is kept by this app: it opens that kind of file with the program from here on, and shows it as the one it opens with.
+    pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
+        let done = launch(path, id);
+        if always && done.is_ok() {
+            set_app_default(&open_key(path), id);
+        }
+        done
+    }
+
+    /// Open a file with the program set for the type of file `stand_in` (an extension such as ".mp4").
+    pub fn open_as(path: &Path, stand_in: &str) -> Result<()> {
+        let Some(prog) = prog_id(stand_in) else { return Err(CoreError::io(path, std::io::Error::other("no program is set for that kind of file"))) };
+        crate::platform::open_path_as_class(path, &prog)
+    }
+
+    fn launch(path: &Path, id: &str) -> Result<()> {
         if let Some(done) = in_shell(path, id) {
             return done;
         }
@@ -786,7 +803,7 @@ mod platform {
 }
 
 /// Open `path` with the program `id` (see `Choices`). With `always`, that program also becomes the one used from
-/// now on where the system lets that be set.
+/// now on: set in the system where it lets that be done, and kept by this app where it does not (Windows).
 pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
     let done = platform::open_with(path, id, always);
     if always && done.is_ok() {
@@ -796,6 +813,134 @@ pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
 }
 
 pub use platform::check;
+
+// ===========================================================================
+// Extensions that mean two things (".ts" is TypeScript and also MPEG video), and "always" where the system will not
+// ===========================================================================
+
+/// Whether these first bytes are an MPEG transport stream: a sync byte (0x47) at the start of every 188-byte packet,
+/// or of every 192-byte one when each carries a 4-byte time stamp first (camcorders, Blu-ray). Text does not do that.
+pub fn looks_like_mpeg_ts(head: &[u8]) -> bool {
+    [(0usize, 188usize), (4, 192)].iter().any(|&(first, stride)| {
+        let need = if head.len() > first + 3 * stride { 4 } else { 3 };
+        head.len() > first + (need - 1) * stride && (0..need).all(|i| head[first + i * stride] == 0x47)
+    })
+}
+
+/// What a file is when its extension does not say: `Some("video")` for a `.ts` that is an MPEG transport stream.
+/// A `.ts` that is not one is TypeScript and gets `None`, like every other file.
+pub fn content_kind(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    if extension_of(path) != ".ts" {
+        return None;
+    }
+    let mut head = Vec::with_capacity(1024);
+    std::fs::File::open(path).ok()?.take(1024).read_to_end(&mut head).ok()?;
+    looks_like_mpeg_ts(&head).then_some("video")
+}
+
+/// Extensions of the same kind of content, whose program is used for a file that only its content places there.
+fn stand_ins(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "video" => &[".mp4", ".mkv", ".m2ts", ".mts", ".mpg", ".avi"],
+        _ => &[],
+    }
+}
+
+/// The first of those extensions that has a program set, with what the system found for it.
+fn stand_in(kind: &str) -> Option<(&'static str, Found)> {
+    stand_ins(kind).iter().find_map(|ext| {
+        let fake = Path::new("stand-in").with_extension(&ext[1..]);
+        match defaults::found(&fake) {
+            found @ Found::App { .. } => Some((*ext, found)),
+            _ => None,
+        }
+    })
+}
+
+/// What decides the program a file opens with: its extension, with the kind of content after it when that differs
+/// (".ts+video"). The answer for one kind is never given for the other.
+pub fn open_key(path: &Path) -> String {
+    let ext = extension_of(path);
+    match content_kind(path) {
+        Some(kind) => format!("{ext}+{kind}"),
+        None => ext,
+    }
+}
+
+struct AppDefaults {
+    file: Option<std::path::PathBuf>,
+    apps: std::collections::BTreeMap<String, String>,
+}
+
+fn app_defaults() -> &'static std::sync::Mutex<AppDefaults> {
+    static D: std::sync::OnceLock<std::sync::Mutex<AppDefaults>> = std::sync::OnceLock::new();
+    D.get_or_init(|| std::sync::Mutex::new(AppDefaults { file: None, apps: Default::default() }))
+}
+
+/// Read what was chosen with "Always" earlier, and keep it in `file` from now on.
+pub fn load_app_defaults(file: &Path) {
+    let apps = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    if let Ok(mut d) = app_defaults().lock() {
+        *d = AppDefaults { file: Some(file.to_path_buf()), apps };
+    }
+}
+
+/// The program chosen with "Always" for this kind of file (see [`open_key`]), if any.
+pub fn app_default_for(key: &str) -> Option<String> {
+    app_defaults().lock().ok().and_then(|d| d.apps.get(key).cloned())
+}
+
+/// Remember `id` as the program for this kind of file.
+#[allow(dead_code)] // only where the system does not take the choice itself
+pub fn set_app_default(key: &str, id: &str) {
+    if key.is_empty() {
+        return;
+    }
+    let Ok(mut d) = app_defaults().lock() else { return };
+    d.apps.insert(key.to_string(), id.to_string());
+    if let (Some(file), Ok(text)) = (&d.file, serde_json::to_string_pretty(&d.apps)) {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(file, text);
+    }
+}
+
+#[cfg(windows)]
+fn open_as_type(path: &Path, stand_in: &str, _found: &Found) -> Result<()> {
+    platform::open_as(path, stand_in)
+}
+
+#[cfg(not(windows))]
+fn open_as_type(path: &Path, _stand_in: &str, found: &Found) -> Result<()> {
+    match found {
+        Found::App { id, .. } => platform::open_with(path, id, false),
+        _ => Err(CoreError::io(path, std::io::Error::other("no program is set for that kind of file"))),
+    }
+}
+
+/// Opens `path` the way this app knows better than the system's per-extension setting: with the program the person
+/// chose with "Always" for this kind of file, or (for a `.ts` that is video) with the video player. `None` when the
+/// system's own way is the right one.
+pub fn open_special(path: &Path) -> Option<Result<()>> {
+    if path.is_dir() {
+        return None;
+    }
+    let kind = content_kind(path);
+    let key = match kind {
+        Some(k) => format!("{}+{k}", extension_of(path)),
+        None => extension_of(path),
+    };
+    if let Some(id) = app_default_for(&key) {
+        // A program that is gone is skipped, and the system's way takes over.
+        if program_exists(&id) {
+            return Some(platform::open_with(path, &id, false));
+        }
+    }
+    let (ext, found) = stand_in(kind?)?;
+    Some(open_as_type(path, ext, &found))
+}
 
 // ===========================================================================
 // Which program a file opens with (shown next to it, without asking the system for a whole chooser)
@@ -872,12 +1017,31 @@ pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
             return Opener::of("runs", "", "");
         }
     }
-    let key = if ext.is_empty() { format!("n:{name}") } else { ext };
+    let kind = content_kind(path);
+    let key = match (ext.is_empty(), kind) {
+        (true, _) => format!("n:{name}"),
+        (false, Some(k)) => format!("{ext}+{k}"),
+        (false, None) => ext,
+    };
+    // The program chosen with "Always" comes first (Windows leaves that choice to this app).
+    if let Some(id) = app_default_for(&key) {
+        let shown = program_name(&id);
+        let mut o = if program_exists(&id) { Opener::of("app", &shown, &id) } else { Opener::of("missing", &shown, "") };
+        if let Some(n) = friendly(&o.name, &o.id) {
+            o.name = n.to_string();
+        }
+        return o;
+    }
     let hit = memory().lock().ok().and_then(|m| m.get(&key).filter(|(at, _, _)| at.elapsed() < OPENER_TTL).map(|(_, o, icon)| (o.clone(), icon.clone())));
     let (mut opener, icon) = match hit {
         Some(h) => h,
         None => {
-            let (o, icon) = match defaults::found(path) {
+            // An extension two kinds of file share: a `.ts` that is video opens with the video player.
+            let found = match kind.and_then(stand_in) {
+                Some((_, found)) => found,
+                None => defaults::found(path),
+            };
+            let (o, icon) = match found {
                 Found::App { id, name, icon } => (Opener::of("app", &name, &id), icon),
                 Found::Missing { name } => (Opener::of("missing", &name, ""), String::new()),
                 Found::Runs => (Opener::of("runs", "", ""), String::new()),
@@ -899,6 +1063,27 @@ pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
         opener.icon_url = defaults::icon(&opener.id, &icon);
     }
     opener
+}
+
+/// A readable name for a program chosen by its path: the system's own name for it where it has one, else the file name.
+fn program_name(id: &str) -> String {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_OPEN_BYEXENAME, ASSOCSTR_FRIENDLYAPPNAME};
+        let exe: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut buf = [0u16; 260];
+        let mut len = buf.len() as u32;
+        // SAFETY: the program name is NUL-terminated, the buffer is as long as `len` says, and nothing outlives the call.
+        let hr = unsafe { AssocQueryStringW(ASSOCF_OPEN_BYEXENAME, ASSOCSTR_FRIENDLYAPPNAME, exe.as_ptr(), std::ptr::null(), buf.as_mut_ptr(), &mut len) };
+        if hr == 0 {
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let text = String::from_utf16_lossy(&buf[..n]);
+            if !text.trim().is_empty() {
+                return text;
+            }
+        }
+    }
+    stem_of(id)
 }
 
 mod defaults {
@@ -1164,13 +1349,23 @@ mod defaults {
 /// The programs that could open a file, with readable names, the system's helper programs left out, and the editors
 /// and terminals that suit any file picked out.
 pub fn choices(path: &Path) -> Choices {
-    refine(platform::choices(path))
+    match as_other_type(path) {
+        // A `.ts` that is video: the programs for video, not the editors the extension is set to.
+        Some(fake) => Choices { extension: extension_of(path), ..refine(platform::choices(&fake)) },
+        None => refine(platform::choices(path)),
+    }
+}
+
+/// A made-up path with the extension of the kind of file this one's content says it is, for asking the system about it.
+fn as_other_type(path: &Path) -> Option<std::path::PathBuf> {
+    let (ext, _) = stand_in(content_kind(path)?)?;
+    Some(Path::new("stand-in").with_extension(&ext[1..]))
 }
 
 /// Every program on this computer that could be chosen, by name (Windows: the Start menu's programs; elsewhere the
 /// programs the system lists), without helper programs, once each.
 pub fn installed_apps(path: &Path) -> Vec<App> {
-    let raw = platform::choices(path);
+    let raw = platform::choices(&as_other_type(path).unwrap_or_else(|| path.to_path_buf()));
     let mut all = start_menu_apps();
     all.extend(extras());
     all.extend(raw.default);
@@ -1622,5 +1817,86 @@ mod opener_tests {
             assert_eq!(a.removed["a/b"], vec!["q.desktop"]);
             assert!(a.added.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_extension_tests {
+    use super::*;
+
+    /// The remembered choices are one set for the whole program: tests that change them take turns.
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn packets(stride: usize, first: usize, n: usize) -> Vec<u8> {
+        let mut v = vec![0u8; first + stride * n];
+        for i in 0..n {
+            v[first + i * stride] = 0x47;
+        }
+        v
+    }
+
+    #[test]
+    fn transport_streams_are_told_from_text() {
+        assert!(looks_like_mpeg_ts(&packets(188, 0, 5)));
+        assert!(looks_like_mpeg_ts(&packets(192, 4, 5)));
+        assert!(!looks_like_mpeg_ts(b"export const x: number = 1;\n"));
+        assert!(!looks_like_mpeg_ts(b""));
+        // One sync byte by chance, or a text that starts with the letter G, is not a stream.
+        assert!(!looks_like_mpeg_ts(&packets(188, 0, 1)));
+        let mut text = vec![b' '; 1024];
+        text[0] = b'G';
+        assert!(!looks_like_mpeg_ts(&text));
+    }
+
+    #[test]
+    fn only_a_ts_file_with_a_stream_in_it_is_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = dir.path().join("clip.ts");
+        std::fs::write(&video, packets(188, 0, 8)).unwrap();
+        let code = dir.path().join("app.ts");
+        std::fs::write(&code, "export const x = 1;\n").unwrap();
+        let other = dir.path().join("clip.bin");
+        std::fs::write(&other, packets(188, 0, 8)).unwrap();
+        assert_eq!(content_kind(&video), Some("video"));
+        assert_eq!(content_kind(&code), None);
+        assert_eq!(content_kind(&other), None, "only the extensions that mean two things are looked into");
+        assert_eq!(open_key(&video), ".ts+video");
+        assert_eq!(open_key(&code), ".ts");
+        assert_eq!(open_key(&dir.path().join("missing.ts")), ".ts");
+    }
+
+    #[test]
+    fn a_choice_for_always_is_kept_per_kind_and_survives_a_restart() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("open-with.json");
+        load_app_defaults(&file);
+        set_app_default(".ts+video", "/usr/bin/vlc");
+        assert_eq!(app_default_for(".ts+video").as_deref(), Some("/usr/bin/vlc"));
+        assert_eq!(app_default_for(".ts"), None, "TypeScript is not affected");
+        load_app_defaults(&file);
+        assert_eq!(app_default_for(".ts+video").as_deref(), Some("/usr/bin/vlc"));
+        load_app_defaults(&dir.path().join("nothing.json"));
+        assert_eq!(app_default_for(".ts+video"), None);
+    }
+
+    #[test]
+    fn what_is_chosen_with_always_is_what_the_file_opens_with() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        load_app_defaults(&dir.path().join("open-with.json"));
+        let video = dir.path().join("clip.ts");
+        std::fs::write(&video, packets(188, 0, 8)).unwrap();
+        let code = dir.path().join("app.ts");
+        std::fs::write(&code, "let a = 1;\n").unwrap();
+        let program = std::env::current_exe().unwrap();
+        set_app_default(&open_key(&video), &program.to_string_lossy());
+        forget_openers();
+        let shown = default_opener(&video, false);
+        assert_eq!(shown.kind, "app");
+        assert_eq!(shown.id, program.to_string_lossy());
+        assert_ne!(default_opener(&code, false).id, program.to_string_lossy(), "the other kind of .ts keeps its own program");
+        load_app_defaults(&dir.path().join("reset.json"));
+        forget_openers();
     }
 }

@@ -1,0 +1,28 @@
+// A Gradle init script for CI machines: ask Google's copy of Maven Central first.
+//
+// Maven Central limits how many requests one address may make, and the machines that run GitHub Actions share
+// addresses, so a build there is now and then answered "429 Too Many Requests" for the Kotlin files Gradle
+// needs, however often it tries. Google keeps a copy of Maven Central that has no such limit. Put first, it
+// answers for everything it has; anything it lacks (the Gradle plugin portal's own plugins, say) is still asked
+// of the usual repositories after it.
+//
+// Used by .github/workflows/mobile.yml, which copies it to ~/.gradle/init.d/ before the build.
+
+def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
+
+// Plugins, including what the build-script (buildSrc) plugins themselves depend on.
+beforeSettings { settings ->
+    settings.pluginManagement.repositories {
+        maven { url = mirror }
+    }
+}
+
+// Libraries, and what each project's own build script depends on.
+allprojects {
+    buildscript.repositories {
+        maven { url = mirror }
+    }
+    repositories {
+        maven { url = mirror }
+    }
+}

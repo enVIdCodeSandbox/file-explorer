@@ -94,6 +94,22 @@ function ForceStop({ j }: { j: Job }) {
   );
 }
 
+/** Lets go of every running job (or every one but `keep`) and of the pastes waiting behind them: for when an old job that is stuck holds up the one that matters. */
+function StopAll({ jobs, keep }: { jobs: Job[]; keep?: string }) {
+  const waiting = useStore((s) => Object.keys(s.queuedJobs).length);
+  const others = jobs.filter((j) => isActive(j) && `${j.kind}-${j.p.id}` !== keep).length;
+  if (others + waiting <= (keep ? 0 : 1)) return null;
+  return (
+    <button
+      className="link-button stop-all"
+      title={keep ? "Stop every other job right now, so this one is not held up. Anything already copied stays where it is." : "Stop every running job right now and clear the line. Anything already copied stays where it is."}
+      onClick={(e) => (e.stopPropagation(), useStore.getState().stopAllJobs(keep))}
+    >
+      {keep ? "Stop all the other jobs" : "Stop all jobs"}
+    </button>
+  );
+}
+
 function Bar({ fraction, indeterminate }: { fraction: number; indeterminate?: boolean }) {
   if (indeterminate) return <div className="loading-bar" />;
   return (
@@ -760,6 +776,7 @@ function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; pas
       <div className="transfer-window-head">
         <strong>{title}</strong>
         {detached && <ReattachButton />}
+        {!past && <StopAll jobs={jobs} />}
         {past && (
           <button className="link-button" onClick={() => forgetFinished()} title="Forget these until the app is closed anyway">
             Clear
@@ -821,6 +838,7 @@ function Window({ jobs, detached, past }: { jobs: Job[]; detached?: boolean; pas
                 </button>
               </div>
               {active && <ForceStop j={j} />}
+              {expanded && active && <StopAll jobs={jobs} keep={keyOf(j)} />}
               {expanded && (j.kind === "transfer" ? <TransferDetail p={j.p} endedAt={j.at} /> : <DeleteDetail p={j.p} />)}
               <Issues
                 p={j.p}
@@ -934,6 +952,7 @@ export function Transfers() {
   return (
     <div className="transfers" data-open={open || pastOpen || undefined} aria-live="polite">
       {!detached && waiting && <Waiting />}
+      {!detached && jobs.length > 0 && !(open && !pastOpen) && <div className="stop-all-row"><StopAll jobs={jobs} /></div>}
       {!detached && jobs.length > 0 && (open && !pastOpen ? <Window jobs={jobs} /> : jobs.map((j) => <Card key={`${j.kind}-${j.p.id}`} job={j} />))}
       {/* What finished: the list when asked for (even while other jobs run). The way back to it is the notices' bell. */}
       {pastOpen && <Window jobs={past} past />}

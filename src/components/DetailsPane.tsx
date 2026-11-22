@@ -11,7 +11,7 @@ import { formatCount, formatDate, formatDuration, formatSize, kindOf, typeLabel 
 import { baseName, isArchiveLoc, isRemote, maskAddresses, parentPath, parseLocation } from "../util/path";
 import { FileIcon } from "./Icons";
 import { Thumb } from "./Thumb";
-import { loadOpener, openerApplies, peekOpener, showOpener } from "../util/opener";
+import { loadOpener, onOpenersForgotten, openerApplies, peekOpener, showOpener } from "../util/opener";
 
 function Row({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   if (value == null || value === "") return null;
@@ -26,6 +26,9 @@ function Row({ label, value, mono }: { label: string; value: React.ReactNode; mo
 /** "Opens with": the program a double-click starts, with its picture, and a way to change it. */
 function OpensWith({ path, isDir }: { path: string; isDir: boolean }) {
   const [opener, setOpener] = useState(() => peekOpener(path, true));
+  // Asked again when the program for some kind of file was just changed.
+  const [asked, setAsked] = useState(0);
+  useEffect(() => onOpenersForgotten(() => setAsked((n) => n + 1)), []);
   useEffect(() => {
     let alive = true;
     setOpener(peekOpener(path, true));
@@ -33,7 +36,7 @@ function OpensWith({ path, isDir }: { path: string; isDir: boolean }) {
     return () => {
       alive = false;
     };
-  }, [path, isDir]);
+  }, [path, isDir, asked]);
   const change = () => useStore.getState().chooseApp(path);
   if (isDir) return <Row label="Opens in" value="This window" />;
   if (!opener) return null;

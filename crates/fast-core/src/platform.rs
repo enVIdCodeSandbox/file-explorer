@@ -105,22 +105,36 @@ fn run_folder(path: &Path) -> Option<&Path> {
 /// Open a file or folder with the system's default application. Programs and scripts run in their own folder.
 #[cfg(windows)]
 pub fn open_path(path: &Path) -> Result<()> {
+    shell_open(path, None)
+}
+
+/// Open a file with the program Windows has set for another kind of file (a ProgID such as `VLC.mp4`), whatever the
+/// file's own extension is set to open with. Used for an extension two kinds of file share, such as `.ts`.
+#[cfg(windows)]
+pub fn open_path_as_class(path: &Path, prog_id: &str) -> Result<()> {
+    shell_open(path, Some(prog_id))
+}
+
+#[cfg(windows)]
+fn shell_open(path: &Path, class: Option<&str>) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_CLASSNAME, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(std::iter::once(0)).collect() };
     let verb = wide("open".as_ref());
     let file = wide(path.as_os_str());
     let dir = run_folder(path).map(|d| wide(d.as_os_str()));
+    let class = class.map(|c| wide(c.as_ref()));
     // SAFETY: every pointer refers to a NUL-terminated buffer that outlives the call, and `info` is
     // zero-initialized as the API requires.
     unsafe {
         let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        info.fMask = SEE_MASK_NOASYNC;
+        info.fMask = SEE_MASK_NOASYNC | if class.is_some() { SEE_MASK_CLASSNAME } else { 0 };
         info.lpVerb = verb.as_ptr();
         info.lpFile = file.as_ptr();
+        info.lpClass = class.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
         info.lpDirectory = dir.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
         info.nShow = SW_SHOWNORMAL as i32;
         if ShellExecuteExW(&mut info) == 0 {

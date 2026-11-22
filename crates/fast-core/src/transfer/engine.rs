@@ -288,6 +288,11 @@ struct Shared {
     gate_released: AtomicBool,
     /// What each worker is copying now (empty text when idle). Only used when the spec asks for it.
     slots: Mutex<Vec<Option<ActiveFile>>>,
+    /// The folder the count is reading now and since when, so a drive that is slow to answer can be named.
+    reading: Mutex<(String, Instant)>,
+    /// A source on a memory stick, card or spinning disk: folders are read one or two at a time there, because
+    /// reading many at once makes such a device slower, not faster.
+    slow_source: bool,
 }
 
 thread_local! {
@@ -426,6 +431,27 @@ impl Shared {
             }
         }
     }
+    /// Note which folder the count is in, so the card can say where a slow drive is making it wait.
+    fn reading_now(&self, path: &Path) {
+        let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned();
+        *self.reading.lock() = (name, Instant::now());
+    }
+
+    /// What the card says while the count goes on: how many files so far, and (when the drive is
+    /// slow to answer) which folder it is waiting on. No path separators: the card shows only the last part.
+    fn counting_text(&self) -> String {
+        let n = self.scanned.load(Ordering::Relaxed);
+        let (name, since) = self.reading.lock().clone();
+        let found = if n > 0 { format!("Counting files… {n} so far") } else { "Reading the folders…".to_string() };
+        if name.is_empty() {
+            found
+        } else if since.elapsed() >= Duration::from_secs(5) {
+            format!("{found} (the drive is slow to answer: still in \u{201c}{name}\u{201d})")
+        } else {
+            format!("{found} (in \u{201c}{name}\u{201d})")
+        }
+    }
+
     fn error(&self, path: &Path, e: &io::Error) {
         self.error_count.fetch_add(1, Ordering::Relaxed);
         let mut errs = self.errors.lock();
@@ -571,6 +597,8 @@ pub fn start_with(
         made_dirs: Mutex::new(Default::default()),
         gate_released: AtomicBool::new(false),
         slots: Mutex::new(Vec::new()),
+        reading: Mutex::new((String::new(), Instant::now())),
+        slow_source: spec.sources.iter().any(|p| matches!(drives::media_for(p, &drives), drives::Media::Removable | drives::Media::Hdd)),
     });
     let done = Arc::new(AtomicBool::new(false));
     let handle = TransferHandle { id, shared: shared.clone(), done: done.clone() };
@@ -611,6 +639,7 @@ fn phase1(spec: &TransferSpec, shared: &Shared, tx: &chan::Sender<Found>) {
         if shared.cancelled() {
             break;
         }
+        shared.reading_now(src);
         let Some(name) = src.file_name() else {
             shared.error(src, &io::Error::new(io::ErrorKind::InvalidInput, "cannot transfer a root"));
             continue;
@@ -831,10 +860,9 @@ fn run(
             }
             if last.elapsed() >= Duration::from_millis(250) {
                 last = Instant::now();
-                let n = shared.scanned.load(Ordering::Relaxed);
                 shared.fill(&mut progress);
                 progress.phase = Phase::Scanning;
-                progress.current = if n > 0 { format!("Counting files… {n} so far") } else { "Reading the folders…".into() };
+                progress.current = shared.counting_text();
                 progress.elapsed_secs = started.elapsed().as_secs_f64();
                 on_progress(progress.clone());
             }
@@ -924,7 +952,9 @@ fn run(
             Some(m) if can.contains(&m) => m,
             Some(_) => Method::Native, // asked for a tool this computer or route cannot use
             None => match choose {
-                Some(choose) if can.len() > 1 => choose(
+                // A tool needs the whole count first, and a memory stick or card can take minutes to list: copying
+                // by itself while the count goes on is the better start there.
+                Some(choose) if can.len() > 1 && !(go_early && profile.src == drives::Media::Removable) => choose(
                     &Query {
                         route: route.clone(),
                         files: items.len() as u64,
@@ -1031,7 +1061,7 @@ fn run(
                 last = Instant::now();
                 shared.fill(&mut progress);
                 progress.phase = Phase::Scanning;
-                progress.current = format!("Counting files… {} so far", shared.scanned.load(Ordering::Relaxed));
+                progress.current = shared.counting_text();
                 progress.elapsed_secs = started.elapsed().as_secs_f64();
                 on_progress(progress.clone());
             }
@@ -1531,13 +1561,21 @@ fn flight_destination(top: &method::Top, name: &str) -> Option<PathBuf> {
 /// Threads used to walk folders. Listing a folder is mostly waiting (for the disk, and on a
 /// share for the network), so more than one folder at a time is a large win on both.
 const SCAN_THREADS: usize = 8;
+/// Folders read at once on a stick, card or spinning disk.
+const SLOW_SCAN_THREADS: usize = 2;
 
 /// Recursively collect files and directories under `src`. Folders are listed in parallel;
 /// the result is in the same order as a sequential walk (a folder, its files, then each
 /// subfolder in turn), which keeps files that sit together on disk together in the queue.
 fn scan(src: &Path, dst: &Path, shared: &Shared, tx: &chan::Sender<Found>, moved: &parking_lot::Mutex<Vec<PathBuf>>) {
     // Over a network the walk waits on the wire, not the disk: more folders are read at once.
-    let threads = if method::NetMap::read().kind(src).is_some() { SCAN_THREADS * 3 } else { SCAN_THREADS };
+    let threads = if method::NetMap::read().kind(src).is_some() {
+        SCAN_THREADS * 3
+    } else if shared.slow_source {
+        SLOW_SCAN_THREADS
+    } else {
+        SCAN_THREADS
+    };
     let walk = || scan_dir(src, dst, shared, tx, moved);
     match rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("scan-{i}")).build() {
         Ok(pool) => pool.install(walk),
@@ -1604,6 +1642,7 @@ fn scan_dir(src: &Path, dst: &Path, shared: &Shared, tx: &chan::Sender<Found>, m
     if src.to_string_lossy().contains("slowscan") {
         std::thread::sleep(Duration::from_millis(120));
     }
+    shared.reading_now(src);
     let _ = tx.send(Found::Dirs(vec![dst.to_path_buf()]));
     moved.lock().push(src.to_path_buf());
     let rd = match fs::read_dir(src) {
@@ -2061,7 +2100,22 @@ mod tests {
             made_dirs: Mutex::new(Default::default()),
             gate_released: AtomicBool::new(false),
             slots: Mutex::new(Vec::new()),
+            reading: Mutex::new((String::new(), Instant::now())),
+            slow_source: false,
         }
+    }
+
+    #[test]
+    fn the_count_says_where_a_slow_drive_is_making_it_wait() {
+        let s = test_shared();
+        assert_eq!(s.counting_text(), "Reading the folders…");
+        s.scanned.store(3, Ordering::Relaxed);
+        s.reading_now(Path::new("/media/usb/DCIM"));
+        assert_eq!(s.counting_text(), "Counting files… 3 so far (in \u{201c}DCIM\u{201d})");
+        *s.reading.lock() = ("DCIM".into(), Instant::now() - Duration::from_secs(6));
+        let text = s.counting_text();
+        assert!(text.contains("slow to answer") && text.contains("DCIM"), "{text}");
+        assert!(!text.contains('/') && !text.contains('\\'), "the card shows only what follows the last separator: {text}");
     }
 
     #[test]

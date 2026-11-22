@@ -73,6 +73,7 @@ pub fn run() {
             // Only small JSON files are read before the window appears; the
             // index and drive list load on background threads.
             let session = Session::load(&paths.session);
+            fast_core::openwith::load_app_defaults(&paths.open_defaults);
             let budget = resources::compute(&settings.performance, &resources::snapshot());
 
             let state = Arc::new(AppState {

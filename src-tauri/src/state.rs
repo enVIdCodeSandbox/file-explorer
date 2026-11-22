@@ -28,6 +28,8 @@ pub struct Paths {
     pub settings: PathBuf,
     pub session: PathBuf,
     pub predictor: PathBuf,
+    /// The program chosen with "Always" for each kind of file (Windows does not let an app set its own default).
+    pub open_defaults: PathBuf,
     pub history: PathBuf,
     /// Remembered folder sizes.
     pub sizes: PathBuf,
@@ -68,6 +70,7 @@ impl Paths {
             settings: config.join("settings.json"),
             session: config.join("session.json"),
             predictor: config.join("predictor.json"),
+            open_defaults: config.join("open-with.json"),
             history: config.join("transfer-history.bin"),
             sizes: cache.join("folder-sizes.json"),
             hardware: cache.join("hardware-report.json"),

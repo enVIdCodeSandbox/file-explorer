@@ -300,6 +300,14 @@ Mapped drives and shares show under Drives with their drive letter. If you run t
 
 The app does not need it. When a transfer is refused for permissions it offers **Retry as administrator**, which runs only that job elevated.
 
+**Stop all jobs.** When an old copy or delete is stuck (a drive that has stopped answering, say) and holds up the one you want, the transfers window has **Stop all jobs**, and the job you are looking at has **Stop all the other jobs**. They let go of every running job at once, clear the pastes waiting in line, and leave the one you kept running. Anything already copied stays where it is. A job let go of this way, or with Force stop, also no longer keeps a paste waiting behind it.
+
+**Counting files.** While a folder is being counted the card names the folder being read, and says when the drive is slow to answer. On a memory stick, card or spinning disk the folders are read one or two at a time (many at once slows such a drive down), and a job from a stick starts copying with the built-in engine while the count goes on instead of waiting for the whole count before a copy tool takes over.
+
+**Files two programs share an extension for.** `.ts` is both TypeScript and MPEG video. The app looks inside the file: a transport stream opens with your video player (the program set for `.mp4`, `.mkv` and similar), and shows that in *Opens with*; TypeScript keeps its editor. A program chosen with *Always* is kept separately for each of the two.
+
+**Always, on Windows.** Windows does not let a program change the default app for a kind of file (only Settings → Apps → Default apps can). So *Always* in Open with is kept by this app: files of that kind open with the program you chose when you open them here, and *Opens with* shows it. Windows' own setting is not changed.
+
 When items of a transfer fail, the card names each one with the folder it is in and the reason. **Retry failed items** copies just those again, each into the folder it was headed for, and replaces any half-written file the failure left behind. With Robocopy the real file is read from Robocopy's own report, not just the folder it was copying.
 
 ## First run

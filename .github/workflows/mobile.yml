@@ -75,6 +75,20 @@ jobs:
             keytool -genkeypair -keystore "$store" -storepass "$password" -keypass "$password" -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=FAST File Explorer"
           fi
           printf 'password=%s\nkeyAlias=%s\nstoreFile=%s\n' "$password" "$alias" "$store" > src-tauri/gen/android/keystore.properties
+      # Maven Central answers builds on shared CI machines with "429 Too Many Requests" for the Kotlin files Gradle
+      # needs. Google's copy of it has no such limit, so Gradle asks that first (scripts/gradle-mirror.init.gradle).
+      - name: Prefer a Maven Central mirror
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cp scripts/gradle-mirror.init.gradle "$HOME/.gradle/init.d/mirror.gradle"
+      # What Gradle has downloaded is kept between runs, so most builds do not need the internet for it at all.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'scripts/mobile-setup.mjs') }}
+          restore-keys: gradle-${{ runner.os }}-
       - name: Build the .apk (64-bit and 32-bit ARM)
         # Gradle downloads its tools from the internet on every fresh runner, and that now and then fails for reasons
         # that have nothing to do with the code. A second and third try cost little: the Rust part is cached.
@@ -87,6 +101,7 @@ jobs:
             # what Maven Central answers right now so a failure like this one can be told apart from a real problem.
             rm -rf "$HOME/.gradle/caches/modules-2" "$HOME/.gradle/caches/jars-"* "$HOME/.gradle/caches/transforms-"* src-tauri/gen/android/buildSrc/.gradle src-tauri/gen/android/.gradle
             curl -sS -o /dev/null -w "Maven Central answered %{http_code} for kotlin-stdlib 2.3.21\n" https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.3.21/kotlin-stdlib-2.3.21.pom || true
+            curl -sS -o /dev/null -w "The mirror answered %{http_code} for it\n" https://maven-central.storage-download.googleapis.com/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.3.21/kotlin-stdlib-2.3.21.pom || true
             sleep $((attempt * 30))
           done
           exit 1

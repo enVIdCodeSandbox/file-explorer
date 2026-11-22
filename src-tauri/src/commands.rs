@@ -2000,6 +2000,12 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
         // The order: the app set for this kind of file, then what the system itself does with it,
         // then the program that suits it best, and only when there is none the chooser.
         let local = !path.contains("://") && Path::new(&path).exists();
+        // A program chosen with "Always" here, or a `.ts` that is video: the app knows these better than the extension does.
+        if local {
+            if let Some(Ok(())) = fast_core::openwith::open_special(Path::new(&path)) {
+                return Ok(None);
+            }
+        }
         let why = if !local {
             None
         } else if let fast_core::openwith::Check::Missing(why) = fast_core::openwith::check(Path::new(&path)) {

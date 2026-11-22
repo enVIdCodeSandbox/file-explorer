@@ -209,7 +209,12 @@ export function OpenWithDialog() {
     setBusy(true);
     try {
       await api.openWithApp(path, picked, always);
-      if (always) forgetOpeners();
+      if (always) {
+        forgetOpeners();
+        if (info?.os === "windows") {
+          useStore.getState().showToast(`${label}s now open with ${[choices?.default, ...(choices?.suggested ?? []), ...(choices?.general ?? []), ...(all ?? [])].find((a) => a?.id === picked)?.name ?? "that program"} in this app. Windows' own setting is unchanged (Settings → Apps → Default apps).`);
+        }
+      }
       close();
     } catch (e) {
       setError(String(e));
