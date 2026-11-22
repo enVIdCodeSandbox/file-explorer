@@ -20,14 +20,13 @@ describe("format", () => {
     expect(formatEta(7500)).toBe("About 2 hours 5 minutes left");
   });
 
-  it("picks the rate unit from what limits the transfer", () => {
+  it("always shows both speeds, whatever unit the engine leans on", () => {
     const base = { bytesPerSec: 100e6, filesPerSec: 842 };
-    expect(formatRate({ ...base, display: "bytes" })).toBe("100 MB/s");
-    expect(formatRate({ ...base, display: "files" })).toBe("842 files/s");
+    for (const display of ["bytes", "files", "mixed"] as const) expect(formatRate({ ...base, display })).toBe("842 files/s · 100 MB/s");
     // Big files finish less than one a second: per minute, not 0.0.
-    expect(formatRate({ ...base, display: "files", filesPerSec: 0.04 })).toBe("2.4 files/min");
-    expect(formatRate({ ...base, display: "files", filesPerSec: 0.3 })).toBe("18 files/min");
-    expect(formatRate({ ...base, display: "mixed" })).toBe("842 files/s · 100 MB/s");
+    expect(formatRate({ ...base, display: "files", filesPerSec: 0.04 })).toBe("2.4 files/min · 100 MB/s");
+    expect(formatRate({ ...base, display: "bytes", filesPerSec: 0.3 })).toBe("18 files/min · 100 MB/s");
+    expect(formatRate({ bytesPerSec: 0, filesPerSec: 0, display: "bytes" })).toBe("0.0 files/s · 0 B/s");
   });
 
   it("never lets progress go backwards", () => {

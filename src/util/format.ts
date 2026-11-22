@@ -101,8 +101,8 @@ export function formatRate(p: Pick<Progress, "display" | "bytesPerSec" | "filesP
   // Big files finish less than one a second: say it per minute, not as 0.0.
   const perMin = p.filesPerSec * 60;
   const files = p.filesPerSec > 0 && p.filesPerSec < 0.5 ? `${perMin < 10 ? perMin.toFixed(1) : Math.round(perMin)} files/min` : `${p.filesPerSec >= 10 ? formatCount(p.filesPerSec) : p.filesPerSec.toFixed(1)} files/s`;
-  if (p.display === "bytes") return bytes;
-  if (p.display === "files") return files;
+  // Both are always shown (the engine's own "bytes" or "files" choice for a job only picked one of them, which made the
+  // readout change shape while the numbers moved).
   return `${files} · ${bytes}`;
 }
 

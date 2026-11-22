@@ -278,7 +278,7 @@ const METHOD_LABEL: Record<string, string> = { robocopy: "Robocopy", rsync: "rsy
 /** Speed of a delete, archive or server job: items per second and, when known, bytes per second. */
 function jobRate(s: { itemsPerSec: number; bytesPerSec: number }): string {
   const items = `${s.itemsPerSec >= 10 ? formatCount(s.itemsPerSec) : s.itemsPerSec.toFixed(1)} items/s`;
-  return s.bytesPerSec > 0 ? `${formatSize(s.bytesPerSec)}/s · ${items}` : items;
+  return `${items} · ${formatSize(s.bytesPerSec)}/s`;
 }
 
 export function SpeedGraph({ samples, total, etaSecs, bytes = true, fraction = 0, finished = false, ranFor = 0 }: { samples: Sample[]; total: number | null; etaSecs?: number | null; bytes?: boolean; fraction?: number; finished?: boolean; ranFor?: number }) {

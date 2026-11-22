@@ -1155,3 +1155,10 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .signin-row[data-result="failed"] .signin-status { color: var(--danger); }
 .signin-why { flex-basis: 100%; padding-left: 24px; font-size: var(--font-size-small); }
 .drives-view h3 .section-action { margin-left: 12px; font-weight: 400; font-size: var(--font-size-small); }
+
+/* The speed readout on a transfer card keeps its shape while the numbers move: one line, never wrapped, always both units. */
+.transfer-stats { align-items: baseline; }
+.transfer-stats > :first-child { min-width: 0; }
+.transfer-stats .eta-line { flex-wrap: nowrap; min-width: 0; white-space: nowrap; }
+.transfer-stats .eta-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.transfer-rate { flex: none; white-space: nowrap; text-align: right; min-width: 13em; font-variant-numeric: tabular-nums; }
