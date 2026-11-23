@@ -201,6 +201,7 @@ export const MENU_CATALOG: { id: string; label: string }[] = [
   { id: "archive", label: "Compress and Extract" },
   { id: "shellExtras", label: "Entries from other programs" },
   { id: "automate", label: "Automate with a task" },
+  { id: "permissions", label: "Permissions" },
   { id: "properties", label: "Properties" },
   { id: "lock", label: "Lock with passcode" },
 ];

@@ -165,6 +165,42 @@
 .dialog-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .dialog-title-row h3 { margin: 0; }
 .properties-dialog { width: min(520px, calc(100vw - 40px)); }
+.permissions-dialog { width: min(520px, calc(100vw - 40px)); display: flex; flex-direction: column; gap: 10px; }
+.permissions-dialog .dialog-title-row { margin-bottom: 2px; }
+.perm-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.perm-target { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-small); min-width: 0; }
+.perm-target-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.perm-target-text strong, .perm-target-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-target-text span { font-size: var(--font-size-small); }
+.perm-tag { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--surface-active); color: var(--text-muted); }
+.perm-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 14px; margin: 0; font-size: var(--font-size-small); user-select: text; -webkit-user-select: text; }
+.perm-facts dt { color: var(--text-muted); font-size: 11px; margin-bottom: 1px; }
+.perm-facts dd { margin: 0; overflow-wrap: anywhere; }
+.perm-note { margin: 0; padding: 8px 10px; border-radius: var(--radius-small); background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); font-size: var(--font-size-small); }
+.perm-section { display: flex; flex-direction: column; gap: 6px; }
+.perm-section-head { display: flex; align-items: baseline; justify-content: space-between; font-size: var(--font-size-small); font-weight: 600; }
+.perm-section-head .muted { font-weight: 400; font-size: 11px; }
+.perm-list { display: flex; flex-direction: column; gap: 4px; max-height: min(42vh, 320px); overflow-y: auto; }
+.perm-ace { border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
+.perm-ace[data-kind="deny"] { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.perm-ace-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; text-align: left; border-radius: var(--radius-small); }
+.perm-ace-row:not(:disabled):hover { background: var(--surface-hover); }
+.perm-ace-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.perm-ace-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-ace-domain { font-weight: 400; color: var(--text-muted); font-size: var(--font-size-small); }
+.perm-ace-meta { font-size: 11px; color: var(--text-muted); }
+.perm-ace-badges { display: flex; align-items: center; gap: 6px; flex: none; }
+.perm-kind { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+.perm-kind[data-kind="deny"] { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.perm-level { padding: 2px 8px; border-radius: var(--radius-small); font-size: var(--font-size-small); background: var(--surface-active); }
+.perm-rights { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px; }
+.perm-right-chip { padding: 1px 7px; border-radius: var(--radius-small); font-size: 11px; color: var(--text-muted); background: var(--bg); border: 1px solid var(--border); }
+.perm-unix-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-small); }
+.perm-unix-table th, .perm-unix-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: center; }
+.perm-unix-table th:first-child, .perm-unix-table td:first-child { text-align: left; font-weight: 600; }
+.perm-unix-table th { color: var(--text-muted); font-weight: 500; }
+.perm-footer { align-items: center; margin-top: 4px; }
+.perm-readonly-hint { font-size: var(--font-size-small); }
 
 /* ---- Transfers: compact cards ---------------------------------------------- */
 .mini-meter { height: 4px; flex: 1; min-width: 60px; border-radius: 2px; background: var(--surface-active); overflow: hidden; }

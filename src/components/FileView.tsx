@@ -24,6 +24,7 @@ import {
   openFile,
   promptText,
   renamePath,
+  showPermissions,
   showProperties,
   useStore,
 } from "../store";
@@ -706,6 +707,7 @@ export function FileView({ path }: { path: string }) {
           single && !single.isDir && !isArchiveLoc(path) && isArchiveName(single.name) && { id: "archive-terminal", label: "Unpack, then open terminal in it", icon: "terminal", run: () => void extractAndOpenTerminal(archiveUrl(fullPath(single.name)), "here") },
           single?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(fullPath(single.name))) },
           paths.length > 0 && { id: "automate", label: "Automate with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection(paths, path)) },
+          single && { id: "permissions", label: "Permissions", icon: "shield", run: () => showPermissions(fullPath(single.name)) },
           { id: "properties", label: "Properties", icon: "info", separatorBefore: !(paths.length > 0), run: () => void showProperties(paths) },
           // Last, and apart from everything people use all the time.
           single?.isDir && !isRemote(fullPath(single.name)) && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(fullPath(single.name)) },
@@ -750,12 +752,13 @@ export function FileView({ path }: { path: string }) {
           { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(path)) },
           ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
           !isRemote(path) && { id: "automate", label: "Automate this folder with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection([path], path)) },
-          { id: "properties", label: "Properties", icon: "info", separatorBefore: isRemote(path), run: () => void showProperties([path]) },
+          { id: "permissions", label: "Permissions", icon: "shield", separatorBefore: isRemote(path), run: () => showPermissions(path) },
+          { id: "properties", label: "Properties", icon: "info", run: () => void showProperties([path]) },
           { id: "lock", label: "Lock this folder with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(path) },
         ];
     const hidden = new Set(settings.contextMenu.hidden);
     // Things that only make sense for files on this computer.
-    const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "properties", "newFile", "custom", "lock"]);
+    const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "permissions", "properties", "newFile", "custom", "lock"]);
     const inArchive = !!insideArchive(path);
     const remote = isRemote(path) || inArchive;
     return items.filter((i): i is MenuItem => !!i && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")) && !(remote && localOnly.has(i.id.replace(/-.*/, "")) && !(inArchive && i.id === "newFile")));

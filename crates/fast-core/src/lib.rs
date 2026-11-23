@@ -34,6 +34,7 @@ pub mod media;
 pub mod meter;
 pub mod openwith;
 pub mod ops;
+pub mod permissions;
 pub mod phone;
 pub mod platform;
 pub mod predict;

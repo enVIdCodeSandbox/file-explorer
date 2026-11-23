@@ -258,6 +258,8 @@ interface State {
   frequent: string[];
   /** Paths shown in the app's own Properties window. */
   properties: string[] | null;
+  /** Path shown in the light Permissions dialog. */
+  permissionsFor: string | null;
   /** The Rename dialog for several items: the folder, what is selected and what else is in it. */
   batchRename: { dir: string; items: RenameInput[]; siblings: string[] } | null;
   /** Server addresses kept in the sidebar (no passwords). */
@@ -373,6 +375,7 @@ interface State {
   /** A tab another window is dragging over this one: the slot it would take. */
   incomingTab: { index: number; w: number } | null;
   openLockDialog: (path: string) => void;
+  showPermissions: (path: string) => void;
   chooseApp: (path: string, reason?: string) => void;
   closeChooser: () => void;
   clearRecent: () => void;
@@ -633,10 +636,12 @@ export const useStore = create<State>((set, get) => ({
   searches: [],
   openWith: null,
   lockDialog: null,
+  permissionsFor: null,
   iconPicker: null,
   openIconPicker: (t) => set({ iconPicker: t }),
   incomingTab: null,
   openLockDialog: (path) => set({ lockDialog: path }),
+  showPermissions: (path) => set({ permissionsFor: path }),
   drives: [],
   devices: [],
   link: "unknown",
@@ -2313,6 +2318,12 @@ export async function showProperties(paths: string[]): Promise<void> {
   if (!paths.length) return;
   const native = await api.showProperties(paths).catch(() => false);
   if (!native) useStore.setState({ properties: paths });
+}
+
+/** Open the light read-only Permissions dialog for one file or folder. */
+export function showPermissions(path: string): void {
+  if (!path) return;
+  useStore.setState({ permissionsFor: path });
 }
 
 const ACTION_NAME = { rename: "rename", renameMany: "rename", create: "create", copy: "copy", move: "move", trash: "delete" } as const;

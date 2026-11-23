@@ -977,7 +977,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       { id: "restoreSelection", label: "Restore selection", shortcut: sk("restoreSelection"), disabled: !inFolder, run: () => useStore.getState().runCommand("restoreSelection") },
       { id: "todo", label: openCount(folder ?? "") ? `To-do for this folder (${openCount(folder ?? "")})…` : "To-do for this folder…", separatorBefore: true, disabled: !inFolder || !folder, run: () => useStore.setState({ todoFor: folder }) },
       { id: "fileTools", label: "File tools", disabled: !inFolder, children: fileToolsItems(selection) },
-      { id: "properties", label: "Properties", icon: "info", separatorBefore: true, disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
+      { id: "permissions", label: "Permissions", icon: "shield", separatorBefore: true, disabled: selection.length > 1 || (!hasSel && !folder), run: () => useStore.getState().showPermissions(selection.length === 1 ? selection[0] : (folder ?? "")) },
+      { id: "properties", label: "Properties", icon: "info", disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
       { id: "options", label: "Options", icon: "settings", run: () => useStore.getState().openSettings() },
     ]);
   };

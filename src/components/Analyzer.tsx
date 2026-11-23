@@ -6,7 +6,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ScanActivity } from "./ScanActivity";
 import { api, on, type Analysis, type AnalysisProgress, type SizeNode } from "../api";
-import { deletePaths, openFile, showProperties, useStore } from "../store";
+import { deletePaths, openFile, showPermissions, showProperties, useStore } from "../store";
 import {
   CATEGORIES,
   NO_EXT,
@@ -264,6 +264,7 @@ export function AnalyzerView({ path }: { path: string }) {
         : []),
       ...(t.isDir ? [{ id: "analyze", label: "Measure this folder on its own", run: () => navigate(analyzeLocation(t.path)) }] : []),
       { id: "copyPath", label: "Copy as path", icon: "copy", separatorBefore: true, run: () => void navigator.clipboard.writeText(t.path).then(() => showToast("Path copied.")) },
+      { id: "permissions", label: "Permissions", icon: "shield", run: () => showPermissions(t.path) },
       { id: "properties", label: "Properties", icon: "info", run: () => void showProperties([t.path]) },
       { id: "delete", label: "Delete", icon: "trash", danger: true, separatorBefore: true, run: () => void remove(t.path) },
       ...shell.map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),

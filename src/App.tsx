@@ -11,6 +11,7 @@ import { DetailsPane } from "./components/DetailsPane";
 import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
+import { PermissionsDialog } from "./components/PermissionsDialog";
 import { LockDialog } from "./components/Locks";
 import { IconContextMenu, IconPickerDialog } from "./components/IconPicker";
 import { ChooseDetails } from "./components/ChooseDetails";
@@ -422,6 +423,7 @@ function AppInner() {
             {settings && !settings.setupDone && <Part><Setup /></Part>}
             {settingsOpen && <Part><SettingsView /></Part>}
             <PropertiesDialog />
+            <PermissionsDialog />
             <OpenWithDialog />
             <LockDialog />
             <IconPickerDialog />
@@ -515,6 +517,7 @@ function AppInner() {
       {settingsOpen && <Part><SettingsView /></Part>}
       {tasksOpen && <Part><TasksView /></Part>}
       <PropertiesDialog />
+      <PermissionsDialog />
       <OpenWithDialog />
       <LockDialog />
       <IconPickerDialog />

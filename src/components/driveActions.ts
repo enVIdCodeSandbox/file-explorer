@@ -156,7 +156,10 @@ export function driveMenuItems(d: Drive, extra: { os: string | undefined; drives
   });
   // Last, and apart from the everyday entries.
   if (d.media !== "network" || !d.mount.includes("://")) {
-    items.push({ id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(d.mount) });
+    if (d.online) {
+      items.push({ id: "permissions", label: "Permissions", icon: "shield", separatorBefore: true, run: () => useStore.getState().showPermissions(d.mount) });
+    }
+    items.push({ id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: !d.online, run: () => useStore.getState().openLockDialog(d.mount) });
   }
   return items;
 }

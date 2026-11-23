@@ -3,6 +3,7 @@
 
 use crate::state::{IndexStatus, Shared};
 use fast_core::details::{self, Details, FolderStats};
+use fast_core::permissions::{self, FilePermissions};
 use fast_core::drives::{self, Drive};
 use fast_core::entry::{self, FileEntry};
 use fast_core::index::{Index, ScanOptions};
@@ -409,6 +410,19 @@ pub async fn get_details(state: State<'_, Shared>, path: String) -> CmdResult<De
             return crate::remote::details(&st, &path);
         }
         details::details(Path::new(&path), &st.drives.read()).map_err(err)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_permissions(state: State<'_, Shared>, path: String) -> CmdResult<FilePermissions> {
+    let st = state.inner().clone();
+    blocking(move || {
+        if fast_core::browse::is_loc(&path) || fast_core::remote::is_remote(&path) {
+            return Err("Permissions are only available for items on this computer.".into());
+        }
+        guard(&st, &path)?;
+        permissions::permissions(Path::new(&path)).map_err(err)
     })
     .await
 }

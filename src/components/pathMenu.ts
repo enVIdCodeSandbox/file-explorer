@@ -73,11 +73,12 @@ export function pathMenuItems(t: MenuTarget, shell: MenuItem[] = [], extra: Menu
     !remote && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal("admin") },
     t.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(t.path)) },
     !remote && { id: "automate", label: "Automate with a task…", icon: "clock", separatorBefore: true, run: () => useStore.getState().openTasks(taskFromSelection(paths, t.isDir ? t.path : here)) },
+    !remote && { id: "permissions", label: "Permissions", icon: "shield", run: () => useStore.getState().showPermissions(t.path) },
     { id: "properties", label: "Properties", icon: "info", separatorBefore: remote, run: () => useStore.setState({ properties: paths }) },
     t.isDir && !remote && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(t.path) },
   ];
   const hidden = new Set(settings?.contextMenu.hidden ?? []);
-  const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "properties", "lock"]);
+  const localOnly = new Set(["pin", "share", "sendTo", "archive", "createShortcut", "deletePermanent", "terminal", "terminalAdmin", "analyze", "permissions", "properties", "lock"]);
   return items.filter((i): i is MenuItem => !!i && !hidden.has(i.id) && !hidden.has(i.id.replace(/-.*/, "")) && !(remote && localOnly.has(i.id.replace(/-.*/, ""))));
 }
 

@@ -679,7 +679,8 @@ export function SearchView({ query, scope, mode = "tree" }: { query: string; sco
       one && { id: "terminal", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void terminal(dirOf(one), "here") },
       one && { id: "terminalAdmin", label: "Open terminal as administrator", run: () => void terminal(dirOf(one), "admin") },
       one?.isDir && { id: "analyze", label: "Analyze disk usage", icon: "chart", run: () => navigate(analyzeLocation(one.path)) },
-      { id: "properties", label: "Properties", icon: "info", separatorBefore: true, run: () => useStore.setState({ properties: paths }) },
+      one && !isRemote(one.path) && { id: "permissions", label: "Permissions", icon: "shield", separatorBefore: true, run: () => useStore.getState().showPermissions(one.path) },
+      { id: "properties", label: "Properties", icon: "info", separatorBefore: !one || isRemote(one.path), run: () => useStore.setState({ properties: paths }) },
       one?.isDir && { id: "lock", label: "Lock with passcode…", icon: "lock", separatorBefore: true, run: () => useStore.getState().openLockDialog(one.path) },
     ];
     const hidden = new Set(cfg?.contextMenu.hidden ?? []);

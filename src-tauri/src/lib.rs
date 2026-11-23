@@ -282,6 +282,7 @@ pub fn run() {
             commands::frequent_seed,
             commands::frequent_forget,
             commands::get_details,
+            commands::get_permissions,
             commands::folder_stats,
             commands::open_window,
             commands::drop_tab,

@@ -115,6 +115,59 @@ export interface Details {
   media: { label: string; value: string }[];
 }
 
+export interface PermissionTriple {
+  read: boolean;
+  write: boolean;
+  execute: boolean;
+}
+
+export interface UnixPermissions {
+  modeText: string;
+  octal: string;
+  uid: number;
+  gid: number;
+  setuid: boolean;
+  setgid: boolean;
+  sticky: boolean;
+  ownerBits: PermissionTriple;
+  groupBits: PermissionTriple;
+  otherBits: PermissionTriple;
+}
+
+export interface WindowsAce {
+  account: string;
+  name: string;
+  domain: string | null;
+  kind: "allow" | "deny";
+  level: string;
+  fullControl: boolean;
+  modify: boolean;
+  readExecute: boolean;
+  read: boolean;
+  write: boolean;
+  rights: string[];
+  inherited: boolean;
+  appliesTo: string;
+}
+
+export interface WindowsPermissions {
+  inherited: boolean;
+  entries: WindowsAce[];
+}
+
+export interface FilePermissions {
+  path: string;
+  name: string;
+  isDir: boolean;
+  readonly: boolean;
+  kind: "windows" | "unix" | "basic";
+  owner: string | null;
+  group: string | null;
+  unix: UnixPermissions | null;
+  windows: WindowsPermissions | null;
+  note: string | null;
+}
+
 export interface PathStat {
   path: string;
   value: number;
@@ -880,6 +933,7 @@ export const api = {
   recordVisit: (from: string | null, to: string) => invoke<string[]>("record_visit", { from, to }),
   statMany: (paths: string[]) => invoke<LiveStat[]>("stat_many", { paths }),
   getDetails: (path: string) => invoke<Details>("get_details", { path }),
+  getPermissions: (path: string) => invoke<FilePermissions>("get_permissions", { path }),
   folderStats: (path: string) => invoke<FolderStats>("folder_stats", { path }),
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
   /** What files that share a name with other kinds (".ts", ".mod"…) really are: a look's name, "default" or "unknown". */
