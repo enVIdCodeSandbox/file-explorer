@@ -221,6 +221,7 @@ export function OpenWithDialog() {
   }, [view, all, path]);
 
   const escCloses = useStore((st) => adv<boolean>(st.settings, "files.openWithEsc"));
+  const rememberOpenWith = useStore((st) => adv<boolean>(st.settings, "files.rememberOpenWith"));
   const open = !!request && !!path && !picking;
   // Esc closes the window even when it has only just opened and the keyboard is still in the file list behind it,
   // unless a text box in it is being typed into (Esc then clears the search first).
@@ -242,19 +243,24 @@ export function OpenWithDialog() {
   if (!request || !path || picking) return null;
   const close = () => useStore.getState().closeChooser();
   const name = baseName(path);
-  const label = choices?.extension ? `${choices.extension} file` : "file";
+  const label = choices?.extension ? `${choices.extension}${choices.contentKind ? ` (${choices.contentKind})` : ""} file` : "file";
+
+  const notifySaved = (id: string) => {
+    forgetOpeners();
+    const appName = [choices?.default, ...(choices?.suggested ?? []), ...(choices?.general ?? []), ...(all ?? [])].find((a) => a?.id === id)?.name ?? (baseName(id) || "that program");
+    useStore.getState().showToast(
+      info?.os === "windows"
+        ? `${label}s now open with ${appName} in this app. Windows' own setting is unchanged (Settings → Apps → Default apps).`
+        : `${label}s now open with ${appName}.`,
+    );
+  };
 
   const run = async (always: boolean) => {
     if (!picked) return;
     setBusy(true);
     try {
       await api.openWithApp(path, picked, always);
-      if (always) {
-        forgetOpeners();
-        if (info?.os === "windows") {
-          useStore.getState().showToast(`${label}s now open with ${[choices?.default, ...(choices?.suggested ?? []), ...(choices?.general ?? []), ...(all ?? [])].find((a) => a?.id === picked)?.name ?? "that program"} in this app. Windows' own setting is unchanged (Settings → Apps → Default apps).`);
-        }
-      }
+      if (always) notifySaved(picked);
       close();
     } catch (e) {
       setError(String(e));
@@ -267,12 +273,20 @@ export function OpenWithDialog() {
     if (chosen) {
       setPicked(chosen);
       setBusy(true);
-      try { await api.openWithApp(path, chosen, false); close(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
+      try {
+        await api.openWithApp(path, chosen, rememberOpenWith);
+        if (rememberOpenWith) notifySaved(chosen);
+        close();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
     }
   };
 
   const row = (a: OpenApp) => (
-    <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(false)} title={a.id}>
+    <button key={a.id} className="openwith-row" data-picked={picked === a.id || undefined} onClick={() => setPicked(a.id)} onDoubleClick={() => void run(rememberOpenWith)} title={a.id}>
       {a.iconUrl ? <img src={a.iconUrl} width={32} height={32} alt="" draggable={false} /> : <span className="openwith-icon" aria-hidden="true">{(a.name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase()}</span>}
       <span className="openwith-name">{a.name}</span>
     </button>
@@ -341,8 +355,17 @@ export function OpenWithDialog() {
           {view === "main" ? <button className="secondary" onClick={() => setView("all")} disabled={busy}>All apps on this computer…</button> : <button className="secondary" onClick={() => setView("main")} disabled={busy}>Back</button>}
           <button className="secondary" onClick={() => void browse()} disabled={busy}>Find a program…</button>
           <span className="grow" />
-          <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>
-          <button className="primary" disabled={!picked || busy} onClick={() => void run(false)}>Just once</button>
+          {rememberOpenWith ? (
+            <>
+              <button disabled={!picked || busy} onClick={() => void run(false)} title="Open only this file once without changing the default">Just once</button>
+              <button className="primary" disabled={!picked || busy} onClick={() => void run(true)} title="Open this file and remember this app for all files of this type">Open</button>
+            </>
+          ) : (
+            <>
+              <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>
+              <button className="primary" disabled={!picked || busy} onClick={() => void run(false)}>Just once</button>
+            </>
+          )}
         </div>
       </div>
     </div>

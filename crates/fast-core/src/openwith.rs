@@ -32,6 +32,8 @@ pub struct App {
 pub struct Choices {
     /// ".zip", or "" for a file without an extension.
     pub extension: String,
+    /// Disambiguated content kind when an extension is shared by multiple file types (e.g. "video" for MPEG-TS `.ts`).
+    pub content_kind: Option<String>,
     pub default: Option<App>,
     pub suggested: Vec<App>,
     pub others: Vec<App>,
@@ -153,8 +155,19 @@ fn what(path: &Path) -> String {
     if ext.is_empty() { "this kind of file".into() } else { format!("{ext} files") }
 }
 
-/// Is `program` (a name looked up on PATH, or a path) runnable?
+/// Is `program` (a name looked up on PATH, a path, a macOS `.app` bundle, or a Linux `.desktop` id) runnable?
 pub fn program_exists(program: &str) -> bool {
+    if program.is_empty() {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    if program.ends_with(".app") {
+        return Path::new(program).is_dir();
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+    if program.ends_with(".desktop") && !program.contains('/') {
+        return platform::find(program).and_then(|e| platform::program_of(&e.exec)).is_some_and(|p| program_exists(&p));
+    }
     let p = Path::new(program);
     if p.is_absolute() || program.contains('/') || program.contains('\\') {
         return p.is_file();
@@ -422,7 +435,7 @@ mod platform {
             let app = app_of(&e, fits || suggested.len() + others.len() < 60);
             if fits { suggested.push(app) } else { others.push(app) }
         }
-        Choices { extension: extension_of(path), default: default_entry.map(|e| app_of(&e, true)), suggested, others, general: vec![] }
+        Choices { extension: extension_of(path), content_kind: None, default: default_entry.map(|e| app_of(&e, true)), suggested, others, general: vec![] }
     }
 
     /// Expand a desktop entry's Exec line for one file.
@@ -487,7 +500,7 @@ mod platform {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
-        if always && !id.starts_with('/') {
+        if always && !id.starts_with('/') && content_kind(path).is_none() {
             if let Some(mime) = mime_of(path) {
                 let _ = Command::new("xdg-mime").args(["default", id, &mime]).status();
             }
@@ -633,7 +646,7 @@ mod platform {
         }
         others.sort_by_key(|a| a.name.to_lowercase());
         let default = prog_id(&ext).and_then(|p| open_command(&p)).and_then(|c| split_command(&expand_env(&c)).into_iter().next()).filter(|e| Path::new(e).is_file()).map(|e| app_from_exe(&e, None));
-        Choices { extension: ext, default, suggested, others, general: vec![] }
+        Choices { extension: ext, content_kind: None, default, suggested, others, general: vec![] }
     }
 
     /// Programs that say they can open `ext`: each entry under RegisteredApplications points
@@ -710,11 +723,8 @@ mod platform {
     /// Windows keeps the default program for a kind of file where only its own "Default apps" settings can change it
     /// (the entry is protected so that no program can take over a file type behind the person's back). So "always"
     /// is kept by this app: it opens that kind of file with the program from here on, and shows it as the one it opens with.
-    pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
+    pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
         let done = launch(path, id);
-        if always && done.is_ok() {
-            set_app_default(&open_key(path), id);
-        }
         done
     }
 
@@ -772,7 +782,7 @@ mod platform {
             }
         }
         apps.sort_by_key(|a| a.name.to_lowercase());
-        Choices { extension: extension_of(path), default: None, suggested: vec![], others: apps, general: vec![] }
+        Choices { extension: extension_of(path), content_kind: None, default: None, suggested: vec![], others: apps, general: vec![] }
     }
 
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
@@ -802,11 +812,13 @@ mod platform {
     }
 }
 
-/// Open `path` with the program `id` (see `Choices`). With `always`, that program also becomes the one used from
-/// now on: set in the system where it lets that be done, and kept by this app where it does not (Windows).
+/// Open `path` with the program `id` (see `Choices`). With `always`, that program also becomes the default
+/// for every file of the same file type (`open_key(path)`), stored by this app (and in `xdg-mime` on Linux
+/// when the extension is unambiguous).
 pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
     let done = platform::open_with(path, id, always);
     if always && done.is_ok() {
+        set_app_default(&open_key(path), id);
         forget_openers();
     }
     done
@@ -827,22 +839,20 @@ pub fn looks_like_mpeg_ts(head: &[u8]) -> bool {
     })
 }
 
-/// What a file is when its extension does not say: `Some("video")` for a `.ts` that is an MPEG transport stream.
-/// A `.ts` that is not one is TypeScript and gets `None`, like every other file.
+/// What a file is when its extension does not say: e.g. `Some("video")` for a `.ts`/`.mts`/`.mod` media stream,
+/// `Some("qt")` for a Qt translation `.ts` file, `Some("music")` for a tracker `.mod`, etc.
+/// A `.ts` that is TypeScript (or any single-type extension like `.yml`) gets `None`.
 pub fn content_kind(path: &Path) -> Option<&'static str> {
-    use std::io::Read;
-    if extension_of(path) != ".ts" {
-        return None;
-    }
-    let mut head = Vec::with_capacity(1024);
-    std::fs::File::open(path).ok()?.take(1024).read_to_end(&mut head).ok()?;
-    looks_like_mpeg_ts(&head).then_some("video")
+    let kind = crate::sniff::sniff_path(path).ok().flatten()?;
+    kind.split_once(':').map(|(_, k)| k)
 }
 
 /// Extensions of the same kind of content, whose program is used for a file that only its content places there.
 fn stand_ins(kind: &str) -> &'static [&'static str] {
     match kind {
         "video" => &[".mp4", ".mkv", ".m2ts", ".mts", ".mpg", ".avi"],
+        "music" => &[".mp3", ".flac", ".ogg", ".wav"],
+        "qt" | "private" => &[".xml", ".txt"],
         _ => &[],
     }
 }
@@ -1067,6 +1077,18 @@ pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
 
 /// A readable name for a program chosen by its path: the system's own name for it where it has one, else the file name.
 fn program_name(id: &str) -> String {
+    #[cfg(target_os = "macos")]
+    if id.ends_with(".app") {
+        if let Some(stem) = Path::new(id).file_stem() {
+            return stem.to_string_lossy().into_owned();
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
+    if id.ends_with(".desktop") && !id.contains('/') {
+        if let Some(entry) = platform::find(id) {
+            return entry.name;
+        }
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_OPEN_BYEXENAME, ASSOCSTR_FRIENDLYAPPNAME};
@@ -1349,11 +1371,37 @@ mod defaults {
 /// The programs that could open a file, with readable names, the system's helper programs left out, and the editors
 /// and terminals that suit any file picked out.
 pub fn choices(path: &Path) -> Choices {
-    match as_other_type(path) {
-        // A `.ts` that is video: the programs for video, not the editors the extension is set to.
+    let kind = content_kind(path);
+    let mut out = match as_other_type(path) {
+        // An ambiguous extension whose content identifies another type (e.g. `.ts` video): show programs for that type.
         Some(fake) => Choices { extension: extension_of(path), ..refine(platform::choices(&fake)) },
         None => refine(platform::choices(path)),
+    };
+    out.content_kind = kind.map(str::to_string);
+    if let Some(id) = app_default_for(&open_key(path)).filter(|id| program_exists(id)) {
+        let same = |a: &App| {
+            if cfg!(windows) { a.id.eq_ignore_ascii_case(&id) } else { a.id == id }
+        };
+        let app = out
+            .default
+            .as_ref()
+            .filter(|a| same(a))
+            .or_else(|| out.suggested.iter().find(|a| same(a)))
+            .or_else(|| out.others.iter().find(|a| same(a)))
+            .or_else(|| out.general.iter().find(|a| same(a)))
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut name = program_name(&id);
+                if let Some(n) = friendly(&name, &id) {
+                    name = n.to_string();
+                }
+                App { id: id.clone(), name, icon_url: None }
+            });
+        out.suggested.retain(|a| !same(a));
+        out.others.retain(|a| !same(a));
+        out.default = Some(app);
     }
+    out
 }
 
 /// A made-up path with the extension of the kind of file this one's content says it is, for asking the system about it.
@@ -1624,6 +1672,7 @@ mod tests {
     fn picks_the_usual_program_for_a_file_type() {
         let choices = Choices {
             extension: ".png".into(),
+            content_kind: None,
             default: None,
             suggested: vec![],
             others: vec![app("C:\\Tools\\7zFM.exe", "7zFM"), app("C:\\Adobe\\Acrobat.exe", "Acrobat"), app("C:\\g\\chrome.exe", "chrome"), app("C:\\x\\i_view64.exe", "i_view64")],
@@ -1631,7 +1680,7 @@ mod tests {
         };
         // An image viewer beats the browser, and archivers and PDF readers are not offered.
         assert_eq!(likely_app(&choices).map(|a| a.name), Some("i_view64".into()));
-        let only_junk = Choices { extension: ".png".into(), default: None, suggested: vec![], others: vec![app("a", "7zFM"), app("b", "Acrobat")], general: vec![] };
+        let only_junk = Choices { extension: ".png".into(), content_kind: None, default: None, suggested: vec![], others: vec![app("a", "7zFM"), app("b", "Acrobat")], general: vec![] };
         assert_eq!(likely_app(&only_junk), None);
     }
 
@@ -1700,9 +1749,9 @@ mod tests {
 
     #[test]
     fn the_system_suggestion_is_used_when_the_table_has_no_opinion() {
-        let c = Choices { extension: ".weird".into(), default: None, suggested: vec![app("x.desktop", "Weird Viewer")], others: vec![app("y.desktop", "Other")], general: vec![] };
+        let c = Choices { extension: ".weird".into(), content_kind: None, default: None, suggested: vec![app("x.desktop", "Weird Viewer")], others: vec![app("y.desktop", "Other")], general: vec![] };
         assert_eq!(likely_app(&c).map(|a| a.name), Some("Weird Viewer".into()));
-        let none = Choices { extension: "".into(), default: None, suggested: vec![app("x", "X")], others: vec![], general: vec![] };
+        let none = Choices { extension: "".into(), content_kind: None, default: None, suggested: vec![app("x", "X")], others: vec![], general: vec![] };
         assert_eq!(likely_app(&none), None);
     }
 
@@ -1896,6 +1945,58 @@ mod shared_extension_tests {
         assert_eq!(shown.kind, "app");
         assert_eq!(shown.id, program.to_string_lossy());
         assert_ne!(default_opener(&code, false).id, program.to_string_lossy(), "the other kind of .ts keeps its own program");
+        load_app_defaults(&dir.path().join("reset.json"));
+        forget_openers();
+    }
+
+    #[test]
+    fn single_type_and_disambiguated_extensions_keep_independent_defaults() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        load_app_defaults(&dir.path().join("open-with.json"));
+
+        let yml1 = dir.path().join("config.yml");
+        let yml2 = dir.path().join("other.yml");
+        std::fs::write(&yml1, "key: val\n").unwrap();
+        std::fs::write(&yml2, "name: app\n").unwrap();
+
+        let ts_code_1 = dir.path().join("a.ts");
+        let ts_code_2 = dir.path().join("b.ts");
+        let ts_video_1 = dir.path().join("media1.ts");
+        let ts_video_2 = dir.path().join("media2.ts");
+        let mts_video = dir.path().join("cam.mts");
+        std::fs::write(&ts_code_1, "export const a = 1;\n").unwrap();
+        std::fs::write(&ts_code_2, "export const b = 2;\n").unwrap();
+        std::fs::write(&ts_video_1, packets(188, 0, 8)).unwrap();
+        std::fs::write(&ts_video_2, packets(188, 0, 8)).unwrap();
+        std::fs::write(&mts_video, packets(192, 4, 8)).unwrap();
+
+        assert_eq!(open_key(&yml1), ".yml");
+        assert_eq!(open_key(&yml2), ".yml");
+        assert_eq!(open_key(&ts_code_1), ".ts");
+        assert_eq!(open_key(&ts_code_2), ".ts");
+        assert_eq!(open_key(&ts_video_1), ".ts+video");
+        assert_eq!(open_key(&ts_video_2), ".ts+video");
+        assert_eq!(open_key(&mts_video), ".mts+video");
+
+        let exe = std::env::current_exe().unwrap();
+        let exe_s = exe.to_string_lossy().into_owned();
+        set_app_default(&open_key(&yml1), &exe_s);
+        set_app_default(&open_key(&ts_code_1), &exe_s);
+        forget_openers();
+
+        assert_eq!(default_opener(&yml2, false).id, exe_s, "all .yml files share the remembered app");
+        assert_eq!(default_opener(&ts_code_2, false).id, exe_s, "all TypeScript .ts files share the remembered app");
+        assert_ne!(default_opener(&ts_video_1, false).id, exe_s, "media .ts does not inherit the TypeScript .ts app");
+        assert_ne!(default_opener(&ts_video_2, false).id, exe_s);
+
+        let c_code = choices(&ts_code_2);
+        assert_eq!(c_code.content_kind, None);
+        assert_eq!(c_code.default.as_ref().map(|a| a.id.as_str()), Some(exe_s.as_str()));
+
+        let c_video = choices(&ts_video_1);
+        assert_eq!(c_video.content_kind.as_deref(), Some("video"));
+
         load_app_defaults(&dir.path().join("reset.json"));
         forget_openers();
     }

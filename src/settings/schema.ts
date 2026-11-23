@@ -216,7 +216,7 @@ export const SETTINGS: SettingDef[] = [
 ];
 
 /** Advanced options appear in Settings like any other entry (and in search). */
-const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes"];
+const SHOWN_IN_GENERAL = ["files.singleClickFolders", "files.checkboxes", "files.rememberOpenWith"];
 const SHOWN_IN_FOLDER_VIEWS = ["files.scope.sort", "files.scope.filter", "files.scope.columns", "files.scope.view", "files.sortKey", "files.sortAsc", "files.rememberSort", "files.keepFilter"];
 const SHOWN_IN_PERFORMANCE = ["perf.uiUnload", "perf.shellMenuCache", "perf.shellMenuPrefetch", "perf.loadRefresh", "perf.compactWhenIdle"];
 const sectionOf = (d: (typeof ADVANCED)[number]) =>

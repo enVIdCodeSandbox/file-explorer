@@ -202,6 +202,7 @@ export interface Opener {
 
 export interface OpenChoices {
   extension: string;
+  contentKind?: string | null;
   default: OpenApp | null;
   suggested: OpenApp[];
   others: OpenApp[];

@@ -12,12 +12,15 @@ const KEEP = 512;
 const memo = new Map<string, { at: number; opener: Opener; icon: boolean }>();
 const inflight = new Map<string, Promise<Opener>>();
 
-/** Files of one kind share an answer. Without an extension the file itself decides (it may be marked as runnable). */
+/** Extensions whose meaning depends on what is inside the file (see crates/fast-core/src/sniff.rs). */
+const AMBIGUOUS_EXTS = new Set([".ts", ".mts", ".mod", ".key", ".pub", ".db"]);
+
+/** Files of one kind share an answer. Without an extension or for content-disambiguated extensions, each file is asked on its own. */
 export function openerKey(path: string): string {
   const name = baseName(path).toLowerCase();
   const i = name.lastIndexOf(".");
-  // ".ts" is TypeScript and also video: what is inside decides, so each file is asked about on its own.
-  return i > 0 && name.slice(i) !== ".ts" ? name.slice(i) : `p:${path}`;
+  const ext = i > 0 ? name.slice(i) : "";
+  return ext && !AMBIGUOUS_EXTS.has(ext) ? ext : `p:${path}`;
 }
 
 /** Whether the app should show this at all: the setting is on and the file is one on this computer. */

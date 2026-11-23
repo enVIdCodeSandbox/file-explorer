@@ -37,6 +37,9 @@ describe("which program a file opens with", () => {
     expect(o.openerKey("/bin/tool")).not.toBe(o.openerKey("/bin/other"));
     expect(o.openerKey("/home/me/.bashrc")).toBe("p:/home/me/.bashrc");
     expect(o.openerKey("/a/b.tar.gz")).toBe(".gz");
+    expect(o.openerKey("/a/config.yml")).toBe(".yml");
+    expect(o.openerKey("/a/app.ts")).toBe("p:/a/app.ts");
+    expect(o.openerKey("/a/clip.mts")).toBe("p:/a/clip.mts");
   });
 
   it("is only for files on this computer, and can be turned off", async () => {
