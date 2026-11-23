@@ -9,6 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../api";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconsPanel } from "./IconPicker";
+import { isSettingLocked, PRESET_CONTROLLED_KEYS, RENDERING_LOCKED_KEYS, toggleSettingLock } from "../settings/presets";
 import { SECTIONS, SETTINGS, getSetting, setSetting, type SettingDef } from "../settings/schema";
 import { useStore } from "../store";
 import { adv } from "../settings/advanced";
@@ -30,6 +31,7 @@ function ControlFor({ def }: { def: SettingDef }) {
       setSetting(s, def.key, v);
       // A hand-made choice is kept when a performance preset is applied.
       if (def.key === "performance.backgroundMode") s.performance.backgroundLocked = true;
+      if (RENDERING_LOCKED_KEYS.has(def.key)) s.performance.renderingLocked = true;
     });
   const c = def.control;
 
@@ -211,6 +213,7 @@ function SaveBar() {
 export function SettingsView({ detached = false }: { detached?: boolean }) {
   const t = useT();
   const os = useStore((s) => s.info?.os);
+  const settings = useStore((s) => s.settings);
   const [query, setQuery] = useState(() => {
     // Opened from somewhere that knows what to look for (the Tasks window's Settings button).
     const q = useStore.getState().settingsQuery;
@@ -356,10 +359,26 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
               <h3>{t(name)}</h3>
               {defs.map((d) => {
                 const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "activityLog", "perfPresets", "uiPresets", "profiles", "resources", "locks", "methods", "icons", "fontAreas"].includes(d.control.type);
+                const lockable = PRESET_CONTROLLED_KEYS.has(d.key);
+                const locked = lockable && !!settings && isSettingLocked(settings, d.key);
                 return (
                   <div key={d.key} className="setting" data-wide={wide || undefined} data-setting={d.key}>
                     <div className="setting-text">
-                      <span className="setting-label">{t(d.label)}</span>
+                      <span className="setting-label">
+                        {t(d.label)}
+                        {lockable && (
+                          <button
+                            type="button"
+                            className="preset-lock-pill"
+                            data-locked={locked || undefined}
+                            title={locked ? "Kept unchanged when you switch performance presets (click to let presets change it again)" : "Click to keep this setting when switching performance presets"}
+                            onClick={() => useStore.getState().updateSettings((s) => toggleSettingLock(s, d.key))}
+                          >
+                            <Icon name="lock" size={11} />
+                            {locked ? "Locked from presets" : "Lock"}
+                          </button>
+                        )}
+                      </span>
                       {d.description && <span className="muted">{t(d.description)}</span>}
                       {d.warning && <span className="setting-warning" role="note">⚠ {t(d.warning)}</span>}
                     </div>

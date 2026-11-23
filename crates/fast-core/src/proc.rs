@@ -27,6 +27,52 @@ pub fn lower_thread_priority() {
     }
 }
 
+/// Adjust OS process scheduling priority according to the configured mode, performance intensity
+/// (`0..=100`), and whether the window is currently backgrounded. Never uses real-time priority.
+pub fn apply_process_priority(mode: &str, intensity: u8, background: bool) {
+    let target = match mode {
+        "low" => -1i8,
+        "normal" => 0,
+        "high" => {
+            if background { 0 } else { 1 }
+        }
+        _ => {
+            if background && intensity < 50 {
+                -1
+            } else if !background && intensity >= 80 {
+                1
+            } else {
+                0
+            }
+        }
+    };
+    #[cfg(windows)]
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle that needs no closing; `SetPriorityClass`
+    // only adjusts the current process priority class within standard unprivileged classes.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+        };
+        let class = match target {
+            x if x < 0 => BELOW_NORMAL_PRIORITY_CLASS,
+            x if x > 0 => ABOVE_NORMAL_PRIORITY_CLASS,
+            _ => NORMAL_PRIORITY_CLASS,
+        };
+        let _ = SetPriorityClass(GetCurrentProcess(), class);
+    }
+    #[cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))]
+    // SAFETY: `setpriority` for the current PID only attempts best-effort nice adjustment.
+    unsafe {
+        let nice = match target {
+            x if x < 0 => 5,
+            x if x > 0 => -5,
+            _ => 0,
+        };
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, nice);
+    }
+    let _ = target;
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

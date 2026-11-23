@@ -94,6 +94,8 @@ impl Default for Options {
 
 /// Decoder memory ceiling; protects against decompression bombs.
 const MAX_DECODE_BYTES: u64 = 384 * 1024 * 1024;
+/// Higher ceiling when no source file size limit is imposed (e.g. high-memory / God-like tiers).
+const UNLOCKED_DECODE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Skip very large sources: decoding them costs more than the preview is worth.
 const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// How long an outside program may take to render one thumbnail.
@@ -164,9 +166,9 @@ pub fn thumbnail_with(path: &Path, px: u32, cache_dir: Option<&Path>, opts: &Opt
                 .map_err(|e| CoreError::io(path, e))?
                 .with_guessed_format()
                 .map_err(|e| CoreError::io(path, e))?;
-            // Refuse images that would need a huge buffer, however small the file.
+            // Refuse images that would need an absurd buffer, scaling ceiling up when file-size limit is off.
             let mut limits = image::Limits::default();
-            limits.max_alloc = Some(MAX_DECODE_BYTES);
+            limits.max_alloc = Some(if opts.max_image_bytes == 0 { UNLOCKED_DECODE_BYTES } else { MAX_DECODE_BYTES });
             reader.limits(limits);
             let img = reader
                 .decode()
@@ -250,9 +252,14 @@ fn upright(img: image::DynamicImage, orientation: u32) -> image::DynamicImage {
     }
 }
 
-fn encode(img: image::DynamicImage) -> Result<Vec<u8>> {
+pub(crate) fn encode(img: image::DynamicImage) -> Result<Vec<u8>> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    use image::ImageEncoder;
     let mut bytes = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, FilterType::Adaptive)
+        .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
         .map_err(|e| CoreError::Invalid(format!("cannot encode thumbnail: {e}")))?;
     Ok(bytes)
 }
@@ -493,11 +500,7 @@ mod render {
                     px4.swap(0, 2);
                 }
                 let img = image::RgbaImage::from_raw(w as u32, h as u32, pixels).ok_or_else(|| CoreError::Invalid("unexpected preview size".into()))?;
-                let mut out = Vec::new();
-                image::DynamicImage::ImageRgba8(img)
-                    .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-                    .map_err(|e| CoreError::Invalid(format!("cannot encode thumbnail: {e}")))?;
-                Ok(out)
+                super::encode(image::DynamicImage::ImageRgba8(img))
             })();
             if inited {
                 CoUninitialize();

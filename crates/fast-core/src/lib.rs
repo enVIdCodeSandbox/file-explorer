@@ -39,6 +39,7 @@ pub mod phone;
 pub mod platform;
 pub mod predict;
 pub mod remote;
+pub mod rendering;
 pub mod resources;
 pub mod search;
 pub mod session;

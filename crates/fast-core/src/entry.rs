@@ -83,18 +83,33 @@ pub fn list_dir_streaming(
     cancel: &std::sync::atomic::AtomicBool,
     sink: &mut dyn FnMut(&[FileEntry], ListProgress),
 ) -> Result<Vec<FileEntry>> {
+    list_dir_streaming_with(path, show_hidden, cancel, 2048, PARALLEL_THRESHOLD, sink)
+}
+
+/// Configurable streaming directory listing: `max_chunk` controls batch growth and
+/// `parallel_threshold` sets when batches fan metadata calls across worker threads.
+pub fn list_dir_streaming_with(
+    path: &Path,
+    show_hidden: bool,
+    cancel: &std::sync::atomic::AtomicBool,
+    max_chunk: usize,
+    parallel_threshold: usize,
+    sink: &mut dyn FnMut(&[FileEntry], ListProgress),
+) -> Result<Vec<FileEntry>> {
     use std::sync::atomic::Ordering;
     let rd = fs::read_dir(path).map_err(|e| CoreError::io(path, e))?;
     let raw: Vec<fs::DirEntry> = rd.filter_map(|e| e.ok()).collect();
     let total = raw.len();
     let mut all: Vec<FileEntry> = Vec::with_capacity(total);
-    let (mut done, mut chunk) = (0usize, 64usize);
+    let max_chunk = max_chunk.max(64);
+    let parallel_threshold = parallel_threshold.max(32);
+    let (mut done, mut chunk) = (0usize, 64usize.min(max_chunk));
     while done < total {
         if cancel.load(Ordering::Relaxed) {
             return Err(CoreError::Invalid("Cancelled.".into()));
         }
         let part = &raw[done..(done + chunk).min(total)];
-        let converted: Vec<FileEntry> = if part.len() >= PARALLEL_THRESHOLD {
+        let converted: Vec<FileEntry> = if part.len() >= parallel_threshold {
             part.par_iter().filter_map(|e| convert_entry(e, show_hidden)).collect()
         } else {
             part.iter().filter_map(|e| convert_entry(e, show_hidden)).collect()
@@ -102,7 +117,7 @@ pub fn list_dir_streaming(
         done += part.len();
         sink(&converted, ListProgress { done, total, restart: false });
         all.extend(converted);
-        chunk = (chunk * 2).min(2048);
+        chunk = (chunk * 2).min(max_chunk);
     }
     Ok(all)
 }

@@ -65,6 +65,14 @@ export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?:
       ))}
     </ul>
   );
+  const rendering = info?.rendering;
+  const lockedCount = (settings.performance.backgroundLocked ? 1 : 0) + (settings.performance.renderingLocked ? 1 : 0) + (settings.performance.lockedKeys?.length ?? 0);
+  const unlockAll = () =>
+    updateSettings((s) => {
+      s.performance.backgroundLocked = false;
+      s.performance.renderingLocked = false;
+      s.performance.lockedKeys = [];
+    });
   return (
     <div className="preset-panel">
       <div className="preset-head">
@@ -82,6 +90,22 @@ export function PerfPresetsPanel({ compact = false, roomy = false }: { compact?:
           </div>
         )}
       </div>
+      {!compact && rendering && (
+        <div className="rendering-status-bar">
+          <span>
+            <strong>Native graphics:</strong> {rendering.activeBackend.toUpperCase()}
+            {rendering.adapters.length ? <span className="muted"> ({rendering.adapters.join(", ")})</span> : null}
+            {!rendering.vsync && <span className="pill">VSync off (uncapped)</span>}
+            {rendering.restartRequired && <span className="pill" data-warn>Restart app to apply backend change</span>}
+          </span>
+          {lockedCount > 0 && (
+            <span className="rendering-locks">
+              <span className="muted">{lockedCount} setting group{lockedCount === 1 ? "" : "s"} locked from preset changes</span>
+              <button className="link-button" onClick={unlockAll}>Unlock all</button>
+            </span>
+          )}
+        </div>
+      )}
       {view === "slider" ? (
         <div className="preset-slider">
           <PerfSlider presets={presets} index={showIdx} recIndex={recIdx} onPick={setShown} mobile={mobile} usedIndex={usedIdx >= 0 ? usedIdx : undefined}>

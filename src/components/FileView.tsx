@@ -359,19 +359,29 @@ export function FileView({ path }: { path: string }) {
   const refreshedAt = useStore((st) => st.refreshedAt);
   const refreshing = usePulse(refreshedAt, 900);
 
-  // Videos and documents are slow to picture: in the background, make the ones in this folder ahead of the scrolling.
+  // Prewarm thumbnails in the background ahead of scroll: slow videos/docs on medium+, images too on high tiers.
   const prewarmMode = adv<string>(settings, "thumbs.videoPrewarm");
-  const strongBudget = useStore((st) => st.budget?.tier === "full" || st.budget?.tier === "manual");
+  const prewarmImagesMode = adv<string>(settings, "thumbs.prewarmImages");
+  const budget = useStore((st) => st.budget);
+  const strongBudget = budget?.tier === "full" || budget?.tier === "manual";
   const prewarmOn = prewarmMode === "on" || (prewarmMode === "auto" && strongBudget);
+  const prewarmImgsOn = prewarmImagesMode === "on" || (prewarmImagesMode === "auto" && !!budget?.prewarmImages);
   useEffect(() => {
-    if (!prewarmOn || isRemote(path) || isArchiveLoc(path) || !current?.entries.length) return;
+    if ((!prewarmOn && !prewarmImgsOn) || isRemote(path) || isArchiveLoc(path) || !current?.entries.length) return;
+    const delayMs = (budget?.intensity ?? 50) >= 90 ? 0 : 300;
     const timer = setTimeout(() => {
-      const slow = current.entries.filter((e) => !e.isDir && /\.(mp4|m4v|mov|mkv|avi|webm|wmv|flv|mpg|mpeg|3gp|mts|m2ts|pdf|docx?|xlsx?|pptx?)$/i.test(e.name)).map((e) => fullPath(e.name));
-      if (slow.length) void api.thumbsPrewarm(slow, 256).catch(() => {});
-    }, 400);
+      const slow = prewarmOn
+        ? current.entries.filter((e) => !e.isDir && /\.(mp4|m4v|mov|mkv|avi|webm|wmv|flv|mpg|mpeg|3gp|mts|m2ts|pdf|docx?|xlsx?|pptx?)$/i.test(e.name))
+        : [];
+      const imgs = prewarmImgsOn
+        ? current.entries.filter((e) => !e.isDir && /\.(jpe?g|png|gif|webp|bmp)$/i.test(e.name))
+        : [];
+      const all = [...slow, ...imgs].map((e) => fullPath(e.name));
+      if (all.length) void api.thumbsPrewarm(all, settings.performance.thumbnailSize || 256).catch(() => {});
+    }, delayMs);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prewarmOn, path, current]);
+  }, [prewarmOn, prewarmImgsOn, path, current, budget?.intensity]);
 
   // The filter menu offers what is actually in this folder.
   useEffect(() => {
@@ -500,6 +510,7 @@ export function FileView({ path }: { path: string }) {
   const nameWidth = Math.max(140, Math.min(widthFor("name"), width - 14 - othersWidth));
   const colWidth = (id: string) => (id === "name" ? nameWidth : widthFor(id));
   const rowsWidth = mobile ? width : nameWidth + othersWidth;
+  const overscanRows = adv<number>(settings, "perf.overscanRows");
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller.current,
@@ -507,8 +518,8 @@ export function FileView({ path }: { path: string }) {
     // The sticky column header sits inside the scroller, above the rows.
     scrollMargin: headerHeight,
     paddingStart: details ? 0 : 8,
-    // With lazy loading off, render further ahead at the cost of more DOM.
-    overscan: settings.performance.lazyLoading ? (details ? adv<number>(settings, "perf.overscanRows") : 2) : 40,
+    // Scale overscan for both list and icon grid views; with lazy loading off, buffer 80 rows ahead.
+    overscan: settings.performance.lazyLoading ? (details ? overscanRows : Math.max(2, Math.round(overscanRows / 2))) : 80,
   });
   useEffect(() => virtualizer.measure(), [rowHeight, virtualizer]);
   // Ask for the extra details of the rows on screen, a moment after scrolling settles.

@@ -279,6 +279,22 @@ pub struct Performance {
     pub background_mode: String,
     /// The person chose `background_mode` themselves, so applying a performance preset leaves it alone.
     pub background_locked: bool,
+    /// Native graphics backend for rendering ("auto", "directx12", "directx11", "vulkan", "opengl", "metal", "software").
+    pub render_backend: String,
+    /// Use the system GPU for compositing, scrolling and painting.
+    pub hardware_acceleration: bool,
+    /// Rasterize DOM layers, thumbnails and text on the GPU.
+    pub gpu_rasterization: bool,
+    /// Upload decoded image/thumbnail textures straight into GPU memory buffers.
+    pub zero_copy: bool,
+    /// Synchronize frames with the display refresh rate; turn off for uncapped frame pacing.
+    pub vsync: bool,
+    /// OS process scheduling priority ("auto", "low", "normal", "high").
+    pub process_priority: String,
+    /// Keep rendering and process-priority settings unchanged when switching performance presets.
+    pub rendering_locked: bool,
+    /// Arbitrary setting keys pinned by the user so performance presets do not overwrite them.
+    pub locked_keys: Vec<String>,
 }
 
 impl Default for Performance {
@@ -299,6 +315,14 @@ impl Default for Performance {
             reduce_on_battery: true,
             background_mode: "aggressive".into(),
             background_locked: false,
+            render_backend: "auto".into(),
+            hardware_acceleration: true,
+            gpu_rasterization: true,
+            zero_copy: true,
+            vsync: true,
+            process_priority: "auto".into(),
+            rendering_locked: false,
+            locked_keys: Vec::new(),
         }
     }
 }

@@ -10,11 +10,13 @@ import {
   applyUiPreset,
   currentPerfPreset,
   differences,
+  isSettingLocked,
   newProfile,
   platformFor,
   recommendPerf,
   capsText,
   snapshotOf,
+  toggleSettingLock,
 } from "./presets";
 import { THEMES } from "../util/themes";
 import { getSetting } from "./schema";
@@ -23,7 +25,7 @@ const blank = (): Settings =>
   ({
     general: { showHidden: false },
     appearance: { theme: "dark", accent: "#4cc2ff", density: "compact", hideNetworkAddress: true, layout: {}, style: { icons: "outline", radius: 8, menu: "glass", folderColor: "classic", font: "system" }, showDetailsPane: true },
-    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, maxCpuPercent: 0, maxMemoryPercent: 0, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true, backgroundMode: "aggressive", backgroundLocked: false },
+    performance: { priority: "dynamic", maxThreads: 0, maxCacheMb: 256, maxCpuPercent: 0, maxMemoryPercent: 0, backgroundIndexing: true, indexDrives: true, lazyLoading: true, metadataCaching: true, thumbnails: true, thumbnailSize: 96, predictivePrefetch: true, reduceOnBattery: true, backgroundMode: "aggressive", backgroundLocked: false, renderBackend: "auto", hardwareAcceleration: true, gpuRasterization: true, zeroCopy: true, vsync: true, processPriority: "auto", renderingLocked: false, lockedKeys: [] },
     transfer: {},
     search: {},
     contextMenu: { hidden: [] },
@@ -90,8 +92,33 @@ describe("performance presets", () => {
     expect(god.patch["performance.maxMemoryPercent"]).toBe(0);
     expect(god.patch["performance.maxCacheMb"]).toBe(0);
     expect(god.patch["performance.maxThreads"]).toBe(0);
+    expect(god.patch["performance.vsync"]).toBe(false);
+    expect(god.patch["performance.processPriority"]).toBe("high");
+    expect(god.patch["advanced.perf.overscanRows"]).toBe(80);
+    expect(god.patch["advanced.perf.thumbDelayMs"]).toBe(0);
+    expect(god.patch["advanced.thumbs.prewarmImages"]).toBe("on");
     expect(capsText(god)).toMatch(/No cap/);
     expect(capsText(PERF_PRESETS[4])).toMatch(/50%.*10%/);
+  });
+  it("keeps locked rendering settings and custom lockedKeys untouched when presets change", () => {
+    const s = blank();
+    s.performance.renderBackend = "vulkan";
+    s.performance.vsync = true;
+    s.performance.renderingLocked = true;
+    toggleSettingLock(s, "performance.maxThreads");
+    s.performance.maxThreads = 12;
+    applyPatch(s, PERF_PRESETS[PERF_PRESETS.length - 1].patch);
+    expect(s.performance.renderBackend).toBe("vulkan");
+    expect(s.performance.vsync).toBe(true);
+    expect(s.performance.maxThreads).toBe(12);
+    expect(isSettingLocked(s, "performance.renderBackend")).toBe(true);
+    expect(differences(s, { "performance.renderBackend": "auto", "performance.maxThreads": 0 })).toEqual([]);
+    s.performance.renderingLocked = false;
+    toggleSettingLock(s, "performance.maxThreads");
+    applyPatch(s, PERF_PRESETS[PERF_PRESETS.length - 1].patch);
+    expect(s.performance.renderBackend).toBe("auto");
+    expect(s.performance.vsync).toBe(false);
+    expect(s.performance.maxThreads).toBe(0);
   });
   it("recommends by memory and cores, and a step lower for laptops", () => {
     expect(recommendPerf(1024, 1, false).id).toBe("barebones");

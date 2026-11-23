@@ -252,6 +252,9 @@ function AppInner() {
         document.documentElement.toggleAttribute("data-background", !!budget.background);
         useStore.setState({ budget });
       }),
+      on("rendering-changed", (rendering) => {
+        useStore.setState((s) => (s.info ? { info: { ...s.info, rendering } } : {}));
+      }),
       on("drives-changed", (p) => useStore.getState().onDrivesChanged(p)),
       on("detached", ({ kind, open }) => {
         const s = useStore.getState();

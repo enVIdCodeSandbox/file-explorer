@@ -697,3 +697,22 @@ body[data-split-dragging="col"] { cursor: row-resize; }
 .toast-hint { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); }
 .notice .grow[data-link] { cursor: pointer; }
 .notice .grow[data-link]:hover { text-decoration: underline; }
+
+/* Native GPU layer compositing for hardware-accelerated tiers */
+:root[data-gpu="on"] .file-scroller { will-change: scroll-position; }
+:root[data-gpu="on"] .file-rows { transform: translateZ(0); contain: layout style; }
+:root[data-gpu="on"][data-gpu-tier="high"] .file-row,
+:root[data-gpu="on"][data-gpu-tier="high"] .tile-row,
+:root[data-gpu="on"][data-gpu-tier="max"] .file-row,
+:root[data-gpu="on"][data-gpu-tier="max"] .tile-row { will-change: transform; backface-visibility: hidden; }
+:root[data-gpu="off"] .file-row,
+:root[data-gpu="off"] .tile-row,
+:root[data-gpu="off"] .file-rows { will-change: auto; transform: none; }
+
+/* Preset lock controls and live native rendering status strip */
+.preset-lock-pill { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 1px 7px; font-size: 11px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0.72; vertical-align: middle; }
+.preset-lock-pill:hover { opacity: 1; border-color: var(--border-strong); color: var(--text); }
+.preset-lock-pill[data-locked] { opacity: 1; border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 500; }
+.rendering-status-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border-radius: var(--radius-small); border: 1px solid var(--border); background: var(--surface-subtle, rgba(255,255,255,0.03)); font-size: var(--font-size-small); }
+.rendering-status-bar > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rendering-status-bar .pill[data-warn] { border-color: var(--accent); color: var(--accent); }

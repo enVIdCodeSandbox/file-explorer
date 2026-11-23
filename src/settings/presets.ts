@@ -67,6 +67,19 @@ interface Level {
   /** Percent of all CPUs and of installed memory the app may use; 0 = no cap. */
   cpu: number;
   memory: number;
+  /** Native GPU / rendering & latency tuning scaled alongside each tier. */
+  renderBackend?: string;
+  hwAccel?: boolean;
+  gpuRaster?: boolean;
+  zeroCopy?: boolean;
+  vsync?: boolean;
+  procPriority?: "auto" | "low" | "normal" | "high";
+  loadRefresh?: "fast" | "normal" | "gentle";
+  prefetchMs?: number;
+  thumbMs?: number;
+  thumbQuality?: "draft" | "normal" | "sharp";
+  prewarmImages?: "auto" | "on" | "off";
+  maxImageMb?: number;
 }
 
 const LEVELS: Level[] = [
@@ -74,10 +87,11 @@ const LEVELS: Level[] = [
     id: "barebones", name: "Barebones", threads: 1, cacheMb: 16, index: false, allDrives: false, listings: false, prefetch: false,
     thumbs: false, thumbPx: 48, overscan: 2, animations: false, folderSizes: false, sizeCache: false, thumbDiskMb: 8, keepUsage: false,
     keepHardware: false, batterySaver: true, compactIdle: true,
-    description: "Does the minimum: one worker thread, almost no caching, no search index, no thumbnails, no folder sizes, no animation and nothing saved to disk. Search scans the folder you are in.",
+    description: "Does the minimum: one worker thread, software rendering, almost no caching, no search index, no thumbnails, no folder sizes, no animation and nothing saved to disk. Search scans the folder you are in.",
     recommendedFor: "Very old or very small devices: a Raspberry Pi Zero, a PC with 2 GB of memory or less, a thin client, or a remote desktop session over a slow link.",
     minRamGb: 0, minCores: 1, cpu: 10, memory: 3,
-},
+    renderBackend: "software", hwAccel: false, gpuRaster: false, zeroCopy: false, vsync: true, procPriority: "low", loadRefresh: "gentle", prefetchMs: 250, thumbMs: 250, thumbQuality: "draft", prewarmImages: "off", maxImageMb: 16,
+  },
   {
     id: "feather", name: "Feather", threads: 1, cacheMb: 32, index: false, allDrives: false, listings: true, prefetch: false,
     thumbs: false, thumbPx: 48, overscan: 3, animations: false, folderSizes: false, sizeCache: true, thumbDiskMb: 16, keepUsage: false,
@@ -85,7 +99,8 @@ const LEVELS: Level[] = [
     description: "Very light. Remembers a few folder listings, still no index or thumbnails, and keeps its work on one thread.",
     recommendedFor: "Old netbooks, single-board computers such as a Raspberry Pi 3, and budget tablets with 2 to 3 GB of memory.",
     minRamGb: 2, minCores: 1, cpu: 15, memory: 4,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: false, zeroCopy: false, vsync: true, procPriority: "low", loadRefresh: "gentle", prefetchMs: 160, thumbMs: 180, thumbQuality: "draft", prewarmImages: "off", maxImageMb: 24,
+  },
   {
     id: "reduced", name: "Reduced", threads: 2, cacheMb: 64, index: false, allDrives: false, listings: true, prefetch: false,
     thumbs: true, thumbPx: 64, overscan: 4, animations: false, folderSizes: true, sizeCache: true, thumbDiskMb: 32, keepUsage: true,
@@ -93,7 +108,8 @@ const LEVELS: Level[] = [
     description: "Light. Small thumbnails and folder sizes come back, but there is still no background indexing, so nothing works while you are idle.",
     recommendedFor: "Older laptops and desktops with 3 to 4 GB of memory and two cores, or any machine you want kept quiet.",
     minRamGb: 3, minCores: 2, cpu: 25, memory: 6,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: false, vsync: true, procPriority: "normal", loadRefresh: "gentle", prefetchMs: 120, thumbMs: 140, thumbQuality: "draft", prewarmImages: "off", maxImageMb: 32,
+  },
   {
     id: "acceptable", name: "Acceptable", threads: 2, cacheMb: 128, index: true, allDrives: false, listings: true, prefetch: false,
     thumbs: true, thumbPx: 64, overscan: 6, animations: false, folderSizes: true, sizeCache: true, thumbDiskMb: 64, keepUsage: true,
@@ -101,7 +117,8 @@ const LEVELS: Level[] = [
     description: "Search becomes instant: your home folder is indexed in the background, using two threads. No preloading yet.",
     recommendedFor: "Basic laptops and mini PCs with 4 GB of memory, such as entry-level Chromebooks running Linux or older Celeron and Atom machines.",
     minRamGb: 4, minCores: 2, cpu: 35, memory: 8,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: false, vsync: true, procPriority: "normal", loadRefresh: "normal", prefetchMs: 90, thumbMs: 110, thumbQuality: "normal", prewarmImages: "off", maxImageMb: 48,
+  },
   {
     id: "average", name: "Average", threads: 4, cacheMb: 256, index: true, allDrives: false, listings: true, prefetch: true,
     thumbs: true, thumbPx: 96, overscan: 8, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 128, keepUsage: true,
@@ -109,7 +126,8 @@ const LEVELS: Level[] = [
     description: "A sensible middle: four threads, a 256 MB cache, preloading of folders you are likely to open, and animations back on.",
     recommendedFor: "Typical office laptops and older desktops with 4 to 8 GB of memory and four cores.",
     minRamGb: 6, minCores: 4, cpu: 50, memory: 10,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "normal", loadRefresh: "normal", prefetchMs: 70, thumbMs: 90, thumbQuality: "normal", prewarmImages: "off", maxImageMb: 64,
+  },
   {
     id: "satisfactory", name: "Satisfactory", threads: 4, cacheMb: 384, index: true, allDrives: false, listings: true, prefetch: true,
     thumbs: true, thumbPx: 96, overscan: 10, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 192, keepUsage: true,
@@ -117,55 +135,62 @@ const LEVELS: Level[] = [
     description: "Like Average with a larger cache and a longer list of remembered folders, so going back and forth stays instant.",
     recommendedFor: "Mainstream laptops with 8 GB of memory, such as a 2018 to 2021 ultrabook.",
     minRamGb: 8, minCores: 4, cpu: 50, memory: 12,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "normal", loadRefresh: "normal", prefetchMs: 60, thumbMs: 75, thumbQuality: "normal", prewarmImages: "off", maxImageMb: 96,
+  },
   {
     id: "decent", name: "Decent", threads: 6, cacheMb: 512, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 128, overscan: 10, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 256, keepUsage: true,
+    thumbs: true, thumbPx: 128, overscan: 12, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 256, keepUsage: true,
     keepHardware: true, batterySaver: true, compactIdle: false,
-    description: "Indexes every local drive, uses six threads and makes sharper thumbnails.",
+    description: "Indexes every local drive, uses six threads and makes sharper thumbnails with GPU rasterization.",
     recommendedFor: "Good laptops and desktops with 8 to 16 GB of memory and six cores, and people who keep files on several drives.",
     minRamGb: 8, minCores: 6, cpu: 60, memory: 15,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "normal", loadRefresh: "fast", prefetchMs: 50, thumbMs: 60, thumbQuality: "normal", prewarmImages: "auto", maxImageMb: 128,
+  },
   {
     id: "performance", name: "Performance", threads: 8, cacheMb: 1024, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 128, overscan: 12, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 512, keepUsage: true,
+    thumbs: true, thumbPx: 128, overscan: 16, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 512, keepUsage: true,
     keepHardware: true, batterySaver: true, compactIdle: false,
-    description: "Built for speed on capable hardware: eight threads, a 1 GB cache, and generous preloading.",
+    description: "Built for speed on capable hardware: eight threads, a 1 GB cache, GPU zero-copy textures, and generous preloading.",
     recommendedFor: "Modern laptops and desktops with 16 GB of memory and eight cores, such as a recent Core i7 or Ryzen 7.",
     minRamGb: 16, minCores: 8, cpu: 70, memory: 20,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "auto", loadRefresh: "fast", prefetchMs: 35, thumbMs: 45, thumbQuality: "normal", prewarmImages: "auto", maxImageMb: 256,
+  },
   {
     id: "power", name: "Power", threads: 12, cacheMb: 2048, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 160, overscan: 16, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 1024, keepUsage: true,
+    thumbs: true, thumbPx: 160, overscan: 20, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 1024, keepUsage: true,
     keepHardware: true, batterySaver: false, compactIdle: false,
-    description: "Heavy use of the machine: twelve threads, a 2 GB cache, and it no longer slows down on battery.",
+    description: "Heavy use of the machine: twelve threads, a 2 GB cache, high scheduling priority, pre-decoded galleries, and no battery slowdown.",
     recommendedFor: "Workstations and gaming desktops with 16 to 32 GB of memory and twelve or more threads.",
     minRamGb: 16, minCores: 12, cpu: 80, memory: 25,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "high", loadRefresh: "fast", prefetchMs: 25, thumbMs: 25, thumbQuality: "sharp", prewarmImages: "on", maxImageMb: 512,
+  },
   {
     id: "excelling", name: "Excelling", threads: 16, cacheMb: 3072, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 192, overscan: 20, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 2048, keepUsage: true,
+    thumbs: true, thumbPx: 192, overscan: 30, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 2048, keepUsage: true,
     keepHardware: true, batterySaver: false, compactIdle: false,
-    description: "Sixteen threads and a 3 GB cache. Folders with tens of thousands of files open without a pause.",
+    description: "Sixteen threads, a 3 GB cache, native GPU acceleration and aggressive preloading so huge folders open without a pause.",
     recommendedFor: "High-end desktops and mobile workstations with 32 GB of memory, such as a Ryzen 9 or Core i9.",
     minRamGb: 32, minCores: 16, cpu: 85, memory: 30,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: true, procPriority: "high", loadRefresh: "fast", prefetchMs: 15, thumbMs: 15, thumbQuality: "sharp", prewarmImages: "on", maxImageMb: 1024,
+  },
   {
     id: "exceptional", name: "Exceptional", threads: 24, cacheMb: 4096, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 224, overscan: 24, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 4096, keepUsage: true,
+    thumbs: true, thumbPx: 224, overscan: 48, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 4096, keepUsage: true,
     keepHardware: true, batterySaver: false, compactIdle: false,
-    description: "Twenty-four threads, a 4 GB cache and very large thumbnails. Uses memory freely to avoid waiting.",
+    description: "Twenty-four threads, a 4 GB cache, uncapped VSync and full-folder pre-decoding. Uses CPU, GPU and memory freely to avoid waiting.",
     recommendedFor: "Workstations and servers with 48 GB of memory or more and 24 or more threads, for people who handle huge folders all day.",
     minRamGb: 48, minCores: 24, cpu: 90, memory: 40,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: false, procPriority: "high", loadRefresh: "fast", prefetchMs: 5, thumbMs: 5, thumbQuality: "sharp", prewarmImages: "on", maxImageMb: 0,
+  },
   {
     id: "godlike", name: "God-like", threads: 0, cacheMb: 0, index: true, allDrives: true, listings: true, prefetch: true,
-    thumbs: true, thumbPx: 256, overscan: 40, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 0, keepUsage: true,
+    thumbs: true, thumbPx: 256, overscan: 80, animations: true, folderSizes: true, sizeCache: true, thumbDiskMb: 0, keepUsage: true,
     keepHardware: true, batterySaver: false, compactIdle: false,
-    description: "Everything on and nothing held back: one thread per core, no limit on processor or memory use, the largest thumbnails and no thumbnail size limit. It will use a lot of memory if you let it.",
+    description: "Everything unlocked at maximum capacity: all CPU cores for I/O and thumbnail decoding, zero settle delays, uncapped frame pacing, high OS priority, GPU rasterization with zero-copy textures, and massive pre-rendering buffers.",
     recommendedFor: "Top-end workstations, render machines and servers with 64 GB of memory or more and 32 or more threads. Not for laptops on battery.",
     minRamGb: 64, minCores: 32, cpu: 0, memory: 0,
-},
+    renderBackend: "auto", hwAccel: true, gpuRaster: true, zeroCopy: true, vsync: false, procPriority: "high", loadRefresh: "fast", prefetchMs: 0, thumbMs: 0, thumbQuality: "sharp", prewarmImages: "on", maxImageMb: 0,
+  },
 ];
 
 function perfPatch(l: Level): Patch {
@@ -185,7 +210,16 @@ function perfPatch(l: Level): Patch {
     "performance.reduceOnBattery": l.batterySaver,
     // Machines that can spare it only halve the work while minimized; the rest drop to the minimum.
     "performance.backgroundMode": l.threads === 0 || l.threads >= 16 ? "gentle" : "aggressive",
+    "performance.renderBackend": l.renderBackend ?? "auto",
+    "performance.hardwareAcceleration": l.hwAccel ?? true,
+    "performance.gpuRasterization": l.gpuRaster ?? true,
+    "performance.zeroCopy": l.zeroCopy ?? (l.cacheMb === 0 || l.cacheMb >= 256),
+    "performance.vsync": l.vsync ?? true,
+    "performance.processPriority": l.procPriority ?? "auto",
     "advanced.perf.overscanRows": l.overscan,
+    "advanced.perf.prefetchDelayMs": l.prefetchMs ?? 70,
+    "advanced.perf.thumbDelayMs": l.thumbMs ?? 90,
+    "advanced.perf.loadRefresh": l.loadRefresh ?? "auto",
     "advanced.ui.animations": l.animations,
     "advanced.files.folderSizes": l.folderSizes,
     "advanced.files.sizeCache": l.sizeCache,
@@ -194,6 +228,9 @@ function perfPatch(l: Level): Patch {
     "advanced.thumbs.images": l.thumbs,
     "advanced.thumbs.documents": l.thumbs,
     "advanced.thumbs.videos": l.thumbs,
+    "advanced.thumbs.quality": l.thumbQuality ?? "normal",
+    "advanced.thumbs.prewarmImages": l.prewarmImages ?? "auto",
+    "advanced.thumbs.maxImageMb": l.maxImageMb ?? 64,
     "advanced.cache.thumbnails": l.thumbs,
     "advanced.cache.thumbnailsMaxMb": l.thumbDiskMb,
     "advanced.cache.usageSnapshots": l.keepUsage,
@@ -547,10 +584,50 @@ export function mobilePlatformFor(os: string | undefined, maker?: string): Platf
 // Applying presets and working with profiles
 // ---------------------------------------------------------------------------
 
+export const RENDERING_LOCKED_KEYS = new Set([
+  "performance.renderBackend",
+  "performance.hardwareAcceleration",
+  "performance.gpuRasterization",
+  "performance.zeroCopy",
+  "performance.vsync",
+  "performance.processPriority",
+]);
+
+export const PRESET_CONTROLLED_KEYS = new Set(Object.keys(PERF_PRESETS[0].patch));
+
+/** Whether a performance preset should skip `key` because the user locked it directly or via group lock. */
+export function isSettingLocked(settings: Settings, key: string): boolean {
+  if (key === "performance.backgroundMode" && settings.performance.backgroundLocked) return true;
+  if (RENDERING_LOCKED_KEYS.has(key) && settings.performance.renderingLocked) return true;
+  return (settings.performance.lockedKeys ?? []).includes(key);
+}
+
+/** Toggle the explicit per-setting preset lock (and handle group lock flags transparently). */
+export function toggleSettingLock(settings: Settings, key: string): void {
+  if (key === "performance.backgroundMode") {
+    settings.performance.backgroundLocked = !settings.performance.backgroundLocked;
+    return;
+  }
+  const current = new Set(settings.performance.lockedKeys ?? []);
+  if (isSettingLocked(settings, key)) {
+    if (RENDERING_LOCKED_KEYS.has(key) && settings.performance.renderingLocked) {
+      // Unpin this one key while keeping the rest of the rendering settings locked.
+      settings.performance.renderingLocked = false;
+      for (const k of RENDERING_LOCKED_KEYS) {
+        if (k !== key) current.add(k);
+      }
+    }
+    current.delete(key);
+  } else {
+    current.add(key);
+  }
+  settings.performance.lockedKeys = [...current];
+}
+
 /** Apply a preset's patch to a settings object (mutates it). */
 export function applyPatch(settings: Settings, patch: Patch): void {
   for (const [key, value] of Object.entries(patch)) {
-    if (key === "performance.backgroundMode" && settings.performance.backgroundLocked) continue;
+    if (isSettingLocked(settings, key)) continue;
     if (key === "keys") settings.keys = { ...(value as Record<string, string>) };
     else setSetting(settings, key, structuredClone(value));
   }
@@ -575,7 +652,7 @@ function stable(v: unknown): string {
 export function differences(settings: Settings, patch: Patch): string[] {
   return Object.entries(patch)
     .filter(([key, value]) => {
-      if (key === "performance.backgroundMode" && settings.performance.backgroundLocked) return false;
+      if (isSettingLocked(settings, key)) return false;
       if (key === "keys") return stable(sorted(settings.keys ?? {})) !== stable(sorted(value as Record<string, string>));
       return stable(getSetting(settings, key)) !== stable(value);
     })

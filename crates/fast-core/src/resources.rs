@@ -34,6 +34,7 @@ pub struct Budget {
     pub io_threads: usize,
     pub index_threads: usize,
     pub thumb_threads: usize,
+    pub slow_thumb_threads: usize,
     pub cache_mb: usize,
     /// Cap on indexed entries, derived from the cache budget.
     pub index_max_entries: usize,
@@ -45,6 +46,18 @@ pub struct Budget {
     /// How often a running transfer reports progress, in milliseconds. Slower
     /// on weak machines and laptops, where redrawing costs real battery and CPU.
     pub progress_ms: u64,
+    /// Max background thumbnail prewarm items (0 = unlimited).
+    pub prewarm_limit: usize,
+    /// Also prewarm picture thumbnails ahead of scroll on high tiers.
+    pub prewarm_images: bool,
+    /// Max folders prefetched speculatively in one batch.
+    pub prefetch_limit: usize,
+    /// Max folders inspected for emptiness per batch (0 = unlimited).
+    pub folder_fill_limit: usize,
+    /// Largest directory streaming batch before emitting IPC progress.
+    pub dir_batch_max: usize,
+    /// Normalized active resource level (0 = Barebones/Saver .. 100 = God-like/uncapped).
+    pub intensity: u8,
     /// The app is minimized or behind other windows and is running on a reduced budget.
     pub background: bool,
 }
@@ -60,6 +73,7 @@ impl Budget {
             io_threads: 2,
             index_threads: 1,
             thumb_threads: 1,
+            slow_thumb_threads: 1,
             cache_mb: 32,
             index_max_entries: 32 * 1024 * 1024 * 3 / 4 / BYTES_PER_ENTRY,
             listing_cache_dirs: 32,
@@ -67,6 +81,12 @@ impl Budget {
             prefetch: false,
             thumbnails: true,
             progress_ms: 500,
+            prewarm_limit: 64,
+            prewarm_images: false,
+            prefetch_limit: 1,
+            folder_fill_limit: 24,
+            dir_batch_max: 512,
+            intensity: 10,
             background: false,
         }
     }
@@ -96,20 +116,31 @@ pub fn dimmed(b: &Budget, mode: &str, attention: Attention) -> Budget {
             d.io_threads = (d.io_threads / 2).max(1);
             d.index_threads = (d.index_threads / 2).max(1);
             d.thumb_threads = 1;
+            d.slow_thumb_threads = 1;
             d.cache_mb = (d.cache_mb / 2).max(8);
             d.prefetch = false;
+            d.prefetch_limit = 0;
+            d.prewarm_images = false;
+            d.prewarm_limit = d.prewarm_limit.min(32);
             d.progress_ms = d.progress_ms.max(1000);
+            d.intensity = (d.intensity / 2).max(10);
         }
         _ => {
             d.io_threads = 1;
             d.index_threads = 1;
             d.thumb_threads = 1;
+            d.slow_thumb_threads = 1;
             d.cache_mb = d.cache_mb.min(32);
             d.listing_cache_dirs = d.listing_cache_dirs.min(32);
             d.background_indexing = false;
             d.prefetch = false;
+            d.prefetch_limit = 0;
             d.thumbnails = false;
+            d.prewarm_images = false;
+            d.prewarm_limit = 0;
+            d.folder_fill_limit = 16;
             d.progress_ms = d.progress_ms.max(if attention == Attention::Away { 2000 } else { 1000 });
+            d.intensity = 5;
         }
     }
     if d.index_max_entries != 0 {
@@ -134,17 +165,47 @@ pub fn compute(perf: &Performance, sys: &SystemSnapshot) -> Budget {
     };
     let cache_cap = if perf.max_cache_mb == 0 { usize::MAX } else { perf.max_cache_mb }.min(mem_cap);
     let uncapped = cache_cap == usize::MAX && perf.priority == "manual";
+    let full_cpu_uncapped = uncapped && perf.max_threads == 0 && perf.max_cpu_percent == 0;
 
-    let (tier, io, index, thumbs, cache_mb, bg, prefetch) = if perf.priority == "manual" {
+    let (tier, io, index, thumbs_raw, cache_mb, bg, prefetch, base_intensity) = if perf.priority == "manual" {
+        // Estimate tier intensity cleanly from manual thread/cache targets so higher tiers
+        // actively scale worker pools, batching, prewarm, and GPU flags up to God-like (100).
+        let intensity = if full_cpu_uncapped {
+            100
+        } else {
+            let thread_score = ((user_threads * 50) / cpus).min(50);
+            let cache_score = if cache_cap == usize::MAX {
+                50
+            } else {
+                match cache_cap {
+                    0..=32 => 5,
+                    33..=128 => 15,
+                    129..=512 => 28,
+                    513..=1024 => 36,
+                    1025..=2048 => 42,
+                    2049..=3072 => 45,
+                    _ => 48,
+                }
+            };
+            (thread_score + cache_score).clamp(5, 99) as u8
+        };
+        let thumb_target = if full_cpu_uncapped || intensity >= 90 {
+            user_threads
+        } else if intensity >= 70 {
+            (user_threads * 3 / 4).max(2)
+        } else {
+            (user_threads / 2).max(1)
+        };
         (
             Tier::Manual,
             user_threads,
             user_threads,
-            (user_threads / 2).max(1),
-            // With no cap the caches may take a quarter of the memory, and the index has no entry limit.
-            if uncapped { (sys.total_ram_mb as usize / 4).max(256) } else { cache_cap },
+            thumb_target,
+            // With no cap the caches may take half of installed memory, and the index has no entry limit.
+            if uncapped { (sys.total_ram_mb as usize / 2).max(512) } else { cache_cap },
             true,
             true,
+            intensity,
         )
     } else {
         let low_battery = sys.on_battery && sys.battery_percent.map(|p| p < 20.0).unwrap_or(false);
@@ -158,35 +219,96 @@ pub fn compute(perf: &Performance, sys: &SystemSnapshot) -> Budget {
         };
         let pct = |p: u64| (sys.total_ram_mb * p / 100) as usize;
         match tier {
-            Tier::Full => (tier, cpus.min(16), cpus, (cpus / 2).max(2), pct(5), true, true),
-            Tier::Balanced => (tier, (cpus / 2).max(2), (cpus / 2).max(1), 2, pct(2), !constrained, true),
-            _ => (tier, 2, 1, 1, 64, false, false),
+            Tier::Full => (tier, cpus.min(32), cpus, (cpus * 3 / 4).max(2), pct(10).max(256), true, true, 80),
+            Tier::Balanced => (tier, (cpus / 2).max(2), (cpus / 2).max(1), 2, pct(2), !constrained, true, 45),
+            _ => (tier, 2, 1, 1, 64, false, false, 15),
         }
     };
 
     // The user's limits are always an upper bound.
     let io = io.min(user_threads).max(1);
     let index = index.min(user_threads).max(1);
-    let thumbs = thumbs.min(user_threads).max(1);
+    let thumbs = thumbs_raw.min(user_threads).max(1);
+    let slow_thumbs = if base_intensity >= 95 {
+        thumbs
+    } else if base_intensity >= 70 {
+        thumbs.clamp(2, 16)
+    } else if base_intensity >= 40 {
+        thumbs.clamp(2, 6)
+    } else {
+        1
+    };
     let cache_mb = cache_mb.min(cache_cap).max(8);
+    let prefetch_on = prefetch && perf.predictive_prefetch && perf.metadata_caching;
 
     Budget {
         tier,
         io_threads: io,
         index_threads: index,
         thumb_threads: thumbs,
+        slow_thumb_threads: slow_thumbs,
         cache_mb,
         // 0 = no limit on how many entries the index holds.
         index_max_entries: if uncapped { 0 } else { cache_mb * 1024 * 1024 * 3 / 4 / BYTES_PER_ENTRY },
-        listing_cache_dirs: if perf.metadata_caching { (cache_mb * 2).clamp(32, if uncapped { 16_384 } else { 2048 }) } else { 0 },
-        background_indexing: bg && perf.background_indexing,
-        prefetch: prefetch && perf.predictive_prefetch && perf.metadata_caching,
-        thumbnails: perf.thumbnails,
-        progress_ms: match tier {
-            Tier::Full | Tier::Manual => 100,
-            Tier::Balanced => 250,
-            Tier::Saver => 500,
+        listing_cache_dirs: if perf.metadata_caching {
+            (cache_mb * 2).clamp(32, if uncapped { 65_536 } else { 8192 })
+        } else {
+            0
         },
+        background_indexing: bg && perf.background_indexing,
+        prefetch: prefetch_on,
+        thumbnails: perf.thumbnails,
+        progress_ms: if base_intensity >= 95 {
+            16
+        } else if base_intensity >= 75 {
+            33
+        } else {
+            match tier {
+                Tier::Full | Tier::Manual => 100,
+                Tier::Balanced => 250,
+                Tier::Saver => 500,
+            }
+        },
+        prewarm_limit: if base_intensity >= 95 {
+            0 // unlimited: prewarm the full folder
+        } else if base_intensity >= 75 {
+            1500
+        } else if base_intensity >= 45 {
+            300
+        } else {
+            64
+        },
+        prewarm_images: perf.thumbnails && base_intensity >= 75,
+        prefetch_limit: if !prefetch_on {
+            0
+        } else if base_intensity >= 95 {
+            64
+        } else if base_intensity >= 75 {
+            24
+        } else if base_intensity >= 45 {
+            8
+        } else {
+            2
+        },
+        folder_fill_limit: if base_intensity >= 95 {
+            0 // unlimited
+        } else if base_intensity >= 75 {
+            512
+        } else if base_intensity >= 45 {
+            192
+        } else {
+            48
+        },
+        dir_batch_max: if base_intensity >= 95 {
+            16_384
+        } else if base_intensity >= 75 {
+            8_192
+        } else if base_intensity >= 45 {
+            2_048
+        } else {
+            512
+        },
+        intensity: base_intensity,
         background: false,
     }
 }
@@ -318,8 +440,15 @@ mod tests {
         let perf = Performance { priority: "manual".into(), max_threads: 0, max_cache_mb: 0, ..Default::default() };
         let b = compute(&perf, &sys(32, 64, false, None));
         assert_eq!(b.io_threads, 32);
+        assert_eq!(b.thumb_threads, 32);
+        assert_eq!(b.slow_thumb_threads, 32);
         assert_eq!(b.index_max_entries, 0, "the index has no entry limit");
-        assert_eq!(b.cache_mb, 16 * 1024);
+        assert_eq!(b.prewarm_limit, 0, "prewarm has no item cap");
+        assert_eq!(b.folder_fill_limit, 0, "folder fill has no batch cap");
+        assert_eq!(b.cache_mb, 32 * 1024);
+        assert_eq!(b.intensity, 100);
+        assert_eq!(b.progress_ms, 16);
+        assert!(b.prewarm_images);
     }
 
     #[test]

@@ -179,6 +179,8 @@ export function useAppearance() {
     const flag = (name: string, on: boolean) => (on ? root.setAttribute(name, "") : root.removeAttribute(name));
     root.dataset.chrome = adv<string>(settings, "ui.chrome");
     root.dataset.motion = adv<boolean>(settings, "ui.animations") ? "on" : "off";
+    root.dataset.gpu = settings.performance.hardwareAcceleration && settings.performance.renderBackend !== "software" ? "on" : "off";
+    root.dataset.gpuTier = settings.performance.maxCacheMb === 0 && settings.performance.maxThreads === 0 && settings.performance.priority === "manual" ? "max" : settings.performance.maxCacheMb >= 2048 ? "high" : settings.performance.maxCacheMb >= 256 ? "mid" : "low";
     flag("data-zebra", adv<boolean>(settings, "ui.zebra"));
     flag("data-gridlines", adv<boolean>(settings, "ui.gridLines"));
     root.dataset.focus = adv<boolean>(settings, "ui.focusRing") ? "on" : "off";

@@ -249,7 +249,15 @@ pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String, ti
         }
         let entries = if ticket.is_some() {
             let at = p.to_string_lossy().into_owned();
-            entry::list_dir_streaming(&p, show_hidden, &cancel, &mut |e, pr| emit_chunk(&at, e.to_vec(), pr)).map_err(err)?
+            let (batch_max, io_threads) = {
+                let b = st.budget.read();
+                (b.dir_batch_max, b.io_threads)
+            };
+            let par_threshold = if io_threads >= 8 { 128 } else { 512 };
+            entry::list_dir_streaming_with(&p, show_hidden, &cancel, batch_max, par_threshold, &mut |e, pr| {
+                emit_chunk(&at, e.to_vec(), pr)
+            })
+            .map_err(err)?
         } else {
             entry::list_dir(&p, show_hidden).map_err(err)?
         };
@@ -282,14 +290,19 @@ pub async fn prefetch(state: State<'_, Shared>, paths: Vec<String>) -> CmdResult
 
 fn prefetch_now(st: &Shared, paths: Vec<String>) {
     let show_hidden = st.settings.read().general.show_hidden;
-    for path in paths.into_iter().take(8) {
+    let (limit, intensity) = {
+        let b = st.budget.read();
+        (b.prefetch_limit.max(1), b.intensity)
+    };
+    let max_entries = if intensity >= 80 { 100_000 } else { 20_000 };
+    for path in paths.into_iter().take(limit) {
         let p = PathBuf::from(path);
         if st.listings.lock().contains(&p) || cache_off(st, &p) || on_network(st, &p) {
             continue;
         }
         if let Ok(entries) = entry::list_dir(&p, show_hidden) {
-            // Huge folders are not worth holding speculatively.
-            if entries.len() <= 20_000 {
+            // Huge folders are not worth holding speculatively unless memory budget allows it.
+            if entries.len() <= max_entries {
                 st.listings.lock().put(p, Arc::new(entries), show_hidden);
             }
         }
@@ -641,7 +654,8 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
     }
     // A file on a server: fetch it (within a size limit) and make the thumbnail from the copy.
     if fast_core::remote::is_remote(&path) {
-        let _permit = st.thumb_permits.clone().acquire_owned().await.map_err(err)?;
+        let sem = st.thumb_permits.read().clone();
+        let _permit = sem.acquire_owned().await.map_err(err)?;
         let bytes = blocking(move || {
             let kind = thumbs::kind_of(Path::new(&path)).ok_or("no thumbnail for this kind of file")?;
             let (cap, key) = if kind == thumbs::Kind::Image { (advanced_u64(&st, "thumbs.maxImageMb", 64).min(25), "images") } else { (advanced_u64(&st, "thumbs.networkCopyMb", 200), "videos") };
@@ -665,7 +679,8 @@ pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> Cmd
     // Bounded concurrency: decoding is CPU-heavy and must not starve listing. Videos and documents wait in their own
     // lane, so a slow one never holds up the pictures behind it.
     let slow = thumbs::kind_of(Path::new(&path)).is_some_and(|k| k != thumbs::Kind::Image);
-    let _permit = if slow { st.slow_thumb_permits.clone() } else { st.thumb_permits.clone() }.acquire_owned().await.map_err(err)?;
+    let sem = if slow { st.slow_thumb_permits.read().clone() } else { st.thumb_permits.read().clone() };
+    let _permit = sem.acquire_owned().await.map_err(err)?;
     let bytes = blocking(move || {
         let keep = advanced_bool(&st, "cache.thumbnails", true) && !cache_off(&st, Path::new(&path));
         // Each kind of file can be switched off on its own (Settings > Thumbnails).
@@ -702,9 +717,13 @@ pub async fn folder_fill(state: State<'_, Shared>, paths: Vec<String>) -> CmdRes
     let st = state.inner().clone();
     blocking(move || {
         use rayon::prelude::*;
+        let limit = match st.budget.read().folder_fill_limit {
+            0 => paths.len(),
+            n => n,
+        };
         Ok(paths
             .par_iter()
-            .take(96)
+            .take(limit)
             .map(|p| {
                 if fast_core::remote::is_remote(p) || fast_core::browse::is_loc(p) || guard(&st, p).is_err() || on_network(&st, Path::new(p)) {
                     return fast_core::fill::Fill::Files;
@@ -716,36 +735,57 @@ pub async fn folder_fill(state: State<'_, Shared>, paths: Vec<String>) -> CmdRes
     .await
 }
 
-/// Prepare the pictures of the videos and documents in a folder in the background (kept in the thumbnail cache), so they
-/// are there when the tiles come into view. A newer call replaces an older one. Only files on this computer.
+/// Prepare the pictures of media and documents in a folder in the background (kept in the thumbnail cache),
+/// scaling worker count and queue depth to the active performance tier.
 #[tauri::command]
 pub async fn thumbs_prewarm(state: State<'_, Shared>, paths: Vec<String>, size: u32) -> CmdResult<()> {
     let st = state.inner().clone();
     let generation = st.prewarm_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    if !st.budget.read().thumbnails || !advanced_bool(&st, "cache.thumbnails", true) {
+    let (thumbnails_on, prewarm_limit, budget_prewarm_images) = {
+        let b = st.budget.read();
+        (b.thumbnails, b.prewarm_limit, b.prewarm_images)
+    };
+    if !thumbnails_on || !advanced_bool(&st, "cache.thumbnails", true) {
         return Ok(());
     }
+    let prewarm_imgs = match advanced_str(&st, "thumbs.prewarmImages", "auto").as_str() {
+        "on" => true,
+        "off" => false,
+        _ => budget_prewarm_images,
+    };
+    let take_n = if prewarm_limit == 0 { paths.len() } else { prewarm_limit };
     tauri::async_runtime::spawn(async move {
-        for path in paths.into_iter().take(300) {
+        for path in paths.into_iter().take(take_n) {
             if st.prewarm_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 return;
             }
             if fast_core::remote::is_remote(&path) || fast_core::remote::is_device(&path) || guard(&st, &path).is_err() || cache_off(&st, Path::new(&path)) || on_network(&st, Path::new(&path)) {
                 continue;
             }
-            let allowed = match thumbs::kind_of(Path::new(&path)) {
+            let kind = thumbs::kind_of(Path::new(&path));
+            let allowed = match kind {
                 Some(thumbs::Kind::Video) => advanced_bool(&st, "thumbs.videos", true),
                 Some(thumbs::Kind::Document) => advanced_bool(&st, "thumbs.documents", true),
-                _ => false,
+                Some(thumbs::Kind::Image) => prewarm_imgs && advanced_bool(&st, "thumbs.images", true),
+                None => false,
             };
             if !allowed {
                 continue;
             }
-            let Ok(permit) = st.slow_thumb_permits.clone().acquire_owned().await else { return };
+            let sem = if kind == Some(thumbs::Kind::Image) {
+                st.thumb_permits.read().clone()
+            } else {
+                st.slow_thumb_permits.read().clone()
+            };
+            let Ok(permit) = sem.acquire_owned().await else { return };
             let st2 = st.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let _permit = permit;
-                let opts = thumbs::Options { max_image_bytes: 0, video_percent: advanced_u64(&st2, "thumbs.videoPercent", 10).min(95) as u8 };
+                let max_bytes = advanced_u64(&st2, "thumbs.maxImageMb", 64) * 1024 * 1024;
+                let opts = thumbs::Options {
+                    max_image_bytes: if kind == Some(thumbs::Kind::Image) { max_bytes } else { 0 },
+                    video_percent: advanced_u64(&st2, "thumbs.videoPercent", 10).min(95) as u8,
+                };
                 let _ = thumbs::thumbnail_with(Path::new(&path), size, Some(st2.paths.thumbs.as_path()), &opts);
             });
         }
@@ -2385,9 +2425,13 @@ pub fn start_drive_watch(app: AppHandle, st: Shared) {
 }
 
 pub fn apply_budget(app: &AppHandle, st: &Shared) {
-    let (perf_mode, base) = {
+    let (perf_mode, proc_priority, base) = {
         let s = st.settings.read();
-        (s.performance.background_mode.clone(), resources::compute(&s.performance, &resources::snapshot()))
+        (
+            s.performance.background_mode.clone(),
+            s.performance.process_priority.clone(),
+            resources::compute(&s.performance, &resources::snapshot()),
+        )
     };
     let attention = match st.attention.load(Ordering::Relaxed) {
         0 => resources::Attention::Active,
@@ -2395,10 +2439,18 @@ pub fn apply_budget(app: &AppHandle, st: &Shared) {
         _ => resources::Attention::Away,
     };
     let budget = resources::dimmed(&base, &perf_mode, attention);
-    let changed = *st.budget.read() != budget;
+    fast_core::proc::apply_process_priority(&proc_priority, budget.intensity, budget.background);
+    let old = st.budget.read().clone();
+    let changed = old != budget;
     if changed {
-        let entering = budget.background && !st.budget.read().background;
+        let entering = budget.background && !old.background;
         st.listings.lock().set_capacity(budget.listing_cache_dirs);
+        if old.thumb_threads != budget.thumb_threads {
+            *st.thumb_permits.write() = Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1)));
+        }
+        if old.slow_thumb_threads != budget.slow_thumb_threads {
+            *st.slow_thumb_permits.write() = Arc::new(tokio::sync::Semaphore::new(budget.slow_thumb_threads.max(1)));
+        }
         *st.budget.write() = budget.clone();
         let _ = app.emit("budget-changed", budget);
         if entering && attention == resources::Attention::Away {
@@ -2467,6 +2519,8 @@ pub async fn set_settings(app: AppHandle, state: State<'_, Shared>, settings: Se
         }
         apply_budget(&app, &st);
         apply_transfer_limits(&st);
+        let rendering = fast_core::rendering::status(&st.settings.read().performance, &st.budget.read());
+        let _ = app.emit("rendering-changed", rendering);
         // Other windows (a detached Settings window, tabs in their own windows) follow.
         let _ = app.emit("settings-changed", st.settings.read().clone());
         Ok(())
@@ -2504,21 +2558,25 @@ pub struct AppInfo {
     system: SystemSnapshot,
     index: IndexStatus,
     thumbnail_types: &'static [&'static str],
+    rendering: fast_core::rendering::RenderingStatus,
 }
 
 #[tauri::command]
 pub async fn app_info(state: State<'_, Shared>) -> CmdResult<AppInfo> {
     let st = state.inner().clone();
     blocking(move || {
+        let budget = st.budget.read().clone();
+        let rendering = fast_core::rendering::status(&st.settings.read().performance, &budget);
         Ok(AppInfo {
             os: platform::os_name(),
             version: env!("CARGO_PKG_VERSION"),
             separator: std::path::MAIN_SEPARATOR,
             home: platform::home_dir().map(|p| p.to_string_lossy().into_owned()),
-            budget: st.budget.read().clone(),
+            budget,
             system: resources::snapshot(),
             index: st.index_status.lock().clone(),
             thumbnail_types: thumbs::supported_extensions(),
+            rendering,
         })
     })
     .await
@@ -2607,6 +2665,10 @@ pub fn trim_thumbnails(st: &crate::state::AppState) {
 
 pub(crate) fn advanced_u64(st: &crate::state::AppState, key: &str, default: u64) -> u64 {
     st.settings.read().advanced.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+}
+
+pub(crate) fn advanced_str(st: &crate::state::AppState, key: &str, default: &str) -> String {
+    st.settings.read().advanced.get(key).and_then(|v| v.as_str()).unwrap_or(default).to_string()
 }
 
 fn app_details(st: &crate::state::AppState) -> AppDetails {

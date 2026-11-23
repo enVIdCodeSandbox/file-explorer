@@ -641,6 +641,14 @@ export interface Settings {
     reduceOnBattery: boolean;
     backgroundMode: "off" | "gentle" | "aggressive";
     backgroundLocked: boolean;
+    renderBackend: "auto" | "directx12" | "directx11" | "vulkan" | "opengl" | "metal" | "software";
+    hardwareAcceleration: boolean;
+    gpuRasterization: boolean;
+    zeroCopy: boolean;
+    vsync: boolean;
+    processPriority: "auto" | "low" | "normal" | "high";
+    renderingLocked: boolean;
+    lockedKeys: string[];
   };
   updates: {
     enabled: boolean;
@@ -781,6 +789,7 @@ export interface Budget {
   ioThreads: number;
   indexThreads: number;
   thumbThreads: number;
+  slowThumbThreads: number;
   cacheMb: number;
   indexMaxEntries: number;
   listingCacheDirs: number;
@@ -788,7 +797,27 @@ export interface Budget {
   prefetch: boolean;
   thumbnails: boolean;
   progressMs?: number;
+  prewarmLimit: number;
+  prewarmImages: boolean;
+  prefetchLimit: number;
+  folderFillLimit: number;
+  dirBatchMax: number;
+  intensity: number;
   background?: boolean;
+}
+
+export interface RenderingStatus {
+  requestedBackend: string;
+  activeBackend: string;
+  launchBackend: string;
+  restartRequired: boolean;
+  hardwareAcceleration: boolean;
+  gpuRasterization: boolean;
+  zeroCopy: boolean;
+  vsync: boolean;
+  availableBackends: string[];
+  adapters: string[];
+  launchArgs: string;
 }
 
 export interface IndexStatus {
@@ -873,6 +902,7 @@ export interface AppInfo {
   };
   index: IndexStatus;
   thumbnailTypes: string[];
+  rendering?: RenderingStatus;
 }
 
 export type TerminalMode = "here" | "home" | "driveRoot" | "admin";
@@ -1254,6 +1284,7 @@ export interface BackendEvents {
   "fs-changed": string[];
   "index-status": IndexStatus;
   "budget-changed": Budget;
+  "rendering-changed": RenderingStatus;
   /** A drive was connected or removed, or the free space moved. */
   "drives-changed": { drives: Drive[]; devices: Device[]; added: string[]; removed: string[] };
   "search-hits": { id: number; hits: Hit[]; scanned: number; done: boolean };

@@ -36,6 +36,9 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    fast_core::rendering::configure_from_early_settings("dev.envid.fastfileexplorer");
+
     #[cfg_attr(mobile, allow(unused_mut))]
     let mut builder = tauri::Builder::default();
     // Starting the app again (or opening a folder with it) goes to the copy
@@ -84,14 +87,15 @@ pub fn run() {
             let session = Session::load(&paths.session);
             fast_core::openwith::load_app_defaults(&paths.open_defaults);
             let budget = resources::compute(&settings.performance, &resources::snapshot());
+            fast_core::proc::apply_process_priority(&settings.performance.process_priority, budget.intensity, false);
 
             let state = Arc::new(AppState {
                 listings: Mutex::new(ListingCache::new(budget.listing_cache_dirs)),
                 started: std::time::Instant::now(),
                 #[cfg(desktop)]
                 terminal: Default::default(),
-                thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1))),
-                slow_thumb_permits: Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.clamp(2, 6))),
+                thumb_permits: RwLock::new(Arc::new(tokio::sync::Semaphore::new(budget.thumb_threads.max(1)))),
+                slow_thumb_permits: RwLock::new(Arc::new(tokio::sync::Semaphore::new(budget.slow_thumb_threads.max(1)))),
                 prewarm_generation: Default::default(),
                 drives: RwLock::new(session.drives.clone()),
                 devices: RwLock::new(Vec::new()),

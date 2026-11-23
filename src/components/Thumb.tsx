@@ -85,7 +85,7 @@ let pumping = false;
 let limit = 2;
 
 export function setThumbParallelism(n: number) {
-  limit = Math.max(1, Math.min(8, n));
+  limit = Math.max(1, Math.min(64, n));
 }
 
 /** Thumbnail priority 1-5 (Settings > Thumbnails): how soon work starts, and how long it leaves gaps. */
@@ -101,7 +101,8 @@ const PRIORITY = {
 /** How many thumbnails to make at once for a priority, given the number of worker threads. */
 export function priorityParallelism(priority: number, threads: number): number {
   const p = PRIORITY[Math.max(1, Math.min(5, Math.round(priority))) as 1 | 2 | 3 | 4 | 5];
-  return Math.max(1, Math.min(8, p.extra === -99 ? 1 : threads + p.extra));
+  const cap = Math.max(8, Math.min(64, threads));
+  return Math.max(1, Math.min(cap, p.extra === -99 ? 1 : threads + p.extra));
 }
 export function setThumbPriority(priority: number) {
   const p = PRIORITY[Math.max(1, Math.min(5, Math.round(priority))) as 1 | 2 | 3 | 4 | 5];
@@ -187,8 +188,10 @@ export function Thumb({
   // On a powerful computer (the Full or Manual performance level) the medium, large and extra large views always show
   // thumbnails, whatever the per-view switches say; otherwise those switches decide.
   const strong = useStore((s) => s.budget?.tier === "full" || s.budget?.tier === "manual");
+  const cacheMb = useStore((s) => s.budget?.cacheMb ?? 256);
+  const intensity = useStore((s) => s.budget?.intensity ?? 50);
   const always = strong && adv<boolean>(settings, "thumbs.highPerfAlways") && (view === "medium" || view === "large" || view === "xl");
-  setThumbCacheSize(strong ? 3000 : 600);
+  setThumbCacheSize(intensity >= 95 ? 25000 : cacheMb >= 2048 ? 10000 : strong ? 3000 : 600);
   const wanted =
     !!kind && adv<boolean>(settings, `thumbs.${kind}`) && (always || adv<boolean>(settings, VIEW_SETTING[view])) && (device || networkThumbs(settings, link) || !onNetwork(path, drives));
   // A phone or camera on a cable follows the same thumbnail settings as any folder, except

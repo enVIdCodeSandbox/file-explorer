@@ -247,9 +247,9 @@ pub struct AppState {
     pub watch_sets: Mutex<HashMap<String, Vec<PathBuf>>>,
     /// Which window started each job: only that window is asked "replace this file?".
     pub job_owners: Mutex<HashMap<u64, String>>,
-    pub thumb_permits: Arc<tokio::sync::Semaphore>,
+    pub thumb_permits: RwLock<Arc<tokio::sync::Semaphore>>,
     /// Videos and documents render slowly, so they have their own lane and never hold up the pictures.
-    pub slow_thumb_permits: Arc<tokio::sync::Semaphore>,
+    pub slow_thumb_permits: RwLock<Arc<tokio::sync::Semaphore>>,
     /// Bumped each time a folder asks for its videos to be prepared; older runs stop.
     pub prewarm_generation: std::sync::atomic::AtomicU64,
     pub started: std::time::Instant,

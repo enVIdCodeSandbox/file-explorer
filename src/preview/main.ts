@@ -106,7 +106,7 @@ const info: AppInfo = {
   version: __APP_VERSION__,
   separator: sep,
   home: root,
-  budget: { tier: "balanced", ioThreads: 2, indexThreads: 1, thumbThreads: 1, cacheMb: 64, indexMaxEntries: 100_000, listingCacheDirs: 32, backgroundIndexing: false, prefetch: false, thumbnails: false, background: false },
+  budget: { tier: "balanced", ioThreads: 2, indexThreads: 1, thumbThreads: 1, slowThumbThreads: 1, cacheMb: 64, indexMaxEntries: 100_000, listingCacheDirs: 32, backgroundIndexing: false, prefetch: false, thumbnails: false, prewarmLimit: 64, prewarmImages: false, prefetchLimit: 2, folderFillLimit: 48, dirBatchMax: 512, intensity: 45, background: false },
   system,
   index: { state: "idle", entries: 0, memoryBytes: 0, builtAt: 0, truncated: false, roots: [], drivesReady: 0, drivesTotal: 0 },
   thumbnailTypes: [],
