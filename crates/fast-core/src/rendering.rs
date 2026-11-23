@@ -150,14 +150,22 @@ pub fn resolve_backend(requested: &str, hardware_acceleration: bool, tier: Tier,
         "opengl" if has("opengl") => "opengl".into(),
         _ => {
             // Auto: pick the fastest native GPU API matching the host and tier intensity.
-            if cfg!(target_os = "macos") && has("metal") {
-                return "metal".into();
+            if cfg!(target_os = "macos") {
+                if has("metal") {
+                    return "metal".into();
+                }
+                if has("opengl") {
+                    return "opengl".into();
+                }
+                return "software".into();
             }
-            if (tier == Tier::Full || tier == Tier::Manual || intensity >= 65) && has("directx12") {
-                return "directx12".into();
-            }
-            if has("directx11") {
-                return "directx11".into();
+            if cfg!(windows) {
+                if (tier == Tier::Full || tier == Tier::Manual || intensity >= 65) && has("directx12") {
+                    return "directx12".into();
+                }
+                if has("directx11") {
+                    return "directx11".into();
+                }
             }
             if has("vulkan") {
                 return "vulkan".into();
@@ -312,16 +320,20 @@ mod tests {
 
     #[test]
     fn resolves_native_backends_with_fallbacks() {
-        let avail: Vec<String> = ["auto", "directx12", "directx11", "vulkan", "opengl", "software"].iter().map(|s| (*s).into()).collect();
+        let avail: Vec<String> = ["auto", "directx12", "directx11", "metal", "vulkan", "opengl", "software"].iter().map(|s| (*s).into()).collect();
         assert_eq!(resolve_backend("vulkan", true, Tier::Full, 80, &avail), "vulkan");
         assert_eq!(resolve_backend("directx12", true, Tier::Full, 80, &avail), "directx12");
         assert_eq!(resolve_backend("directx12", false, Tier::Full, 80, &avail), "software");
         assert_eq!(resolve_backend("software", true, Tier::Full, 100, &avail), "software");
         let auto_hi = resolve_backend("auto", true, Tier::Manual, 100, &avail);
         if cfg!(target_os = "macos") {
-            assert_eq!(auto_hi, "opengl"); // mock avail omitted metal
-        } else {
+            assert_eq!(auto_hi, "metal");
+            let no_metal: Vec<String> = ["auto", "opengl", "software"].iter().map(|s| (*s).into()).collect();
+            assert_eq!(resolve_backend("auto", true, Tier::Manual, 100, &no_metal), "opengl");
+        } else if cfg!(windows) {
             assert_eq!(auto_hi, "directx12");
+        } else {
+            assert_eq!(auto_hi, "vulkan");
         }
     }
 
