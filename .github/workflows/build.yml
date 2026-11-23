@@ -24,42 +24,58 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Avoid storing bulky incremental compilation trees in the Actions cache.
+  CARGO_INCREMENTAL: 0
+  # Keep file:line backtraces in CI tests while cutting debuginfo size and link time.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Link Linux binaries with lld instead of single-threaded GNU ld.
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=lld
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: clang
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=lld
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # Linux gates the build. Windows and macOS results are reported but do not
-    # block the builds, so one platform-specific test cannot stop a release.
-    continue-on-error: ${{ matrix.os != 'ubuntu-22.04' }}
+    name: Test (ubuntu-22.04)
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install Linux dependencies
-        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      # The engine has no system dependencies, so it is tested on every OS.
-      # The desktop shell is also compiled and tested where its libraries exist.
-      - name: Test the engine
-        if: "!startsWith(matrix.os, 'ubuntu')"
-        run: cargo test -p fast-core
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Test the engine and the desktop shell
-        if: startsWith(matrix.os, 'ubuntu')
         run: cargo test --workspace
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # Windows and macOS engine tests run in parallel with packaging so slower
+  # non-gating runners do not delay installers.
+  test-platforms:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Test the engine
+        run: cargo test -p fast-core
 
   bundle:
     name: Build (${{ matrix.name }})
@@ -116,6 +132,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.artifact }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -124,7 +141,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       # macOS: try the signing certificate in a throwaway keychain first. If it cannot be
       # imported (wrong base64, wrong password, no private key) the build goes ahead
