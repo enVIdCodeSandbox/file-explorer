@@ -48,10 +48,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Cache Linux apt packages
+        uses: actions/cache@v4
+        with:
+          path: /tmp/apt-cache
+          key: apt-${{ runner.os }}-${{ runner.arch }}-v1
       - name: Install Linux dependencies
         run: |
+          mkdir -p /tmp/apt-cache/partial
+          sudo rm -f /etc/apt/apt.conf.d/docker-clean
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends -o Dir::Cache::Archives=/tmp/apt-cache libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo rm -rf /tmp/apt-cache/partial /tmp/apt-cache/lock
       - name: Test the engine and the desktop shell
         run: cargo test --workspace
       - run: npm ci
@@ -79,7 +87,6 @@ jobs:
 
   bundle:
     name: Build (${{ matrix.name }})
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -137,11 +144,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Cache Linux apt packages
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/cache@v4
+        with:
+          path: /tmp/apt-cache
+          key: apt-${{ runner.os }}-${{ runner.arch }}-v1
       - name: Install Linux dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
+          mkdir -p /tmp/apt-cache/partial
+          sudo rm -f /etc/apt/apt.conf.d/docker-clean
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends -o Dir::Cache::Archives=/tmp/apt-cache libwebkit2gtk-4.1-dev build-essential clang lld curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo rm -rf /tmp/apt-cache/partial /tmp/apt-cache/lock
       - run: npm ci
       # macOS: try the signing certificate in a throwaway keychain first. If it cannot be
       # imported (wrong base64, wrong password, no private key) the build goes ahead
@@ -233,19 +249,18 @@ jobs:
   # same release as the installers. See mobile.yml. Not built for pull requests.
   mobile:
     name: Mobile
-    needs: test
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/mobile.yml
     secrets: inherit
 
   release:
     name: Publish release
-    needs: [bundle, mobile]
+    needs: [test, bundle, mobile]
     # Only real builds of the main line: not pull requests, not side branches. A version tag
     # pushed by hand (git tag v0.3.0 && git push origin v0.3.0) is published the same way.
-    # The desktop installers are required. The phone packages are attached when they built;
-    # if one of them failed the release is still published without it, with a warning.
-    if: ${{ !cancelled() && needs.bundle.result == 'success' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+    # The desktop installers and Linux tests are required. The phone packages are attached when
+    # they built; if one of them failed the release is still published without it, with a warning.
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.bundle.result == 'success' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write

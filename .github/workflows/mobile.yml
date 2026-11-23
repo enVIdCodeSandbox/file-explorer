@@ -43,11 +43,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # The runner already has the Android SDK; add the exact NDK the build is tested with.
+      # The runner already has the Android SDK; add the exact NDK only when not already present.
       - name: Install the Android NDK
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platform-tools"
+          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platform-tools"
+          fi
           echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
       - run: npm ci
       - name: Generate the Android project
@@ -89,7 +91,7 @@ jobs:
           path: |
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'scripts/mobile-setup.mjs') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('scripts/mobile-setup.mjs', 'scripts/gradle-mirror.init.gradle') }}
           restore-keys: gradle-${{ runner.os }}-
       - name: Build the .apk (64-bit and 32-bit ARM)
         # Gradle downloads its tools from the internet on every fresh runner, and that now and then fails for reasons
@@ -138,7 +140,17 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install the tools Tauri uses to make the Xcode project
-        run: brew install xcodegen cocoapods libimobiledevice || true
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          missing=()
+          for pkg in xcodegen cocoapods libimobiledevice; do
+            brew list "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            brew install "${missing[@]}" || true
+          fi
       - run: npm ci
       - name: Generate the Xcode project
         run: |
