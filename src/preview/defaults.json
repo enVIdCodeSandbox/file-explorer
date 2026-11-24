@@ -105,7 +105,7 @@
   "profiles": [],
   "activeProfile": "",
   "setupDone": false,
-  "macAccess": { "asked": false, "off": [] },
+  "macAccess": { "asked": false, "dismissed": false, "off": [] },
   "updates": {
     "enabled": true,
     "checkOnOpen": true,

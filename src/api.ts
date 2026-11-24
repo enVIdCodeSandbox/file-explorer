@@ -711,10 +711,23 @@ export interface Settings {
 }
 
 export interface MacAccessSettings {
-  /** The permission screen was shown once; it never appears by itself again. */
+  /** The permission screen has been shown at least once. */
   asked: boolean;
+  /** "Do not show this at startup" was chosen; otherwise the screen returns at each launch until access works. */
+  dismissed?: boolean;
+  /** Full Disk Access has worked at least once. */
+  verified?: boolean;
+  /** Kinds of folder allowed one by one, and who macOS thought the app was at the time. */
+  granted?: string[];
+  grantedFor?: string;
   /** Kinds of folder the person does not want searched, sized or watched in the background. */
   off: string[];
+}
+
+export interface AskResult {
+  folders: AskedFolder[];
+  granted: string[];
+  token: string;
 }
 
 export interface AskedFolder {
@@ -738,6 +751,8 @@ export interface AccessStatus {
   categories: AccessCategory[];
   /** Why a permission given to the app where it runs now would not count (run from a download or disk image). */
   problem?: string | null;
+  /** "perBuild": no developer signature, so macOS forgets permissions when the app is updated. */
+  identity?: "stable" | "perBuild" | "unknown";
 }
 
 export interface Profile {
@@ -1012,7 +1027,7 @@ export const api = {
   accessOpenPane: (pane: "fullDisk" | "files" | "photos" | "media") => invoke<void>("access_open_pane", { pane }),
   accessRevealApp: () => invoke<void>("access_reveal_app"),
   accessResetGrant: () => invoke<void>("access_reset_grant"),
-  accessAskFolders: () => invoke<AskedFolder[]>("access_ask_folders"),
+  accessAskFolders: () => invoke<AskResult>("access_ask_folders"),
   restartApp: () => invoke<void>("restart_app"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),
   openDeviceInSystem: (open: string) => invoke<void>("open_device_in_system", { open }),

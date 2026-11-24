@@ -328,7 +328,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             <Icon name="search" size={14} />
             <input autoFocus={!isMobileNow()} value={query} placeholder="Search settings" aria-label="Search settings" onChange={(e) => setQuery(e.target.value)} />
           </div>
-          {SECTIONS.map((s) => (
+          {SECTIONS.filter((s) => available.some((d) => d.section === s)).map((s) => (
             <button
               key={s}
               className="side-item"

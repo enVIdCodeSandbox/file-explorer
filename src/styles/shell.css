@@ -1233,3 +1233,9 @@ body[data-terminal-dragging] * { cursor: grabbing !important; }
 .term-window { height: 100vh; display: flex; flex-direction: column; background: var(--surface); }
 .term-window .term-body { flex: 1; min-height: 0; }
 @media (prefers-reduced-motion: reduce) { .terminal-drop-ghost { transition: none; } }
+
+/* ---- macOS: the blurred toolbar and sidebar are boxes of their own (backdrop-filter), painted in page order, so
+   anything that hangs out of them (the search suggestions, the address suggestions, the actions panel) went
+   underneath the file list. Raising them above the content, below dialogs, puts those back on top. ---- */
+:root[data-chrome="macos"] .toolbar { position: relative; z-index: 45; }
+:root[data-chrome="macos"] .sidebar-wrap { position: relative; z-index: 40; }

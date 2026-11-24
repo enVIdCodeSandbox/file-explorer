@@ -59,6 +59,8 @@ pub fn run() {
             let paths = Paths::new(&config, &cache);
             // Before anything else: paint the window the theme's color and show it, so it never flashes white.
             let settings = Settings::load(&paths.settings);
+            // What the person allowed folder by folder is used from the first moment (and dropped if macOS has forgotten it).
+            fast_core::access::set_granted_from(&settings.mac_access.granted, &settings.mac_access.granted_for);
             #[cfg(desktop)]
             if let Some(w) = app.get_webview_window("main") {
                 let dark = theme::system_dark(&w);

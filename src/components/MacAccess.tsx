@@ -8,8 +8,8 @@ import { api, type AccessStatus, type AskedFolder } from "../api";
 import { useStore } from "../store";
 
 /** The current permission state. It is looked at again when the window comes back, which is when the person returns
- * from System Settings. */
-export function useAccess(): { status: AccessStatus | null; refresh: () => void } {
+ * from System Settings, and, with `poll`, every couple of seconds (only while a screen that needs it is open). */
+export function useAccess(poll = false): { status: AccessStatus | null; refresh: () => void } {
   const [status, setStatus] = useState<AccessStatus | null>(null);
   const refresh = useCallback(() => {
     api.accessStatus(true).then(setStatus).catch(() => setStatus(null));
@@ -17,25 +17,26 @@ export function useAccess(): { status: AccessStatus | null; refresh: () => void 
   useEffect(() => {
     refresh();
     window.addEventListener("focus", refresh);
-    // While access is not on, look again every couple of seconds: the switch in System Settings is noticed at once,
-    // with no need to press "check again". (Reading Safari's folder to test it never shows a prompt.)
+    return () => window.removeEventListener("focus", refresh);
+  }, [refresh]);
+  useEffect(() => {
+    if (!poll) return;
+    // The switch in System Settings is noticed at once, with no need to press "check again". (Reading Safari's folder to
+    // test it never shows a prompt.)
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") refresh();
     }, 2500);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      window.clearInterval(timer);
-    };
-  }, [refresh]);
+    return () => window.clearInterval(timer);
+  }, [poll, refresh]);
   return { status, refresh };
 }
 
-/** Remember that the screen was shown, so it never comes back by itself. */
-export function markAsked() {
+/** Change what is remembered about this screen. */
+function remember(patch: Partial<{ asked: boolean; dismissed: boolean; verified: boolean; granted: string[]; grantedFor: string }>) {
   const { settings, updateSettings, saveSettings } = useStore.getState();
-  if (!settings || settings.macAccess?.asked) return;
-  updateSettings((s) => {
-    s.macAccess = { ...(s.macAccess ?? { off: [] }), asked: true };
+  if (!settings) return;
+  updateSettings((st) => {
+    st.macAccess = { ...(st.macAccess ?? { off: [] }), asked: true, ...patch };
   });
   saveSettings();
 }
@@ -50,7 +51,11 @@ function AskFolders({ refresh }: { refresh: () => void }) {
   const go = async () => {
     setBusy(true);
     try {
-      setResult(await api.accessAskFolders());
+      const r = await api.accessAskFolders();
+      setResult(r.folders);
+      // Kept, so search, sizes and previews use the folders that were allowed (each covers everything inside it), and
+      // so the app knows when macOS has forgotten them.
+      remember({ granted: r.granted, grantedFor: r.token });
     } catch (e) {
       useStore.getState().showToast(String(e));
     } finally {
@@ -76,19 +81,40 @@ function AskFolders({ refresh }: { refresh: () => void }) {
   );
 }
 
-/** The steps and buttons, used by the screen and by Settings. */
+/** Whether access really works for the running app, as far as the app can tell (it tries to read a folder only
+ * Full Disk Access opens), and what to do about it when it does not. */
 function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void }) {
+  const unstable = status.identity === "perBuild";
+  const forgot = useStore((s) => s.settings?.macAccess?.verified ?? false);
+  const startOver = () =>
+    void ask(async () => {
+      await api.accessResetGrant();
+      if (status.appPath) await api.accessRevealApp().catch(() => {});
+      await api.accessOpenPane("fullDisk");
+      refresh();
+    });
   return status.fullAccess ? (
     <>
-      <p className="dialog-message">
-        Full access is on. FAST File Explorer can open every folder without asking again. If this was only just switched on, restart the app once so it takes effect everywhere.
+      <p className="dialog-message access-ok" role="status">
+        <strong>Working.</strong> FAST File Explorer can open every folder without asking. (Checked just now by reading a folder that only Full Disk Access opens.)
       </p>
       <div className="dialog-buttons">
-        <button className="primary" onClick={() => void ask(api.restartApp)}>Restart now</button>
+        <button className="secondary" onClick={() => void ask(api.restartApp)}>Restart the app</button>
       </div>
     </>
   ) : (
     <>
+      <p className="access-warning" role="status">
+        {forgot ? (
+          <>
+            <strong>macOS forgot the permission.</strong> It worked before, and an update made macOS treat this as a new app. Switch it on again once (remove the old entry first if it still shows as on); this screen goes away when it works.
+          </>
+        ) : (
+          <>
+            <strong>Not working yet.</strong> macOS is still refusing this copy of the app, so it will keep asking folder by folder. This screen goes away only when that has been checked and works.
+          </>
+        )}
+      </p>
       {status.problem && (
         <p className="access-warning" role="alert">
           <strong>Move the app first. </strong>
@@ -96,77 +122,98 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
         </p>
       )}
       <ol className="access-steps">
-        <li>Press <strong>Allow access to all folders</strong>. System Settings opens on Full Disk Access.</li>
-        <li>Switch on <strong>FAST File Explorer</strong> in the list. If it is not there, press <strong>Show the app in Finder</strong> and drag it into the list.</li>
-        <li>Come back and press <strong>Restart</strong>. macOS then never asks again, for any folder or drive.</li>
+        <li>Press <strong>Open Full Disk Access</strong>. System Settings opens on that list.</li>
+        <li>Switch on <strong>FAST File Explorer</strong>. If it is missing, press <strong>Show the app in Finder</strong> and drag it into the list.</li>
+        <li>If it already shows as on but this screen still says <em>Not working yet</em>, the entry belongs to an earlier version of the app{unstable ? " (this build has no developer signature, so macOS ties every permission to one exact build)" : ""}. Press <strong>Remove the old entry and start over</strong>, then switch it on again.</li>
+        <li>This screen notices by itself. If it does not, press <strong>Check again</strong> or restart the app.</li>
       </ol>
       <div className="dialog-buttons access-buttons">
-        <button className="primary" onClick={() => void ask(() => api.accessOpenPane("fullDisk"))}>Allow access to all folders</button>
+        <button className="primary" onClick={() => void ask(() => api.accessOpenPane("fullDisk"))}>Open Full Disk Access</button>
+        <button className="secondary" onClick={startOver}>Remove the old entry and start over</button>
         {status.appPath && <button className="secondary" onClick={() => void ask(api.accessRevealApp)}>Show the app in Finder</button>}
-        <button className="secondary" onClick={refresh}>I did it: check again</button>
+        <button className="secondary" onClick={refresh}>Check again</button>
+        <button className="secondary" onClick={() => void ask(api.restartApp)}>Restart the app</button>
       </div>
-      <details className="access-trouble">
-        <summary>Switched on, and macOS still asks?</summary>
+      {unstable && (
         <p className="muted">
-          An entry in the list can look switched on and still belong to an earlier version of the app: each new build of an app without a developer signature is a different app to macOS. Press the button to remove the old entry, then switch the new one on and restart. The default file manager setting and Full Disk Access both need the app to stay in the Applications folder.
+          Why this keeps coming back after updates: this copy of the app has no developer signature, so macOS treats each new version as a different app and forgets what it was allowed. The person who builds the app can fix that for good with a signing certificate (scripts/make-mac-signing-cert.sh).
         </p>
-        <div className="dialog-buttons access-buttons">
-          <button
-            className="secondary"
-            onClick={() =>
-              void ask(async () => {
-                await api.accessResetGrant();
-                if (status.appPath) await api.accessRevealApp().catch(() => {});
-                await api.accessOpenPane("fullDisk");
-                refresh();
-              })
-            }
-          >
-            Remove the old entry and start over
-          </button>
-        </div>
-      </details>
+      )}
       <AskFolders refresh={refresh} />
     </>
   );
 }
 
-/** Shown once, at the very first launch or the first launch after an update that adds it, and never again by itself. */
+/** Shown at every launch until access has been verified, or until "Do not show this at startup" is chosen. Settings >
+ * macOS permissions always has the same screen. */
 export function MacAccessPrompt() {
   const settings = useStore((s) => s.settings);
-  const { status, refresh } = useAccess();
   const [open, setOpen] = useState(false);
-  const asked = settings?.macAccess?.asked ?? true;
+  const [leftAlone, setLeftAlone] = useState(false);
+  const { status, refresh } = useAccess(open);
+  const dismissed = settings?.macAccess?.dismissed ?? false;
+  const verified = settings?.macAccess?.verified ?? false;
+
+  // Remember that it worked, so that if macOS forgets it later (an update) the screen can say exactly that.
+  useEffect(() => {
+    if (settings && status?.applies && status.fullAccess && !verified) remember({ verified: true });
+  }, [settings, status, verified]);
 
   useEffect(() => {
-    if (open || !settings || asked || !status?.applies || status.fullAccess) return;
+    if (open || leftAlone || !settings || dismissed || !status?.applies || status.fullAccess) return;
     setOpen(true);
-    // Marked at once: even if the window is closed some other way, it does not come back.
-    markAsked();
-  }, [open, settings, asked, status]);
+    remember({ asked: true });
+  }, [open, leftAlone, settings, dismissed, status]);
+
+  // It closes itself once access works, after showing the result for a moment.
+  useEffect(() => {
+    if (!open || !status?.fullAccess) return;
+    const t = window.setTimeout(() => setOpen(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [open, status?.fullAccess]);
 
   if (!open || !status) return null;
-  const close = () => setOpen(false);
+  const later = () => {
+    setOpen(false);
+    setLeftAlone(true);
+    if (!status.fullAccess) {
+      useStore.getState().notify("error", "macOS will keep asking for each folder", "Full Disk Access is not working yet.", {
+        important: true,
+        seconds: 30,
+        actions: [
+          {
+            label: "Set it up",
+            run: () => {
+              useStore.setState({ settingsSection: "macOS permissions" });
+              useStore.getState().openSettings();
+            },
+          },
+        ],
+      });
+    }
+  };
   return (
-    <div className="modal-backdrop" onMouseDown={close}>
-      <div className="dialog access-dialog" role="dialog" aria-modal="true" aria-label="Allow access to all folders" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => (e.key === "Escape" && close(), e.stopPropagation())}>
+    <div className="modal-backdrop" onMouseDown={later}>
+      <div className="dialog access-dialog" role="dialog" aria-modal="true" aria-label="Allow access to all folders" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => (e.key === "Escape" && later(), e.stopPropagation())}>
         <h3>Let FAST File Explorer open your folders</h3>
         <p className="dialog-message">
-          macOS asks for permission folder by folder (Desktop, Documents, Downloads, Music, Photos, iCloud Drive and each external drive) every time something looks inside them. One permission now stops all of that. You decide here, once; this screen does not come back, and you can change it any time under Settings, Permissions.
+          macOS asks permission folder by folder (Desktop, Documents, Downloads, Music, Photos, iCloud Drive, each external drive) every time something looks inside them. Full Disk Access is one switch that stops all of it. Settings, macOS permissions, has this screen whenever you want it.
         </p>
         <Steps status={status} refresh={refresh} />
         <div className="dialog-buttons">
-          <button className="secondary" onClick={close}>{status.fullAccess ? "Close" : "Not now"}</button>
+          <button className="secondary" onClick={() => { remember({ dismissed: true }); setOpen(false); }}>Do not show this at startup</button>
+          <button className="secondary" onClick={later}>{status.fullAccess ? "Close" : "Not now"}</button>
         </div>
       </div>
     </div>
   );
 }
 
-/** Settings > Permissions. */
+/** Settings > macOS permissions. */
 export function MacAccessPanel() {
-  const { status, refresh } = useAccess();
+  const { status, refresh } = useAccess(true);
   const off = useStore((s) => s.settings?.macAccess?.off ?? []);
+  const dismissed = useStore((s) => s.settings?.macAccess?.dismissed ?? false);
   if (!status) return <p className="muted">Looking…</p>;
   if (!status.applies) return <p className="muted">This system has no per-folder permissions to set. Programs can open what your account can open.</p>;
   const toggle = (id: string, on: boolean) => {
@@ -179,11 +226,11 @@ export function MacAccessPanel() {
   };
   return (
     <div className="access-panel">
-      <p>
-        <strong>{status.fullAccess ? "Full access is on." : "Full access is off."}</strong>{" "}
-        <span className="muted">{status.fullAccess ? "The app opens every folder without asking." : "macOS asks about each kind of folder, and search, folder sizes and Disk Usage stay out of the protected ones."}</span>
-      </p>
       <Steps status={status} refresh={refresh} />
+      <label className="check-row">
+        <input type="checkbox" checked={!dismissed} onChange={(e) => remember({ dismissed: !e.target.checked })} />
+        <span>Show the permission screen when the app starts, until access works</span>
+      </label>
       <p className="muted">Other permissions the app can ask for, and where to change any of them yourself in System Settings, Privacy & Security:</p>
       <div className="dialog-buttons access-buttons">
         <button className="secondary" onClick={() => void ask(() => api.accessOpenPane("files"))}>Files and Folders</button>

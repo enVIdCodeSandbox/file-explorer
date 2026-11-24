@@ -2,6 +2,7 @@
 // options"), drawn with Windows 11's rounded, translucent look.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icons";
 
 export interface MenuItem {
@@ -167,12 +168,16 @@ export function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () =>
     };
   }, [onClose]);
 
-  return (
+  // Drawn straight into the page, not where it was asked for: the macOS toolbar and sidebar blur what is behind them
+  // (backdrop-filter), which makes them a box of their own that a menu inside cannot rise out of, so the file list
+  // painted over it and its position was measured from the toolbar instead of the window.
+  return createPortal(
     <div className="menu-backdrop" onMouseDown={onClose} onContextMenu={(e) => (e.preventDefault(), onClose())}>
       <div onMouseDown={(e) => e.stopPropagation()}>
         <Panel items={menu.items} x={menu.x} y={menu.y} depth={0} onClose={onClose} />
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

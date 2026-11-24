@@ -43,9 +43,20 @@ pub struct Settings {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MacAccess {
-    /// The permission screen has been shown once (in the first-run setup, or on the first launch of an existing
-    /// install). It is never shown by itself again; Settings keeps its buttons.
+    /// The permission screen has been shown at least once.
     pub asked: bool,
+    /// The person chose "Do not show this at startup": the screen stays away even though access is not working yet.
+    /// Without that choice it comes back at every launch until access is verified; Settings > macOS permissions
+    /// always has it.
+    pub dismissed: bool,
+    /// Full Disk Access has worked at least once, so when it stops (an update makes macOS forget it) the screen can say so.
+    pub verified: bool,
+    /// Kinds of folder the person allowed one by one, as macOS reported when it was asked (ids from `access::categories`).
+    /// macOS applies each to everything inside the folder; the app remembers them so background work can use them.
+    pub granted: Vec<String>,
+    /// Who macOS thought the app was when `granted` was written (`access::identity_token`). If it differs now, macOS has
+    /// forgotten those answers and they are not trusted.
+    pub granted_for: String,
     /// Kinds of folder (ids from `access::categories`) the person does not want searched, sized or watched in the
     /// background even though the app is allowed to.
     pub off: Vec<String>,

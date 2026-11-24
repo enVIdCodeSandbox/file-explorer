@@ -182,13 +182,15 @@ pub fn background_ok(path: &Path, off: &[String]) -> bool {
     if !applies() {
         return true;
     }
-    background_ok_with(path, off, home().as_deref(), full_access)
+    background_ok_with(path, off, home().as_deref(), full_access, granted)
 }
 
-fn background_ok_with(path: &Path, off: &[String], home: Option<&Path>, full: impl Fn() -> bool) -> bool {
+/// A category is open to background work when the person has not switched it off and the app can really open it: through
+/// Full Disk Access, or because that folder was allowed (which macOS applies to everything inside it, to any depth).
+fn background_ok_with(path: &Path, off: &[String], home: Option<&Path>, full: impl Fn() -> bool, was_granted: impl Fn(&str) -> bool) -> bool {
     match category_of(path, home) {
         None => true,
-        Some(cat) => full() && !off.iter().any(|o| o == cat),
+        Some(cat) => !off.iter().any(|o| o == cat) && (full() || was_granted(cat)),
     }
 }
 
@@ -209,7 +211,7 @@ pub fn skip_list(off: &[String]) -> Vec<PathBuf> {
         ("library", home.join("Library")),
     ];
     let full = full_access();
-    all.into_iter().filter(|(cat, _)| !full || off.iter().any(|o| o == cat)).map(|(_, p)| p).collect()
+    all.into_iter().filter(|(cat, _)| off.iter().any(|o| o == cat) || !(full || granted(cat))).map(|(_, p)| p).collect()
 }
 
 /// Mounted volumes background work must stay out of (everything under /Volumes except the system disk's link).
@@ -288,6 +290,96 @@ pub fn location_problem(app: &Path, home: Option<&Path>) -> Option<&'static str>
     None
 }
 
+/// How steady the app's identity is, which decides whether a permission given once survives an update.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Identity {
+    /// Signed with a certificate: the same app after every update.
+    Stable,
+    /// No developer signature: macOS knows this exact build and nothing else, so a permission is forgotten at the next update
+    /// (and a switch that looks on in System Settings can belong to an earlier build).
+    PerBuild,
+    /// Could not be told.
+    Unknown,
+}
+
+/// What a designated requirement says about the identity (the text `codesign -dr -` prints).
+pub fn classify_requirement(text: &str) -> Identity {
+    let t = text.trim();
+    if t.is_empty() || t.contains("not signed") {
+        return Identity::PerBuild;
+    }
+    if !t.contains("designated =>") {
+        return Identity::Unknown;
+    }
+    if t.contains("cdhash") && !t.contains("certificate") && !t.contains("anchor") {
+        Identity::PerBuild
+    } else {
+        Identity::Stable
+    }
+}
+
+/// The text of the running app's designated requirement (what macOS remembers a permission against), looked up once.
+/// Empty where there is none to read.
+fn requirement() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| {
+        let Some(app) = app_bundle().filter(|_| applies()) else { return String::new() };
+        match std::process::Command::new("/usr/bin/codesign").args(["-d", "-r", "-"]).arg(&app).output() {
+            // The requirement is printed on stdout; "not signed" goes to stderr.
+            Ok(o) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+            Err(_) => String::new(),
+        }
+    })
+}
+
+/// The running app's identity kind.
+pub fn identity() -> Identity {
+    if !applies() {
+        return Identity::Stable;
+    }
+    if app_bundle().is_none() {
+        return Identity::Unknown;
+    }
+    classify_requirement(requirement())
+}
+
+/// A short name for who macOS thinks this app is. It is the same after an update when the app is signed with a
+/// certificate and different for every build when it is not, which is exactly when macOS forgets permissions, so what
+/// the app remembers about them is trusted only while this is unchanged.
+pub fn identity_token() -> String {
+    requirement().lines().find(|l| l.contains("designated =>")).unwrap_or("").trim().to_string()
+}
+
+/// The kinds of folder the person allowed one by one (ids from [`categories`]), as far as is remembered.
+static GRANTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Load what was remembered. Ignored (and forgotten) when it was remembered for a different build of the app, because
+/// macOS has forgotten it too then.
+pub fn set_granted_from(ids: &[String], token: &str) {
+    let mut slot = GRANTED.lock().unwrap_or_else(|e| e.into_inner());
+    if ids.is_empty() || !applies() {
+        slot.clear();
+        return;
+    }
+    *slot = if !token.is_empty() && token == identity_token() { ids.to_vec() } else { Vec::new() };
+}
+
+fn granted(cat: &str) -> bool {
+    GRANTED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|g| g == cat)
+}
+
+/// The category ids that were allowed, from the answers to [`ask_for_folders`]. Music, Pictures and Movies are one
+/// category and count only when all three were allowed.
+pub fn granted_ids(asked: &[Asked]) -> Vec<String> {
+    let ok = |id: &str| asked.iter().find(|a| a.id == id).is_some_and(|a| a.granted);
+    let mut out: Vec<String> = ["desktop", "documents", "downloads", "icloud"].iter().filter(|id| ok(id)).map(|s| s.to_string()).collect();
+    if ok("music") && ok("pictures") && ok("movies") {
+        out.push("media".into());
+    }
+    out
+}
+
 /// The problem with where the running app is, if any (see [`location_problem`]).
 pub fn running_location_problem() -> Option<&'static str> {
     if !applies() {
@@ -346,6 +438,36 @@ mod tests {
     const HOME: &str = "/Users/ada";
 
     #[test]
+    fn a_folder_allowed_one_by_one_is_open_to_everything_inside_it() {
+        let home = Some(Path::new(HOME));
+        let only_documents = |c: &str| c == "documents";
+        let no = || false;
+        assert!(background_ok_with(Path::new("/Users/ada/Documents"), &[], home, no, only_documents));
+        assert!(background_ok_with(Path::new("/Users/ada/Documents/a/b/c/d.txt"), &[], home, no, only_documents));
+        assert!(!background_ok_with(Path::new("/Users/ada/Desktop/x"), &[], home, no, only_documents));
+        // switched off in Settings: stays out even though it was allowed
+        assert!(!background_ok_with(Path::new("/Users/ada/Documents/a"), &["documents".to_string()], home, no, only_documents));
+    }
+
+    #[test]
+    fn answers_become_category_ids() {
+        let a = |id: &'static str, granted| Asked { id, label: id, granted };
+        let ids = granted_ids(&[a("desktop", true), a("documents", false), a("downloads", true), a("music", true), a("pictures", true), a("movies", false), a("icloud", true)]);
+        assert_eq!(ids, vec!["desktop", "downloads", "icloud"]);
+        let all = granted_ids(&[a("music", true), a("pictures", true), a("movies", true)]);
+        assert_eq!(all, vec!["media"]);
+    }
+
+    #[test]
+    fn the_identity_is_read_from_the_requirement() {
+        assert_eq!(classify_requirement("Executable=/x/y\ndesignated => cdhash H\"abc123\"\n"), Identity::PerBuild);
+        assert_eq!(classify_requirement("designated => identifier \"dev.x\" and certificate leaf = H\"abc\""), Identity::Stable);
+        assert_eq!(classify_requirement("designated => identifier \"dev.x\" and anchor apple generic and certificate leaf[subject.OU] = \"TEAM\""), Identity::Stable);
+        assert_eq!(classify_requirement("/x/y: code object is not signed at all"), Identity::PerBuild);
+        assert_eq!(classify_requirement("something unexpected"), Identity::Unknown);
+    }
+
+    #[test]
     fn a_misplaced_app_is_named() {
         let home = Some(Path::new(HOME));
         assert!(location_problem(Path::new("/Applications/FAST File Explorer.app"), home).is_none());
@@ -397,17 +519,17 @@ mod tests {
     #[test]
     fn without_full_access_nothing_protected_is_entered_in_the_background() {
         let no = || false;
-        assert!(!background_ok_with(Path::new("/Users/ada/Documents"), &[], Some(Path::new(HOME)), no));
-        assert!(!background_ok_with(Path::new("/Volumes/USB/a"), &[], Some(Path::new(HOME)), no));
-        assert!(background_ok_with(Path::new("/Users/ada/Projects"), &[], Some(Path::new(HOME)), no));
+        assert!(!background_ok_with(Path::new("/Users/ada/Documents"), &[], Some(Path::new(HOME)), no, |_| false));
+        assert!(!background_ok_with(Path::new("/Volumes/USB/a"), &[], Some(Path::new(HOME)), no, |_| false));
+        assert!(background_ok_with(Path::new("/Users/ada/Projects"), &[], Some(Path::new(HOME)), no, |_| false));
     }
 
     #[test]
     fn with_full_access_everything_is_allowed_except_what_the_person_switched_off() {
         let yes = || true;
         let off = vec!["downloads".to_string()];
-        assert!(background_ok_with(Path::new("/Users/ada/Documents"), &off, Some(Path::new(HOME)), yes));
-        assert!(!background_ok_with(Path::new("/Users/ada/Downloads/a"), &off, Some(Path::new(HOME)), yes));
+        assert!(background_ok_with(Path::new("/Users/ada/Documents"), &off, Some(Path::new(HOME)), yes, |_| false));
+        assert!(!background_ok_with(Path::new("/Users/ada/Downloads/a"), &off, Some(Path::new(HOME)), yes, |_| false));
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { shellFor } from "../util/shellWords";
 import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, type Drive, type SavedServer, type TerminalMode } from "../api";
 import {
   GROUP_COLORS,
@@ -1049,7 +1050,7 @@ export function FilterPanel({ anchor, onClose }: { anchor: DOMRect; onClose: () 
   };
 
   const left = Math.max(8, Math.min(anchor.left, window.innerWidth - 336));
-  return (
+  return createPortal(
     <div className="menu-backdrop" onMouseDown={onClose}>
       <div className="filter-panel" style={{ left, top: anchor.bottom + 4 }} onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}>
         <label className="filter-field">
@@ -1148,7 +1149,8 @@ export function FilterPanel({ anchor, onClose }: { anchor: DOMRect; onClose: () 
           <button className="primary" onClick={onClose}>Done</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

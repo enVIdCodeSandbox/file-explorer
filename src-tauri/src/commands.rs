@@ -844,6 +844,7 @@ pub struct AccessStatus {
     categories: Vec<fast_core::access::Category>,
     /// Why a permission given to the app as it runs now would not count (a copy run from a download), if known.
     problem: Option<String>,
+    identity: fast_core::access::Identity,
 }
 
 #[tauri::command]
@@ -856,15 +857,34 @@ pub async fn access_status(recheck: Option<bool>) -> CmdResult<AccessStatus> {
             app_path: fast_core::access::app_bundle().map(|p| p.to_string_lossy().into_owned()),
             categories: fast_core::access::categories(),
             problem: fast_core::access::running_location_problem().map(str::to_string),
+            identity: fast_core::access::identity(),
         })
     })
     .await
 }
 
 /// Without full access: ask macOS about all the usual folders now, together, so the questions come in one sitting.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskResult {
+    folders: Vec<fast_core::access::Asked>,
+    /// The kinds of folder that were allowed, to remember.
+    granted: Vec<String>,
+    /// Who macOS thinks the app is now; remembered with `granted`.
+    token: String,
+}
+
 #[tauri::command]
-pub async fn access_ask_folders() -> CmdResult<Vec<fast_core::access::Asked>> {
-    blocking(|| Ok(fast_core::access::ask_for_folders())).await
+pub async fn access_ask_folders() -> CmdResult<AskResult> {
+    blocking(|| {
+        let folders = fast_core::access::ask_for_folders();
+        let granted = fast_core::access::granted_ids(&folders);
+        let token = fast_core::access::identity_token();
+        // Used from now on, without waiting for the settings to be saved.
+        fast_core::access::set_granted_from(&granted, &token);
+        Ok(AskResult { folders, granted, token })
+    })
+    .await
 }
 
 /// Open a pane of System Settings: "fullDisk", "files", "photos" or "media".
@@ -2589,6 +2609,7 @@ pub async fn set_settings(app: AppHandle, state: State<'_, Shared>, settings: Se
     blocking(move || {
         let hidden_changed = st.settings.read().general.show_hidden != settings.general.show_hidden;
         settings.save(&st.paths.settings).map_err(err)?;
+        fast_core::access::set_granted_from(&settings.mac_access.granted, &settings.mac_access.granted_for);
         *st.settings.write() = settings;
         if hidden_changed {
             st.listings.lock().clear();
