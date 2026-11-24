@@ -729,7 +729,7 @@ pub async fn folder_fill(state: State<'_, Shared>, paths: Vec<String>) -> CmdRes
             .par_iter()
             .take(limit)
             .map(|p| {
-                if fast_core::remote::is_remote(p) || fast_core::browse::is_loc(p) || guard(&st, p).is_err() || on_network(&st, Path::new(p)) {
+                if fast_core::remote::is_remote(p) || fast_core::browse::is_loc(p) || guard(&st, p).is_err() || on_network(&st, Path::new(p)) || !bg_ok(&st, Path::new(p)) {
                     return fast_core::fill::Fill::Files;
                 }
                 fast_core::fill::probe(Path::new(p), 8, 2000)
@@ -763,7 +763,7 @@ pub async fn thumbs_prewarm(state: State<'_, Shared>, paths: Vec<String>, size: 
             if st.prewarm_generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 return;
             }
-            if fast_core::remote::is_remote(&path) || fast_core::remote::is_device(&path) || guard(&st, &path).is_err() || cache_off(&st, Path::new(&path)) || on_network(&st, Path::new(&path)) {
+            if fast_core::remote::is_remote(&path) || fast_core::remote::is_device(&path) || guard(&st, &path).is_err() || cache_off(&st, Path::new(&path)) || on_network(&st, Path::new(&path)) || !bg_ok(&st, Path::new(&path)) {
                 continue;
             }
             let kind = thumbs::kind_of(Path::new(&path));
@@ -919,9 +919,9 @@ pub fn restart_app(app: AppHandle) {
 
 /// Forget this app's Full Disk Access entry in macOS, so it can be switched on again from nothing.
 #[tauri::command]
-pub async fn access_reset_grant(app: AppHandle) -> CmdResult<()> {
+pub async fn access_reset_grant(app: AppHandle, interactive: Option<bool>) -> CmdResult<()> {
     let id = app.config().identifier.clone();
-    blocking(move || fast_core::access::reset_grant(&id).map_err(err)).await
+    blocking(move || fast_core::access::reset_grant_with(&id, interactive.unwrap_or(false)).map_err(err)).await
 }
 
 #[tauri::command]

@@ -88,7 +88,7 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
   const forgot = useStore((s) => s.settings?.macAccess?.verified ?? false);
   const startOver = () =>
     void ask(async () => {
-      await api.accessResetGrant();
+      await api.accessResetGrant(true);
       if (status.appPath) await api.accessRevealApp().catch(() => {});
       await api.accessOpenPane("fullDisk");
       refresh();
@@ -124,8 +124,8 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
       <ol className="access-steps">
         <li>Press <strong>Open Full Disk Access</strong>. System Settings opens on that list.</li>
         <li>Switch on <strong>FAST File Explorer</strong>. If it is missing, press <strong>Show the app in Finder</strong> and drag it into the list.</li>
-        <li>If it already shows as on but this screen still says <em>Not working yet</em>, the entry belongs to an earlier version of the app{unstable ? " (this build has no developer signature, so macOS ties every permission to one exact build)" : ""}. Press <strong>Remove the old entry and start over</strong>. If the entry is still in the list afterwards, select it there, press the <strong>−</strong> button under the list, then drag the app in again with <strong>Show the app in Finder</strong>.</li>
-        <li>This screen notices by itself. If it does not, press <strong>Check again</strong> or restart the app.</li>
+        <li>If it already shows as on but this screen still says <em>Not working yet</em>, the entry belongs to an earlier version of the app{unstable ? " (this build has no developer signature, so macOS ties every permission to one exact build)" : ""}. Press <strong>Remove the old entry and start over</strong> (or select it in System Settings, press <strong>−</strong> under the list, and drag the app in again with <strong>Show the app in Finder</strong>).</li>
+        <li>Once switched on, click <strong>Restart the app</strong> (macOS only enables Full Disk Access after restarting the process).</li>
       </ol>
       <div className="dialog-buttons access-buttons">
         <button className="primary" onClick={() => void ask(() => api.accessOpenPane("fullDisk"))}>Open Full Disk Access</button>

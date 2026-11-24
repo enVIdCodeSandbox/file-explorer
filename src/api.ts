@@ -1029,7 +1029,7 @@ export const api = {
   accessStatus: (recheck = false) => invoke<AccessStatus>("access_status", { recheck }),
   accessOpenPane: (pane: "fullDisk" | "files" | "photos" | "media") => invoke<void>("access_open_pane", { pane }),
   accessRevealApp: () => invoke<void>("access_reveal_app"),
-  accessResetGrant: () => invoke<void>("access_reset_grant"),
+  accessResetGrant: (interactive?: boolean) => invoke<void>("access_reset_grant", { interactive }),
   accessAskFolders: () => invoke<AskResult>("access_ask_folders"),
   restartApp: () => invoke<void>("restart_app"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),

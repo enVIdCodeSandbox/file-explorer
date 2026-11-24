@@ -176,7 +176,8 @@ jobs:
           # imports. A variable that exists but is empty makes the build try to sign with nothing
           # and fail at the very end; leaving them out builds the app unsigned.
           if [ -z "$CERT" ]; then
-            echo "No APPLE_CERTIFICATE secret: building the macOS app unsigned."
+            echo "No APPLE_CERTIFICATE secret: sealing the macOS app bundle ad-hoc so permissions stick for this install."
+            echo 'MAC_SIGN_CONFIG={"bundle":{"macOS":{"signingIdentity":"-","hardenedRuntime":false}}}' >> "$GITHUB_ENV"
             exit 0
           fi
           ok=0
@@ -222,7 +223,12 @@ jobs:
           npx tauri build ${{ matrix.args }} --config $config
       - name: Build packages
         if: steps.wincert.outputs.thumbprint == ''
-        run: npx tauri build ${{ matrix.args }}
+        run: |
+          if [ -n "${{ env.MAC_SIGN_CONFIG }}" ]; then
+            npx tauri build ${{ matrix.args }} --config '${{ env.MAC_SIGN_CONFIG }}'
+          else
+            npx tauri build ${{ matrix.args }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: fast-file-explorer-build-${{ matrix.artifact }}

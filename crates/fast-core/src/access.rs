@@ -106,18 +106,28 @@ pub fn recheck() -> bool {
     full_access()
 }
 
-/// Safari's folder and the privacy database are readable only with Full Disk Access, and reading them is refused
-/// quietly: no prompt is shown for it, which is what makes it a safe test.
+/// Places readable ONLY with Full Disk Access, checked without ever showing a system prompt.
+/// If any readable FDA-protected location opens cleanly, the process has Full Disk Access.
+/// Only returns false when at least one location returned PermissionDenied and none opened.
 fn probe() -> bool {
     let Some(home) = home() else { return true };
-    decide(
+    let results = [
         std::fs::read_dir(home.join("Library/Safari")).map(|_| ()),
-        || std::fs::File::open("/Library/Application Support/com.apple.TCC/TCC.db").map(|_| ()),
-    )
+        std::fs::read_dir(home.join("Library/Mail")).map(|_| ()),
+        std::fs::read_dir(home.join("Library/Messages")).map(|_| ()),
+        std::fs::File::open("/Library/Application Support/com.apple.TCC/TCC.db").map(|_| ()),
+    ];
+    decide_all(&results)
 }
 
-/// `first` is the result of reading Safari's folder. Only a refusal means "no access"; a folder that is not there
-/// says nothing, so the privacy database is asked instead; if neither can be judged, assume access.
+fn decide_all(results: &[std::io::Result<()>]) -> bool {
+    if results.iter().any(|r| r.is_ok()) {
+        return true;
+    }
+    !results.iter().any(|r| matches!(r, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn decide(first: std::io::Result<()>, second: impl FnOnce() -> std::io::Result<()>) -> bool {
     match first {
         Ok(()) => true,
@@ -390,8 +400,14 @@ pub fn running_location_problem() -> Option<&'static str> {
 
 /// Forget the Full Disk Access entry macOS holds for this app, so it can be switched on again from scratch. An entry that
 /// shows as on but belongs to an earlier build of the app (builds without a developer signature get a new identity
-/// each time) is switched on and still does nothing; removing it is the fix. Needs no password.
+/// each time) is switched on and still does nothing; removing it is the fix.
+/// When `interactive` is true and unprivileged `tccutil` fails (or cannot remove a system-wide FDA row), prompts for
+/// administrator permission via AppleScript so the stale `/Library/Application Support/com.apple.TCC` entry is cleared.
 pub fn reset_grant(app_id: &str) -> crate::Result<()> {
+    reset_grant_with(app_id, false)
+}
+
+pub fn reset_grant_with(app_id: &str, interactive: bool) -> crate::Result<()> {
     if !applies() {
         return Err(crate::CoreError::Invalid("this system has no such settings".into()));
     }
@@ -402,6 +418,25 @@ pub fn reset_grant(app_id: &str) -> crate::Result<()> {
         .args(["reset", "SystemPolicyAllFiles", app_id])
         .output()
         .map_err(|e| crate::CoreError::Invalid(format!("could not run tccutil: {e}")))?;
+    if out.status.success() && !interactive {
+        let _ = recheck();
+        return Ok(());
+    }
+    if interactive {
+        // System-wide Full Disk Access rows on modern macOS often require admin privileges to clear cleanly.
+        let script = format!("do shell script \"/usr/bin/tccutil reset SystemPolicyAllFiles {app_id}\" with administrator privileges");
+        let admin = std::process::Command::new("osascript").args(["-e", &script]).output();
+        let _ = recheck();
+        if admin.as_ref().is_ok_and(|o| o.status.success()) || out.status.success() {
+            return Ok(());
+        }
+        if let Ok(o) = admin {
+            let msg = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            if !msg.is_empty() {
+                return Err(crate::CoreError::Invalid(msg));
+            }
+        }
+    }
     let _ = recheck();
     if out.status.success() {
         Ok(())
@@ -541,6 +576,9 @@ mod tests {
         assert!(decide(missing(), || Ok(())));
         assert!(!decide(missing(), refused));
         assert!(decide(missing(), missing), "nothing to judge by: assume access");
+        assert!(decide_all(&[refused(), Ok(())]), "any open FDA location proves access");
+        assert!(!decide_all(&[missing(), refused(), missing()]));
+        assert!(decide_all(&[missing(), missing()]));
     }
 
     #[test]
