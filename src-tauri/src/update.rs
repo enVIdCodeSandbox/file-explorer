@@ -598,10 +598,6 @@ fn start_download(app: &AppHandle, st: &Shared, latest: Latest) -> CmdResult<u64
 // Applying
 // ---------------------------------------------------------------------------
 
-/// Install the downloaded build and start the app again. Windows and AppImage swap the files in the
-/// background after the app has closed, with no installer screens. Other packages cannot be installed
-/// silently by a program without administrator rights, so they are handed to the system's own installer.
-#[cfg(desktop)]
 /// Where the new Mac app goes: over the running one when the folder it sits in can be written to, or, for a copy run
 /// from a disk image or a download (which must not be replaced), into Applications. None when neither can be written,
 /// and the disk image is shown instead.
@@ -621,6 +617,10 @@ fn mac_app_replaceable() -> Option<PathBuf> {
     writable(Path::new("/Applications")).then_some(target)
 }
 
+/// Install the downloaded build and start the app again. Windows and AppImage swap the files in the
+/// background after the app has closed, with no installer screens. Mac replaces the app in place. Other packages
+/// cannot be installed silently by a program without administrator rights, so they are handed to the system's own installer.
+#[cfg(desktop)]
 fn apply(app: &AppHandle, st: &Shared, ready: &Ready) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let work = st.paths.update_dir.clone();
