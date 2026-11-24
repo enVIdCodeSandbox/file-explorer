@@ -4,7 +4,7 @@
 // buttons in Settings, and a note in Disk Usage. Nothing here shows on Windows or Linux.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type AccessStatus } from "../api";
+import { api, type AccessStatus, type AskedFolder } from "../api";
 import { useStore } from "../store";
 
 /** The current permission state. It is looked at again when the window comes back, which is when the person returns
@@ -17,7 +17,15 @@ export function useAccess(): { status: AccessStatus | null; refresh: () => void 
   useEffect(() => {
     refresh();
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    // While access is not on, look again every couple of seconds: the switch in System Settings is noticed at once,
+    // with no need to press "check again". (Reading Safari's folder to test it never shows a prompt.)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 2500);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
   return { status, refresh };
 }
@@ -33,6 +41,40 @@ export function markAsked() {
 }
 
 const ask = (what: () => Promise<void>) => what().catch((e) => useStore.getState().showToast(String(e)));
+
+/** The fallback to the one switch: ask about every usual folder right now, so macOS shows its questions together
+ * (about seven, once; macOS remembers each answer). */
+function AskFolders({ refresh }: { refresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<AskedFolder[] | null>(null);
+  const go = async () => {
+    setBusy(true);
+    try {
+      setResult(await api.accessAskFolders());
+    } catch (e) {
+      useStore.getState().showToast(String(e));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+  const refused = result?.filter((r) => !r.granted) ?? [];
+  return (
+    <div className="access-fallback">
+      <p className="muted">
+        Would rather not change a system setting? The app can instead ask macOS about Desktop, Documents, Downloads, Music, Pictures, Movies and iCloud Drive right now, all together. That is up to seven questions, once, and macOS remembers the answers. External and network drives still ask the first time each is used, and search and Disk Usage stay out of the folders you refuse.
+      </p>
+      <div className="dialog-buttons access-buttons">
+        <button className="secondary" disabled={busy} onClick={() => void go()}>{busy ? "Waiting for your answers…" : "Ask for the usual folders now"}</button>
+      </div>
+      {result && (
+        <p className="muted" role="status">
+          {refused.length ? `Not allowed: ${refused.map((r) => r.label).join(", ")}. You can change this in System Settings, Privacy & Security, Files and Folders.` : "All of them are allowed."}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** The steps and buttons, used by the screen and by Settings. */
 function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void }) {
@@ -57,6 +99,7 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
         {status.appPath && <button className="secondary" onClick={() => void ask(api.accessRevealApp)}>Show the app in Finder</button>}
         <button className="secondary" onClick={refresh}>I did it: check again</button>
       </div>
+      <AskFolders refresh={refresh} />
     </>
   );
 }

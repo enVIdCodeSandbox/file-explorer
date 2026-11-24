@@ -854,6 +854,12 @@ pub async fn access_status(recheck: Option<bool>) -> CmdResult<AccessStatus> {
     .await
 }
 
+/// Without full access: ask macOS about all the usual folders now, together, so the questions come in one sitting.
+#[tauri::command]
+pub async fn access_ask_folders() -> CmdResult<Vec<fast_core::access::Asked>> {
+    blocking(|| Ok(fast_core::access::ask_for_folders())).await
+}
+
 /// Open a pane of System Settings: "fullDisk", "files", "photos" or "media".
 #[tauri::command]
 pub async fn access_open_pane(pane: String) -> CmdResult<()> {

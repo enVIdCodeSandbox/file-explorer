@@ -717,6 +717,12 @@ export interface MacAccessSettings {
   off: string[];
 }
 
+export interface AskedFolder {
+  id: string;
+  label: string;
+  granted: boolean;
+}
+
 export interface AccessCategory {
   id: string;
   label: string;
@@ -1002,6 +1008,7 @@ export const api = {
   accessStatus: (recheck = false) => invoke<AccessStatus>("access_status", { recheck }),
   accessOpenPane: (pane: "fullDisk" | "files" | "photos" | "media") => invoke<void>("access_open_pane", { pane }),
   accessRevealApp: () => invoke<void>("access_reveal_app"),
+  accessAskFolders: () => invoke<AskedFolder[]>("access_ask_folders"),
   restartApp: () => invoke<void>("restart_app"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),
   openDeviceInSystem: (open: string) => invoke<void>("open_device_in_system", { open }),

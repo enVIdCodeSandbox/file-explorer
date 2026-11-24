@@ -123,6 +123,54 @@ fn decide(first: std::io::Result<()>, second: impl FnOnce() -> std::io::Result<(
     }
 }
 
+/// The result of asking for one kind of folder.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Asked {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// macOS said yes (or there was nothing to ask about).
+    pub granted: bool,
+}
+
+/// The folders that ask on their own, one by one, in the order a person expects them.
+const ASKED: [(&str, &str, &str); 6] = [
+    ("desktop", "Desktop", "Desktop"),
+    ("documents", "Documents", "Documents"),
+    ("downloads", "Downloads", "Downloads"),
+    ("music", "Music", "Music"),
+    ("pictures", "Pictures", "Pictures"),
+    ("movies", "Movies", "Movies"),
+];
+
+/// Without Full Disk Access: open each of the usual folders once, right now, so macOS shows all of its questions
+/// together instead of scattering them over the next days. The answers are remembered by macOS. Nothing is read
+/// from the folders; one listing is enough to make the question appear. External and network drives are not
+/// included, because those ask per drive, and only when one is used.
+pub fn ask_for_folders() -> Vec<Asked> {
+    if !applies() {
+        return Vec::new();
+    }
+    match dirs::home_dir() {
+        Some(home) => ask_in(&home),
+        None => Vec::new(),
+    }
+}
+
+fn ask_in(home: &Path) -> Vec<Asked> {
+    let mut out: Vec<Asked> = ASKED
+        .iter()
+        .map(|&(id, label, dir)| {
+            let found = std::fs::read_dir(home.join(dir)).map(|_| ());
+            // A folder that is not there is not a refusal.
+            Asked { id, label, granted: !matches!(&found, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) }
+        })
+        .collect();
+    let icloud = std::fs::read_dir(home.join("Library/Mobile Documents")).map(|_| ());
+    out.push(Asked { id: "icloud", label: "iCloud Drive", granted: !matches!(&icloud, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) });
+    out
+}
+
 /// May background work look inside `path`? `off` holds the category ids the person switched off in Settings.
 pub fn background_ok(path: &Path, off: &[String]) -> bool {
     if !applies() {
@@ -227,6 +275,17 @@ mod tests {
     use std::io::{Error, ErrorKind};
 
     const HOME: &str = "/Users/ada";
+
+    #[test]
+    fn asking_for_folders_lists_each_and_treats_missing_ones_as_fine() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Desktop")).unwrap();
+        let got = ask_in(dir.path());
+        assert_eq!(got.len(), 7);
+        assert!(got.iter().all(|a| a.granted), "{got:?}");
+        assert_eq!(got[0].id, "desktop");
+        assert_eq!(got[6].id, "icloud");
+    }
 
     fn cat(p: &str) -> Option<&'static str> {
         category_of(Path::new(p), Some(Path::new(HOME)))
