@@ -46,6 +46,12 @@ pub fn categories() -> Vec<Category> {
     ]
 }
 
+/// The home folder, from the environment, which is how macOS sets it for a program started from Finder. (The `dirs`
+/// crate is not built for phones and tablets, where this file must still compile and says "nothing is protected".)
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+
 /// True where this system protects folders the way macOS does.
 pub fn applies() -> bool {
     cfg!(target_os = "macos")
@@ -103,7 +109,7 @@ pub fn recheck() -> bool {
 /// Safari's folder and the privacy database are readable only with Full Disk Access, and reading them is refused
 /// quietly: no prompt is shown for it, which is what makes it a safe test.
 fn probe() -> bool {
-    let Some(home) = dirs::home_dir() else { return true };
+    let Some(home) = home() else { return true };
     decide(
         std::fs::read_dir(home.join("Library/Safari")).map(|_| ()),
         || std::fs::File::open("/Library/Application Support/com.apple.TCC/TCC.db").map(|_| ()),
@@ -151,7 +157,7 @@ pub fn ask_for_folders() -> Vec<Asked> {
     if !applies() {
         return Vec::new();
     }
-    match dirs::home_dir() {
+    match home() {
         Some(home) => ask_in(&home),
         None => Vec::new(),
     }
@@ -176,7 +182,7 @@ pub fn background_ok(path: &Path, off: &[String]) -> bool {
     if !applies() {
         return true;
     }
-    background_ok_with(path, off, dirs::home_dir().as_deref(), full_access)
+    background_ok_with(path, off, home().as_deref(), full_access)
 }
 
 fn background_ok_with(path: &Path, off: &[String], home: Option<&Path>, full: impl Fn() -> bool) -> bool {
@@ -191,7 +197,7 @@ pub fn skip_list(off: &[String]) -> Vec<PathBuf> {
     if !applies() {
         return Vec::new();
     }
-    let Some(home) = dirs::home_dir() else { return Vec::new() };
+    let Some(home) = home() else { return Vec::new() };
     let all = [
         ("desktop", home.join("Desktop")),
         ("documents", home.join("Documents")),
