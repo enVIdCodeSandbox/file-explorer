@@ -575,13 +575,18 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .disk-facts { margin-top: 8px; }
 /* Window buttons on the left look like traffic lights */
 .window-controls[data-side="left"] { margin-left: 0; margin-right: 8px; align-self: center; gap: 8px; padding-left: 12px; order: -1; }
-.window-controls[data-look="round"] button { width: 14px; height: 14px; border-radius: 50%; background: #f5bf4f; color: transparent; }
-.window-controls[data-look="round"] button:first-child { background: #f5bf4f; }
+.window-controls[data-look="round"] button { width: 14px; height: 14px; padding: 0; border: 0; border-radius: 50%; color: transparent; background: #f5bf4f; }
 .window-controls[data-look="round"] button:nth-child(2) { background: #61c554; }
 .window-controls[data-look="round"] .close { background: #ee6a5e; order: -1; }
+/* The colors are stated again for hover and focus: a bare "background: inherit" there turned the yellow and green
+   buttons black (they inherited the strip's background) and a focus ring drew a hollow blue circle. */
+.window-controls[data-look="round"] button:first-child:hover, .window-controls[data-look="round"] button:first-child:focus-visible { background: #f5bf4f; }
+.window-controls[data-look="round"] button:nth-child(2):hover, .window-controls[data-look="round"] button:nth-child(2):focus-visible { background: #61c554; }
+.window-controls[data-look="round"] .close:hover, .window-controls[data-look="round"] .close:focus-visible { background: #ee6a5e; }
+.window-controls[data-look="round"] button:hover { filter: brightness(0.92); }
 .window-controls[data-look="round"]:hover button { color: rgba(0, 0, 0, 0.6); }
-.window-controls[data-look="round"] button:hover { background: inherit; filter: brightness(0.92); }
-.window-controls[data-look="round"] .close:hover { background: #ee6a5e; color: rgba(0, 0, 0, 0.6); }
+.window-controls[data-look="round"] button:focus { outline: none; }
+.window-controls[data-look="round"] button:focus-visible { outline: 2px solid color-mix(in srgb, var(--text) 55%, transparent); outline-offset: 2px; }
 .icon[data-set="fluent"] { stroke: none; }
 .filter-not { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
 .filter-not h4 { margin: 0; }
@@ -1202,3 +1207,29 @@ body[data-dragging-nav] .side-gap[data-drop-over] { min-height: 22px; }
 .notice-jobs .secondary, .notice-finished-row .secondary { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--font-size-small); }
 .notice-finished-row { display: flex; align-items: stretch; gap: 6px; margin: 2px 0 8px; }
 .notice-finished-row .notice-finished { flex: 1 1 0; min-width: 0; width: auto; margin: 0; }
+
+/* ---- The hamburger panel of actions: a grid of tiles instead of one long wrapped row ---- */
+.popout-panel[data-panel="commands"] { width: min(92vw, 440px); padding: 8px; box-sizing: border-box; border-radius: calc(var(--radius) + 4px); }
+.popout-panel[data-panel="commands"] .command-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; width: 100%; min-height: 0; padding: 0; background: none; border: 0; }
+.popout-panel[data-panel="commands"] .cmd { flex-direction: column; justify-content: center; gap: 5px; height: 62px; padding: 6px 4px; border-radius: var(--radius); font-size: var(--font-size-small); }
+.popout-panel[data-panel="commands"] .cmd > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.popout-panel[data-panel="commands"] .cmd:disabled { opacity: 0.38; }
+.popout-panel[data-panel="commands"] .cmd-sep { grid-column: 1 / -1; width: auto; height: 1px; margin: 3px 4px; }
+.popout-panel[data-panel="commands"] .cmd-grow { display: none; }
+.popout-panel[data-panel="commands"] .cmd[data-cmd="more"]::after { content: "More"; }
+.popout-panel[data-panel="commands"] .cmd[data-cmd="details"], .popout-panel[data-panel="commands"] .cmd[data-cmd="settings"] { grid-column: span 2; flex-direction: row; justify-content: flex-start; gap: 10px; height: 36px; padding: 0 12px; margin-top: 4px; background: var(--surface-hover); }
+.popout-panel[data-panel="commands"] .cmd[data-cmd="details"][data-on] { background: var(--surface-active); }
+.popout-panel[data-panel="commands"] .cmd[data-cmd="details"]:hover:not(:disabled), .popout-panel[data-panel="commands"] .cmd[data-cmd="settings"]:hover:not(:disabled) { background: var(--surface-active); }
+
+/* ---- Dragging the terminal by its title bar: a ghost box where it would dock, or a note about leaving the window ---- */
+.term-bar { cursor: grab; }
+.term-bar button, .term-bar .term-tab { cursor: pointer; }
+body[data-terminal-dragging] { cursor: grabbing; user-select: none; }
+body[data-terminal-dragging] * { cursor: grabbing !important; }
+.terminal-drop { position: fixed; inset: 0; z-index: 400; pointer-events: none; }
+.terminal-drop-ghost { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--accent); border-radius: calc(var(--radius) + 2px); background: color-mix(in srgb, var(--accent) 16%, transparent); transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease; }
+.terminal-drop-ghost span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); font-size: var(--font-size-small); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+.terminal-drop-note { position: absolute; transform: translate(-50%, -140%); display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--surface-raised); color: var(--text); border: 1px solid var(--accent); font-size: var(--font-size-small); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+.term-window { height: 100vh; display: flex; flex-direction: column; background: var(--surface); }
+.term-window .term-body { flex: 1; min-height: 0; }
+@media (prefers-reduced-motion: reduce) { .terminal-drop-ghost { transition: none; } }

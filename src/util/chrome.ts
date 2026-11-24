@@ -23,9 +23,10 @@ export function useChrome(): Chrome {
   return useStore((s) => asChrome(s.settings ? adv<string>(s.settings, "ui.chrome") : "windows"));
 }
 
-/** What each system calls the navigation pane's sections. An empty name hides the heading. */
+/** What each system calls the navigation pane's sections. An empty name hides the heading. "Frequently used" keeps its
+ * own name everywhere: renaming it "Recents" put two sections of that name side by side, since Recents is a section too. */
 export const SIDE_NAMES: Record<Chrome, Record<string, string>> = {
   windows: {},
-  macos: { Navigation: "", "Frequently used": "Recents", Pinned: "Favorites", Drives: "Locations", Servers: "Shared" },
-  linux: { Navigation: "", "Frequently used": "Recent", Pinned: "Starred", Drives: "Devices", Servers: "Network" },
+  macos: { Navigation: "", Pinned: "Favorites", Drives: "Locations", Servers: "Shared" },
+  linux: { Navigation: "", Pinned: "Starred", Drives: "Devices", Servers: "Network" },
 };

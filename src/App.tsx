@@ -369,7 +369,8 @@ function AppInner() {
       // In the built-in terminal these are the shell's own keys (Ctrl+R searches its history, Ctrl+Y pastes what was cut).
       if (["undo", "redo", "redoAlt", "refresh", "refreshAlt"].includes(command) && (e.target as HTMLElement | null)?.closest?.(".term-body, .xterm")) return;
       // With an extra pane of the split view in focus, the tab keys act on its tabs.
-      if (!typing && paneCommand(command)) {
+      // (Also while typing: with the cursor in a pane's address box, Ctrl+W used to close the main window's tab instead.)
+      if ((!typing || ["closeTab", "newTab", "nextTab", "prevTab"].includes(command)) && !(e.target as HTMLElement | null)?.closest?.(".term-body, .xterm") && paneCommand(command)) {
         e.preventDefault();
         return;
       }
