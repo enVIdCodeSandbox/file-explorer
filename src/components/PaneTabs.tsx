@@ -132,8 +132,11 @@ export function PaneTabs({ slot }: { slot: number }) {
         <div className="pane-tab pane-tab-ghost" data-detach={drag.where === "none" || undefined} style={{ left: drag.x - drag.w / 2, top: drag.y - 14, width: drag.w }}>
           <FileIcon kind="folder" size={14} />
           <span className="pane-tab-title">{titleOf(dragged.path)}</span>
-          {hint && <span className="tab-ghost-hint">{hint}</span>}
         </div>
+      )}
+      {/* Said beside the tab, not inside it: a tab is too narrow for the sentence, and it pushed the name out. */}
+      {drag && dragged && hint && drag.where !== "strip" && (
+        <div className="pane-tab-note" style={{ left: drag.x - drag.w / 2, top: drag.y + 18 }}>{hint}</div>
       )}
       {drag && dragged && drag.where === "strip" && (
         <div className="pane-tab pane-tab-ghost" style={{ left: drag.x - drag.w / 2, top: drag.y - 14, width: drag.w }}>

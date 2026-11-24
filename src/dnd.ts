@@ -308,6 +308,9 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
   };
 
   const move = (e: PointerEvent) => {
+    // The button is already up but the release never reached the page (it happened over another window, a menu, or
+    // while the system took over): the drag must not stay stuck to the pointer. It ends where the button was let go.
+    if (e.buttons === 0 && e.pointerType === "mouse") return finish(payload !== null);
     last = { x: e.clientX, y: e.clientY };
     mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
     if (!payload) {
@@ -359,12 +362,19 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
     evaluate();
   };
   const up = () => finish(true);
+  // Anything that takes the pointer away from the page ends the drag: the window losing focus, the page being hidden,
+  // the browser starting a native drag of its own (a link, an image, selected text), or the capture being lost.
+  const lost = () => finish(false);
+  const nativeDrag = (e: Event) => e.preventDefault();
 
   function finish(commit: boolean) {
     if (!handingOver) stopFetching();
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", cancel);
+    window.removeEventListener("blur", lost);
+    window.removeEventListener("dragstart", nativeDrag, true);
+    document.removeEventListener("visibilitychange", lost);
     window.removeEventListener("keydown", keys, true);
     window.removeEventListener("keyup", keys, true);
     window.clearTimeout(springTimer);
@@ -387,6 +397,9 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
   window.addEventListener("pointercancel", cancel);
+  window.addEventListener("blur", lost);
+  window.addEventListener("dragstart", nativeDrag, true);
+  document.addEventListener("visibilitychange", lost);
   window.addEventListener("keydown", keys, true);
   window.addEventListener("keyup", keys, true);
 }

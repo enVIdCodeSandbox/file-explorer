@@ -36,8 +36,25 @@ function targetAt(x: number, y: number): Target {
 
 const clearMarks = () => document.querySelectorAll("[data-drop-over]").forEach((el) => el.removeAttribute("data-drop-over"));
 
+/** A file dropped on the page must never be opened by the page itself: the web view would navigate to it and leave the
+ * app (a text file shown instead of the explorer, then nothing). The window's own drop handler takes real file drops
+ * first; this is for whatever reaches the page anyway, on every system. */
+function keepPageFromOpeningDrops(): () => void {
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...(e.dataTransfer.types ?? [])].some((t) => t === "Files" || t === "text/uri-list" || t === "public.file-url");
+  const stop = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.type === "dragover" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+  };
+  for (const t of ["dragenter", "dragover", "drop"]) window.addEventListener(t, stop as EventListener);
+  return () => {
+    for (const t of ["dragenter", "dragover", "drop"]) window.removeEventListener(t, stop as EventListener);
+  };
+}
+
 /** Start listening. Returns a function that stops. */
 export async function listenForExternalDrops(): Promise<() => void> {
+  const unguard = keepPageFromOpeningDrops();
   const off = await getCurrentWebview().onDragDropEvent((event) => {
     const p = event.payload;
     if (p.type === "leave") {
@@ -79,5 +96,8 @@ export async function listenForExternalDrops(): Promise<() => void> {
     }
     void s.startTransfer(p.paths, dest, "copy");
   });
-  return off;
+  return () => {
+    unguard();
+    off();
+  };
 }
