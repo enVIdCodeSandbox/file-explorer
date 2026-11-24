@@ -1934,6 +1934,44 @@ async function askAboutConflict(id: number, c: ConflictInfo, canShow: boolean) {
   }
 }
 
+/** The password asked for before deleting for good, when that option is on. True when the delete may go ahead:
+ * the option is off, or the right password was typed. With the option on but no password set yet, nothing is
+ * deleted for good and the person is told where to set one. */
+export async function confirmDeletePassword(what = "this"): Promise<boolean> {
+  const s = useStore.getState();
+  if (!s.settings || !adv<boolean>(s.settings, "files.deletePassword")) return true;
+  let has = false;
+  try {
+    has = await api.deleteGuardStatus();
+  } catch {
+    has = false;
+  }
+  if (!has) {
+    s.showToast("Deleting for good needs a password, and none is set. Set one in Settings > Privacy and locks.");
+    return false;
+  }
+  for (let tries = 0; tries < 5; tries++) {
+    const r = await ask({
+      title: "Password needed",
+      message: `Type the password to delete ${what} for good.`,
+      secret: { label: "Password" },
+      buttons: [
+        { id: "ok", label: "Delete", primary: true, danger: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (!r || r.button !== "ok") return false;
+    try {
+      if (await api.deleteGuardCheck(r.secret)) return true;
+    } catch (e) {
+      useStore.getState().showToast(String(e));
+      return false;
+    }
+    useStore.getState().showToast("That is not the right password.");
+  }
+  return false;
+}
+
 /** Show a modal with buttons; resolves with the chosen button or null. */
 export function ask(req: Omit<DialogRequest, "resolve">): Promise<{ button: string; input: string; selected: string; secret: string } | null> {
   return new Promise((resolve) => {
@@ -2122,6 +2160,7 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
       ],
     });
     if (!r || r.button !== "ok") return false;
+    if (!(await confirmDeletePassword(what))) return false;
     try {
       await api.archiveDelete(paths);
       s.notify("delete", `Deleted ${what} from the archive`);
@@ -2151,6 +2190,7 @@ export async function deletePaths(paths: string[], forcePermanent = false): Prom
     });
     if (!r || r.button !== "ok") return false;
   }
+  if (permanent && !(await confirmDeletePassword(paths.length === 1 ? `"${baseName(paths[0])}"` : `${paths.length} items`))) return false;
   // From now on a paste into these folders waits for this delete, even while the access check
   // below is still running and the delete has no id yet.
   const held = hold({ removes: paths });
@@ -2518,6 +2558,7 @@ async function deleteOnServer(paths: string[]): Promise<boolean> {
     ],
   });
   if (!r || r.button !== "ok") return false;
+  if (!(await confirmDeletePassword(what))) return false;
   try {
     await api.remoteRemoveStart(paths);
     return true;

@@ -363,7 +363,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             <section key={name}>
               <h3>{t(name)}</h3>
               {defs.map((d) => {
-                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "activityLog", "perfPresets", "uiPresets", "profiles", "resources", "locks", "methods", "icons", "fontAreas"].includes(d.control.type);
+                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "activityLog", "perfPresets", "uiPresets", "profiles", "resources", "locks", "deleteGuard", "macAccess", "methods", "icons", "fontAreas"].includes(d.control.type);
                 const lockable = PRESET_CONTROLLED_KEYS.has(d.key);
                 const locked = lockable && !!settings && isSettingLocked(settings, d.key);
                 return (

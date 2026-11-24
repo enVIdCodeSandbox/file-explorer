@@ -169,6 +169,7 @@ export const ADVANCED: AdvDef[] = [
   num(10, "files.typeFindResetSec", "Files and lists", "Type to find forgets after", 1, 120, "sec", "Seconds without typing before the typed text starts over."),
   num(700, "files.typeAheadMs", "Files and lists", "Type-to-select pause", 200, 3000, "ms", "How long typing keeps extending what you typed."),
   yn(true, "files.wheelZoom", "Files and lists", "Ctrl + scroll changes the view"),
+  yn(false, "files.deletePassword", "Files and lists", "Ask for a password before deleting for good", "Off by default. Shift+Delete, \"Delete permanently\", emptying the Recycle Bin or Trash, and deleting from a server, a phone or an archive then ask for it first. Set the password in Settings > Privacy and locks. It protects against accidents, not against someone who can run other programs on this computer."),
   num(3, "files.confirmDeleteOver", "Files and lists", "Always confirm deleting this many items or more", 0, 1000, "items", "Even when \"Ask before deleting\" is off. 0 never forces it."),
   num(100, "files.recentLimit", "Files and lists", "Recent items to remember", 0, 1000),
   num(10, "files.frequentCount", "Navigation pane", "Frequently used folders to keep in the list", 0, 50, undefined, "The list is built from what you open most."),

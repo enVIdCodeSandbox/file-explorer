@@ -81,7 +81,7 @@ export function Dialog() {
         {dialog.secret && (
           <label className="dialog-select" data-stacked>
             <span className="muted">{dialog.secret.label}</span>
-            <input className="text-input" type="password" value={secret} autoComplete="off" onChange={(e) => setSecret(e.target.value)} />
+            <input className="text-input" type="password" value={secret} autoFocus={dialog.input == null} autoComplete="off" onChange={(e) => setSecret(e.target.value)} />
           </label>
         )}
         {dialog.select && (

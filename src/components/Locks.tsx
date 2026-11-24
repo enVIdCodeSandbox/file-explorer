@@ -281,3 +281,62 @@ export function LocksPanel() {
     </div>
   );
 }
+
+/** Settings > Privacy and locks: the optional password asked for before anything is deleted for good. */
+export function DeleteGuardPanel() {
+  const settings = useStore((s) => s.settings);
+  const [has, setHas] = useState<boolean | null>(null);
+  const [old, setOld] = useState("");
+  const [fresh, setFresh] = useState("");
+  const [again, setAgain] = useState("");
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    void api.deleteGuardStatus().then(setHas).catch(() => setHas(false));
+  }, []);
+  if (has === null) return <p className="muted">Loading…</p>;
+  const on = adv<boolean>(settings, "files.deletePassword");
+  const toggle = (value: boolean) => useStore.getState().updateSettings((s) => void (s.advanced = { ...s.advanced, "files.deletePassword": value }));
+  const save = async (remove: boolean) => {
+    if (!remove && fresh !== again) {
+      setMessage("The two new passwords are not the same.");
+      return;
+    }
+    try {
+      const now = await api.deleteGuardSet(old, remove ? "" : fresh);
+      setHas(now);
+      setOld("");
+      setFresh("");
+      setAgain("");
+      if (remove) toggle(false);
+      setMessage(remove ? "Password removed, and the option turned off." : "Password saved.");
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
+  return (
+    <div className="locks-panel">
+      <p className="muted">
+        When this is on, deleting for good (Shift+Delete, Delete permanently, emptying the Recycle Bin or Trash, deleting from a server, a phone or an archive) first asks for this password. Moving things to the Recycle Bin or Trash never asks. It protects against accidents; it does not stop other programs on this computer. If you forget it, the option can be turned off in Advanced, but changing it needs the old password, so write it down.
+      </p>
+      <label className="check-row">
+        <input type="checkbox" checked={on} disabled={!has} onChange={(e) => toggle(e.target.checked)} />
+        <span>Ask for a password before deleting for good</span>
+      </label>
+      {!has && <p className="muted">Set a password below first, then this can be turned on.</p>}
+      <div className="button-row">
+        {has && <input className="text-input" type="password" autoComplete="off" placeholder="Current password" value={old} onChange={(e) => setOld(e.target.value)} />}
+        <input className="text-input" type="password" autoComplete="off" placeholder="New password (4 or more characters)" value={fresh} onChange={(e) => setFresh(e.target.value)} />
+        <input className="text-input" type="password" autoComplete="off" placeholder="New password again" value={again} onChange={(e) => setAgain(e.target.value)} />
+        <button className="secondary" disabled={!fresh || (has && !old)} onClick={() => void save(false)}>
+          {has ? "Change" : "Set"}
+        </button>
+        {has && (
+          <button className="secondary" disabled={!old} onClick={() => void save(true)}>
+            Remove password
+          </button>
+        )}
+      </div>
+      {message && <p className="muted">{message}</p>}
+    </div>
+  );
+}

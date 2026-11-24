@@ -29,6 +29,8 @@ pub struct LockFile {
     /// Hash of the main password, which may remove any lock.
     pub main: Option<String>,
     pub locks: Vec<Lock>,
+    /// Hash of the password asked for before anything is deleted for good (when that option is on).
+    pub delete_guard: Option<String>,
 }
 
 /// The locks, plus which of them are open for now.
@@ -160,6 +162,29 @@ impl Locks {
         Ok(())
     }
 
+    /// Set, change or (with an empty `new`) remove the password for deleting for good. When one exists, `old` must match it.
+    pub fn set_delete_guard(&mut self, old: &str, new: &str) -> Result<()> {
+        if let Some(current) = &self.file.delete_guard {
+            if !verify(old, current) {
+                return Err(CoreError::Invalid("The current password is not right.".into()));
+            }
+        }
+        if new.is_empty() {
+            self.file.delete_guard = None;
+            return Ok(());
+        }
+        if new.chars().count() < 4 {
+            return Err(CoreError::Invalid("The password needs at least 4 characters.".into()));
+        }
+        self.file.delete_guard = Some(hash(new)?);
+        Ok(())
+    }
+
+    /// Is `secret` the password for deleting for good? (False when none is set.)
+    pub fn check_delete_guard(&self, secret: &str) -> bool {
+        self.file.delete_guard.as_deref().is_some_and(|h| verify(secret, h))
+    }
+
     pub fn is_open(&self, id: &str, relock: Option<Duration>) -> bool {
         self.open.get(id).is_some_and(|at| relock.is_none_or(|r| at.elapsed() <= r))
     }
@@ -168,6 +193,20 @@ impl Locks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delete_password_is_set_checked_changed_and_removed() {
+        let mut l = Locks::default();
+        assert!(!l.check_delete_guard("anything"));
+        assert!(l.set_delete_guard("", "abc").is_err());
+        l.set_delete_guard("", "sesame").unwrap();
+        assert!(l.check_delete_guard("sesame") && !l.check_delete_guard("sesamE"));
+        assert!(l.set_delete_guard("wrong", "other1").is_err());
+        l.set_delete_guard("sesame", "other1").unwrap();
+        assert!(l.check_delete_guard("other1") && !l.check_delete_guard("sesame"));
+        l.set_delete_guard("other1", "").unwrap();
+        assert!(l.file.delete_guard.is_none());
+    }
 
     #[test]
     fn covers_the_folder_and_everything_inside_it() {

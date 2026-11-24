@@ -84,6 +84,8 @@ Delete (or the toolbar button) sends items to the Recycle Bin / Trash after the 
 
 **Always delete permanently.** Settings → General → *Always delete permanently (skip the Recycle Bin / Trash)* makes every delete remove items for good, without going through the bin. It is off by default and carries a warning: items deleted this way cannot be recovered. It follows *Ask before deleting* (turn that off too and nothing asks); Shift+Delete and phones always ask.
 
+**A password for deleting for good (off by default).** Settings → Privacy and locks → *Password for deleting for good*. Set a password (4 or more characters), then turn on *Ask for a password before deleting for good*. After that, Shift+Delete, *Delete permanently*, emptying or purging the Recycle Bin / Trash, and deleting from a server, a phone or an archive ask for it first; moving items to the bin never does. The password is stored only as a hash. It guards against accidents, not against other programs on the computer. Changing or removing it needs the current password, and if the option is on with no password set, nothing is deleted for good until one is set.
+
 ## The Recycle Bin / Trash
 
 *Recycle Bin* (*Trash* on macOS and Linux) is in the navigation pane right under This PC. It lists everything that was deleted with where it came from, when and how big it was; click a heading to sort.

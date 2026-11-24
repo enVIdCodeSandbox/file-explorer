@@ -2969,6 +2969,31 @@ pub async fn lock_set_main(state: State<'_, Shared>, old: String, new: String) -
     .await
 }
 
+/// Is there a password for deleting for good?
+#[tauri::command]
+pub async fn delete_guard_status(state: State<'_, Shared>) -> CmdResult<bool> {
+    Ok(state.locks.read().file.delete_guard.is_some())
+}
+
+/// Set, change or (with an empty `new`) remove the password for deleting for good.
+#[tauri::command]
+pub async fn delete_guard_set(state: State<'_, Shared>, old: String, new: String) -> CmdResult<bool> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.locks.write().set_delete_guard(&old, &new).map_err(err)?;
+        save_locks(&st)?;
+        let set = st.locks.read().file.delete_guard.is_some();
+        Ok(set)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_guard_check(state: State<'_, Shared>, secret: String) -> CmdResult<bool> {
+    let st = state.inner().clone();
+    blocking(move || Ok(st.locks.read().check_delete_guard(&secret))).await
+}
+
 #[tauri::command]
 pub async fn locks_relock(state: State<'_, Shared>) -> CmdResult<LocksState> {
     state.locks.write().relock_all();

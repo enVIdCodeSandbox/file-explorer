@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Bin, type BinItem } from "../api";
-import { ask, openFile, useStore } from "../store";
+import { ask, confirmDeletePassword, openFile, useStore } from "../store";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
 import { trashLabel } from "../util/path";
 import { pickFolder } from "../util/pickFile";
@@ -107,6 +107,7 @@ export function TrashView() {
       ],
     });
     if (r?.button !== "ok") return;
+    if (!(await confirmDeletePassword(chosen.length === 1 ? chosen[0].name : `${chosen.length} items`))) return;
     void run(() => api.trashPurge(chosen.map((i) => i.id)), "Deleted for good");
   };
 
@@ -121,6 +122,7 @@ export function TrashView() {
       ],
     });
     if (r?.button !== "ok") return;
+    if (!(await confirmDeletePassword(`everything in the ${label}`))) return;
     void run(() => api.trashEmpty(), `The ${label} is empty`);
   };
 
