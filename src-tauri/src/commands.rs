@@ -441,9 +441,13 @@ pub async fn get_permissions(state: State<'_, Shared>, path: String) -> CmdResul
 }
 
 #[tauri::command]
-pub async fn folder_stats(state: State<'_, Shared>, path: String) -> CmdResult<FolderStats> {
+pub async fn folder_stats(state: State<'_, Shared>, path: String, auto: Option<bool>) -> CmdResult<FolderStats> {
     let st = state.inner().clone();
     blocking(move || {
+        // Measured by itself (not because the person pressed the button): never inside a place macOS would ask about.
+        if auto.unwrap_or(false) && !bg_ok(&st, Path::new(&path)) {
+            return Err("Not measured automatically: this folder is one macOS asks permission for.".to_string());
+        }
         let threads = st.budget.read().index_threads;
         Ok(details::folder_stats(Path::new(&path), threads, None))
     })
@@ -838,6 +842,8 @@ pub struct AccessStatus {
     /// Where the app is, so it can be shown in Finder and dragged into the list.
     app_path: Option<String>,
     categories: Vec<fast_core::access::Category>,
+    /// Why a permission given to the app as it runs now would not count (a copy run from a download), if known.
+    problem: Option<String>,
 }
 
 #[tauri::command]
@@ -849,6 +855,7 @@ pub async fn access_status(recheck: Option<bool>) -> CmdResult<AccessStatus> {
             full_access,
             app_path: fast_core::access::app_bundle().map(|p| p.to_string_lossy().into_owned()),
             categories: fast_core::access::categories(),
+            problem: fast_core::access::running_location_problem().map(str::to_string),
         })
     })
     .await
@@ -879,7 +886,19 @@ pub async fn access_reveal_app() -> CmdResult<()> {
 /// Start the app again (a new permission is picked up only by a new process).
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {
+    // On a Mac the new copy is started the way a double-click starts it, so the permissions just given apply to it.
+    if fast_core::access::relaunch() {
+        app.exit(0);
+        return;
+    }
     app.restart();
+}
+
+/// Forget this app's Full Disk Access entry in macOS, so it can be switched on again from nothing.
+#[tauri::command]
+pub async fn access_reset_grant(app: AppHandle) -> CmdResult<()> {
+    let id = app.config().identifier.clone();
+    blocking(move || fast_core::access::reset_grant(&id).map_err(err)).await
 }
 
 #[tauri::command]

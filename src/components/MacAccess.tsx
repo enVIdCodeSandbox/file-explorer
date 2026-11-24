@@ -89,6 +89,12 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
     </>
   ) : (
     <>
+      {status.problem && (
+        <p className="access-warning" role="alert">
+          <strong>Move the app first. </strong>
+          {status.problem}
+        </p>
+      )}
       <ol className="access-steps">
         <li>Press <strong>Allow access to all folders</strong>. System Settings opens on Full Disk Access.</li>
         <li>Switch on <strong>FAST File Explorer</strong> in the list. If it is not there, press <strong>Show the app in Finder</strong> and drag it into the list.</li>
@@ -99,6 +105,27 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
         {status.appPath && <button className="secondary" onClick={() => void ask(api.accessRevealApp)}>Show the app in Finder</button>}
         <button className="secondary" onClick={refresh}>I did it: check again</button>
       </div>
+      <details className="access-trouble">
+        <summary>Switched on, and macOS still asks?</summary>
+        <p className="muted">
+          An entry in the list can look switched on and still belong to an earlier version of the app: each new build of an app without a developer signature is a different app to macOS. Press the button to remove the old entry, then switch the new one on and restart. The default file manager setting and Full Disk Access both need the app to stay in the Applications folder.
+        </p>
+        <div className="dialog-buttons access-buttons">
+          <button
+            className="secondary"
+            onClick={() =>
+              void ask(async () => {
+                await api.accessResetGrant();
+                if (status.appPath) await api.accessRevealApp().catch(() => {});
+                await api.accessOpenPane("fullDisk");
+                refresh();
+              })
+            }
+          >
+            Remove the old entry and start over
+          </button>
+        </div>
+      </details>
       <AskFolders refresh={refresh} />
     </>
   );

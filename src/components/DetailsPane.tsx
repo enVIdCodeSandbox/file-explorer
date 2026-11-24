@@ -274,6 +274,23 @@ export function DetailsPane({ paths, embedded }: { paths?: string[]; embedded?: 
   }, [target]);
 
   const settings = useStore((st) => st.settings);
+  // With folder sizes switched on (the performance presets do that), a folder's size and contents are measured as
+  // soon as its details arrive; with it off, the button below still does it on request.
+  const autoSizes = !!settings && adv<boolean>(settings, "files.folderSizes");
+  const autoKind = details?.kind;
+  const autoPath = details?.path;
+  useEffect(() => {
+    if (!autoSizes || !target || autoPath !== target || autoKind !== "folder" || isRemote(target) || isArchiveLoc(target)) return;
+    let alive = true;
+    setStats("loading");
+    api
+      .folderStats(target, true)
+      .then((r) => alive && setStats(r))
+      .catch(() => alive && setStats(null));
+    return () => {
+      alive = false;
+    };
+  }, [autoSizes, target, autoPath, autoKind]);
   const liveOn = !!settings && adv<boolean>(settings, "live.enabled") && adv<boolean>(settings, "live.details");
   const growing = useGrowing(target ? [target] : [], liveOn);
   const live = growing[0];

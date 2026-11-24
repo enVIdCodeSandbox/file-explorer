@@ -159,6 +159,7 @@ function AppInner() {
           {
             label: "Send to developer",
             // Filled into the bug report form for the person: nothing to open, nothing to press.
+            // Once: the backend refuses a report that was already sent, and says so.
             run: () => void api.crashSend(name).then((m) => showToast(m)).catch((e) => showToast(String(e))),
           },
           {

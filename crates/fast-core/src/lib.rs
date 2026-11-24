@@ -35,6 +35,8 @@ pub mod meter;
 pub mod openwith;
 pub mod ops;
 pub mod access;
+#[cfg(target_os = "macos")]
+pub mod lshandlers;
 pub mod permissions;
 pub mod phone;
 pub mod platform;

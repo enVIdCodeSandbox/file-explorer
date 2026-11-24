@@ -736,6 +736,8 @@ export interface AccessStatus {
   fullAccess: boolean;
   appPath: string | null;
   categories: AccessCategory[];
+  /** Why a permission given to the app where it runs now would not count (run from a download or disk image). */
+  problem?: string | null;
 }
 
 export interface Profile {
@@ -995,7 +997,8 @@ export const api = {
   statMany: (paths: string[]) => invoke<LiveStat[]>("stat_many", { paths }),
   getDetails: (path: string) => invoke<Details>("get_details", { path }),
   getPermissions: (path: string) => invoke<FilePermissions>("get_permissions", { path }),
-  folderStats: (path: string) => invoke<FolderStats>("folder_stats", { path }),
+  /** `auto`: measured without being asked, so places that need a permission prompt are refused. */
+  folderStats: (path: string, auto = false) => invoke<FolderStats>("folder_stats", { path, auto }),
   hashFile: (path: string) => invoke<string>("hash_file", { path }),
   /** What files that share a name with other kinds (".ts", ".mod"…) really are: a look's name, "default" or "unknown". */
   sniffTypes: (paths: string[]) => invoke<string[]>("sniff_types", { paths }),
@@ -1008,6 +1011,7 @@ export const api = {
   accessStatus: (recheck = false) => invoke<AccessStatus>("access_status", { recheck }),
   accessOpenPane: (pane: "fullDisk" | "files" | "photos" | "media") => invoke<void>("access_open_pane", { pane }),
   accessRevealApp: () => invoke<void>("access_reveal_app"),
+  accessResetGrant: () => invoke<void>("access_reset_grant"),
   accessAskFolders: () => invoke<AskedFolder[]>("access_ask_folders"),
   restartApp: () => invoke<void>("restart_app"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),

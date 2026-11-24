@@ -36,13 +36,58 @@ fn folder_handler() -> Option<String> {
     Some(unsafe { CFString::wrap_under_create_rule(got) }.to_string())
 }
 
+/// The Launch Services preferences, read the way `defaults` reads them (so what the preferences daemon holds is seen).
+const LS_DOMAIN: &str = "com.apple.LaunchServices/com.apple.launchservices.secure";
+
+fn read_ls_prefs() -> plist::Dictionary {
+    match Command::new("defaults").args(["export", LS_DOMAIN, "-"]).output() {
+        Ok(o) if o.status.success() => plist::Value::from_reader(std::io::Cursor::new(o.stdout)).ok().and_then(plist::Value::into_dictionary).unwrap_or_default(),
+        _ => plist::Dictionary::new(),
+    }
+}
+
+fn write_ls_prefs(dict: plist::Dictionary) -> Result<()> {
+    use std::io::Write;
+    let mut xml = Vec::new();
+    plist::Value::Dictionary(dict).to_writer_xml(&mut xml).map_err(|e| CoreError::Invalid(e.to_string()))?;
+    let mut child = Command::new("defaults")
+        .args(["import", LS_DOMAIN, "-"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| CoreError::Invalid(format!("could not run defaults: {e}")))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&xml).map_err(|e| CoreError::Invalid(e.to_string()))?;
+    }
+    let status = child.wait().map_err(|e| CoreError::Invalid(e.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CoreError::Invalid("defaults refused to write the Launch Services preferences".into()))
+    }
+}
+
+/// The folder handler named in the preferences file itself.
+fn prefs_folder_handler() -> Option<String> {
+    crate::lshandlers::folder_handler(&read_ls_prefs())
+}
+
+/// What opens folders now: the preferences entry when there is one (that is what is written below), else what
+/// Launch Services reports.
+fn current_folder_handler() -> Option<String> {
+    prefs_folder_handler().or_else(folder_handler)
+}
+
 fn set_folder_handler(id: &str) -> Result<()> {
     let (kind, id_ref) = (CFString::new(FOLDER), CFString::new(id));
     let rc = unsafe { LSSetDefaultRoleHandlerForContentType(kind.as_concrete_TypeRef(), ALL_ROLES, id_ref.as_concrete_TypeRef()) };
-    if rc != 0 {
-        return Err(CoreError::Invalid(format!("macOS did not accept the change (Launch Services error {rc}).")));
+    if rc == 0 {
+        return Ok(());
     }
-    Ok(())
+    // Current macOS answers -50 for folders. File managers take over by writing the preference that call would write.
+    // Putting Finder back is done by removing the entry, which is what "never changed" looks like.
+    let entry = if same(id, FINDER) { None } else { Some(id) };
+    write_ls_prefs(crate::lshandlers::with_folder_handler(read_ls_prefs(), entry))
+        .map_err(|e| CoreError::Invalid(format!("macOS did not accept the change (Launch Services error {rc}), and writing the setting directly failed too: {e}")))
 }
 
 fn file_viewer() -> Option<String> {
@@ -70,7 +115,7 @@ fn same(a: &str, b: &str) -> bool {
 pub fn status(note: &Saved) -> Status {
     let limits = vec![
         "Finder keeps running: it shows the desktop, and some apps ask Finder directly when they reveal a file.".to_string(),
-        "You may need to sign out and back in before every app notices the change.".to_string(),
+        "Sign out and back in once after switching, so every app notices the change.".to_string(),
     ];
     if !bundled() {
         return Status {
@@ -81,7 +126,7 @@ pub fn status(note: &Saved) -> Status {
         };
     }
     let ours = note.previous.get("id").cloned();
-    let active = match (&ours, folder_handler()) {
+    let active = match (&ours, current_folder_handler()) {
         (Some(id), Some(now)) => same(id, &now),
         _ => false,
     };
@@ -97,7 +142,7 @@ pub fn set_default(note: &mut Saved, _exe: &Path, app_id: &str) -> Result<()> {
     if !bundled() {
         return Err(CoreError::Unsupported("the app is not running from an application bundle"));
     }
-    match folder_handler() {
+    match current_folder_handler() {
         Some(now) if !same(&now, app_id) => {
             note.previous.insert("folder".into(), now);
         }
@@ -118,7 +163,7 @@ pub fn set_default(note: &mut Saved, _exe: &Path, app_id: &str) -> Result<()> {
 pub fn restore(note: &mut Saved) -> Result<()> {
     let Some(id) = note.previous.get("id").cloned() else { return Ok(()) };
     // Only undo what is still the app's: another program may have been chosen since.
-    if folder_handler().is_some_and(|now| same(&now, &id)) {
+    if current_folder_handler().is_some_and(|now| same(&now, &id)) {
         let back = note.previous.get("folder").cloned().unwrap_or_else(|| FINDER.to_string());
         set_folder_handler(&back)?;
     }

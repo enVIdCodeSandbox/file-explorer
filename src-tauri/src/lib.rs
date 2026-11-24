@@ -322,6 +322,7 @@ pub fn run() {
             commands::access_open_pane,
             commands::access_reveal_app,
             commands::access_ask_folders,
+            commands::access_reset_grant,
             commands::restart_app,
             commands::connect_device,
             commands::open_device_in_system,

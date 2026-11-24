@@ -730,3 +730,7 @@ body[data-split-dragging="col"] { cursor: row-resize; }
 .access-note button { flex: none; white-space: nowrap; }
 
 .locks-panel .check-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+
+.access-warning { margin: 8px 0; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--warning, #d9a400); background: color-mix(in srgb, var(--warning, #d9a400) 14%, transparent); }
+.access-trouble { margin: 10px 0; }
+.access-trouble summary { cursor: pointer; }

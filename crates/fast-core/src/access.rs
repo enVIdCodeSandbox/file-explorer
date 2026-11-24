@@ -269,6 +269,69 @@ pub fn app_bundle() -> Option<PathBuf> {
     exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf())
 }
 
+/// Why a permission given to this copy of the app would not count, when that can be told from where it runs. macOS keys
+/// every permission to the app's identity and place: a copy run straight from a disk image or a download is moved to a
+/// random place first ("App Translocation"), so switching it on in System Settings never matches the running app.
+pub fn location_problem(app: &Path, home: Option<&Path>) -> Option<&'static str> {
+    let s = app.to_string_lossy();
+    if s.contains("/AppTranslocation/") {
+        return Some("The app is running from a temporary place macOS made for it, because it was opened straight from the download. Quit it, drag FAST File Explorer into the Applications folder, and open it from there. Permissions only stick for an app that lives in Applications.");
+    }
+    if s.starts_with("/Volumes/") {
+        return Some("The app is running from a disk image or an external drive. Drag it into the Applications folder, eject the disk image, and open it from Applications. Permissions only stick for an app that lives there.");
+    }
+    if let Some(home) = home {
+        if app.starts_with(home.join("Downloads")) {
+            return Some("The app is running from the Downloads folder. Drag it into the Applications folder and open it from there. Permissions only stick for an app that stays in one place.");
+        }
+    }
+    None
+}
+
+/// The problem with where the running app is, if any (see [`location_problem`]).
+pub fn running_location_problem() -> Option<&'static str> {
+    if !applies() {
+        return None;
+    }
+    location_problem(&app_bundle()?, home().as_deref())
+}
+
+/// Forget the Full Disk Access entry macOS holds for this app, so it can be switched on again from scratch. An entry that
+/// shows as on but belongs to an earlier build of the app (builds without a developer signature get a new identity
+/// each time) is switched on and still does nothing; removing it is the fix. Needs no password.
+pub fn reset_grant(app_id: &str) -> crate::Result<()> {
+    if !applies() {
+        return Err(crate::CoreError::Invalid("this system has no such settings".into()));
+    }
+    if app_id.is_empty() || !app_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(crate::CoreError::Invalid("the app has no usable identifier".into()));
+    }
+    let out = std::process::Command::new("tccutil")
+        .args(["reset", "SystemPolicyAllFiles", app_id])
+        .output()
+        .map_err(|e| crate::CoreError::Invalid(format!("could not run tccutil: {e}")))?;
+    let _ = recheck();
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(crate::CoreError::Invalid(format!("macOS did not reset it: {}", String::from_utf8_lossy(&out.stderr).trim())))
+    }
+}
+
+/// Start the app again through Launch Services, the way a double-click does. A copy started directly by the old process
+/// (what a plain re-exec does) can be judged by macOS as a stranger's child, and not get the permissions just given.
+/// False when this is not a bundled app, so the caller restarts the usual way.
+pub fn relaunch() -> bool {
+    let Some(app) = app_bundle().filter(|_| applies()) else { return false };
+    // After the old process is gone: `open -n` would otherwise find it still running.
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("sleep 1; exec /usr/bin/open -n \"$0\"")
+        .arg(app)
+        .spawn()
+        .is_ok()
+}
+
 /// Show the app in Finder, selected.
 pub fn reveal_app() -> crate::Result<()> {
     let Some(app) = app_bundle() else { return Err(crate::CoreError::Invalid("the app is not running from an application bundle".into())) };
@@ -281,6 +344,16 @@ mod tests {
     use std::io::{Error, ErrorKind};
 
     const HOME: &str = "/Users/ada";
+
+    #[test]
+    fn a_misplaced_app_is_named() {
+        let home = Some(Path::new(HOME));
+        assert!(location_problem(Path::new("/Applications/FAST File Explorer.app"), home).is_none());
+        assert!(location_problem(Path::new("/Users/ada/Applications/FAST File Explorer.app"), home).is_none());
+        assert!(location_problem(Path::new("/private/var/folders/x/AppTranslocation/ABC/d/FAST.app"), home).is_some());
+        assert!(location_problem(Path::new("/Volumes/FAST File Explorer/FAST.app"), home).is_some());
+        assert!(location_problem(Path::new("/Users/ada/Downloads/FAST.app"), home).is_some());
+    }
 
     #[test]
     fn asking_for_folders_lists_each_and_treats_missing_ones_as_fine() {

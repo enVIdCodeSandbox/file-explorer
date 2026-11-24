@@ -76,6 +76,7 @@ zbus = "5"
 # Launch Services: being the app that opens folders.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+plist = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

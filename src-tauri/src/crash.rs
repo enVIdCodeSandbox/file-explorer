@@ -78,8 +78,40 @@ fn send(_path: &std::path::Path) -> CmdResult<String> {
     Err("Sending crash reports is available on computers only. Copy the report from Settings > Storage instead.".into())
 }
 
+/// Reports being sent right now, so a double press cannot send one twice.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static SENDING: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Takes the right to send one report, once: refused when it was sent before or is being sent now. Dropping the claim
+/// lets go of "being sent"; "sent" is remembered on disk by `mark_sent` and never lets go.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct Claim(std::path::PathBuf);
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl Claim {
+    fn take(path: &std::path::Path) -> Result<Claim, String> {
+        if path.with_extension("sent").exists() {
+            return Err("This report was already sent. Each one is only sent once.".into());
+        }
+        let mut busy = SENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if busy.iter().any(|p| p == path) {
+            return Err("This report is being sent already.".into());
+        }
+        busy.push(path.to_path_buf());
+        Ok(Claim(path.to_path_buf()))
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl Drop for Claim {
+    fn drop(&mut self) {
+        SENDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| p != &self.0);
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn send(path: &std::path::Path) -> CmdResult<String> {
+    let _claim = Claim::take(path)?;
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let body = form_body(&text);
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -145,6 +177,22 @@ fn enc(s: &str) -> String {
 #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod form_tests {
     use super::*;
+
+    #[test]
+    fn a_report_is_sent_only_once() {
+        let dir = std::env::temp_dir().join(format!("fast-claim-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("crash-1.txt");
+        std::fs::write(&log, "x").unwrap();
+        let first = Claim::take(&log).unwrap();
+        assert!(Claim::take(&log).err().unwrap().contains("being sent"));
+        drop(first);
+        let again = Claim::take(&log).unwrap();
+        drop(again);
+        crashlog::mark_sent(&log);
+        assert!(Claim::take(&log).err().unwrap().contains("already sent"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_report_goes_into_the_one_field() {

@@ -208,6 +208,8 @@ Every part can be turned off in Settings > Advanced (Files and lists), and how o
 
 One item: type, size, size on disk, dates, permissions, SHA-256 and more. Several items: how many files and folders, total size, the largest file, where they are, the oldest and newest change, a breakdown by type, and a **Measure folders** button that adds up everything inside the selected folders.
 
+**Folder size and contents:** when *Show folder sizes* is on (Settings > Files and lists; every performance level from Balanced up turns it on, the lowest ones turn it off), selecting a folder measures it at once and fills in its total size, file and folder counts and space by type, with no button to press. With it off, the pane shows **Calculate folder size and contents** and measures only when you press it. On a Mac, folders that macOS asks permission for are only measured by the button, until the app has full access. Servers and archives keep the button.
+
 ## Searching
 
 Type in the search box. Results come from an index that is built in the background, so search is immediate. Filters: `ext:png`, `type:image`, `size:>10mb`, and wildcards like `report*.pdf`.
@@ -258,7 +260,7 @@ On a phone it looks through shared storage only. Android does not let any app cl
 
 ## Default file manager
 
-Settings > General > Default file manager makes folders that other apps open come here instead of the system's file manager. The same button puts things back. It changes settings for the signed-in person only and needs no administrator rights.
+Settings > General > Default file manager makes folders that other apps open come here instead of the system's file manager. On a Mac, current macOS refuses the usual way of setting this (error -50), so the app writes the setting the way other file managers do and asks you to sign out and back in once. The app has to be in the Applications folder and opened from there. The same button puts things back. It changes settings for the signed-in person only and needs no administrator rights.
 
 | System | What opens here | What stays with the system |
 | --- | --- | --- |
@@ -697,6 +699,8 @@ The window must be held by its top strip; moving it any other way (with Win+arro
 
 - **One permission instead of dozens.** macOS asks separately for Desktop, Documents, Downloads, Music, Photos, iCloud Drive, removable and network drives. The app now asks once, the first time it opens (and once after updating from an older version), and never again by itself. Granting **Full Disk Access** in System Settings > Privacy & Security covers everything; the app has a button that opens that page and shows the app to drag in. Settings > Privacy and locks > *Folder permissions (macOS)* lists what the app may look at in the background (search index, folder sizes, previews) so you can turn places off, and Disk Usage has a one-button note. Background work never touches a protected place the app has not been given.
 - **Can the app get it with a single prompt?** Not quite: macOS does not let an app pop up a question for Full Disk Access. It is one switch you turn on yourself in System Settings (the app opens the page, and notices the moment you switch it on, then offers to restart). That one switch covers every file and drive. If you prefer not to, *Ask for the usual folders now* makes macOS ask about Desktop, Documents, Downloads, Music, Pictures, Movies and iCloud Drive together, in one sitting (up to seven questions, remembered afterwards); external and network drives still ask the first time each is used.
+- **Switched on, and macOS still asks?** The Full Disk Access screen warns when the app is running from Downloads, a disk image or a temporary "translocated" place (move it to Applications), and has **Remove the old entry and start over**. That removes a stale entry from an earlier build, which looks switched on but does nothing. Restarting from the app now starts the new copy the way a double-click does. For updates to keep the permission, the build needs a stable signature; see `scripts/make-mac-signing-cert.sh` and docs/RELEASING.md.
+- **Bug reports are sent once.** A crash report can be sent to the developer a single time; after that the button is gone and a second try is refused.
 - **Dragging files in from Finder** (or a text file onto the window) no longer opens the file inside the app, and dropping no longer crashes.
 - **Dragging out to Finder or Safari** is unchanged in method; if it still stalls on your Mac, use *Send to developer* on the crash screen so the report reaches me.
 - **Thumbnails** stay on in the background unless you are away; each performance preset now switches the thumbnail settings on or off with it.

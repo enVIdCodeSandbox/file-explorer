@@ -543,7 +543,19 @@ export function StoragePanel() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
-  const sendLog = (name: string) => void api.crashSend(name).then((m) => { showToast(m); reload(); }).catch((e) => showToast(String(e)));
+  const [sending, setSending] = useState<string | null>(null);
+  const sendLog = (name: string) => {
+    if (sending) return;
+    setSending(name);
+    void api
+      .crashSend(name)
+      .then((m) => showToast(m))
+      .catch((e) => showToast(String(e)))
+      .finally(() => {
+        setSending(null);
+        void api.crashLogs().then(setCrashes).catch(() => {});
+      });
+  };
 
   if (!rows) return <p className="muted">Measuring…</p>;
   const disk = rows.reduce((s, r) => s + r.diskBytes, 0);
@@ -628,8 +640,8 @@ export function StoragePanel() {
                   Save as text file
                 </button>
                 {!c.sent && (
-                  <button className="secondary" onClick={() => sendLog(c.name)}>
-                    Send to the developer
+                  <button className="secondary" disabled={sending !== null} onClick={() => sendLog(c.name)}>
+                    {sending === c.name ? "Sending…" : "Send to the developer"}
                   </button>
                 )}
                 {c.name in shown && <pre className="crash-text">{shown[c.name]}</pre>}

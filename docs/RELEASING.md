@@ -26,6 +26,8 @@ Needs an Apple Developer account and a "Developer ID Application" certificate.
 
 Tauri reads these variables itself during `tauri build`.
 
+**Without an Apple account (recommended minimum):** run `scripts/make-mac-signing-cert.sh` once. It makes a free self-signed certificate and prints the same three secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`). Every build is then signed with the same identity. This matters: a Mac app built unsigned gets a new identity at every build, so macOS forgets Full Disk Access at each update, and an entry that looks switched on in System Settings belongs to the earlier build and does nothing. Keep the generated `.p12`: a new certificate is a new identity. It does not remove the "unidentified developer" warning (only a paid certificate does). Untested here: it has not been run through this workflow on a real runner.
+
 ### Windows
 
 Needs a code signing certificate (OV or EV) as a `.pfx` file.
