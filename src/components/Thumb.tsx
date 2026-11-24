@@ -21,6 +21,8 @@ import { askFill, cachedFill, looksFull, type Fill } from "../util/folderFill";
 
 let maxCached = 600;
 const MAX_FAILED = 2000;
+/** Errors that say "not now" rather than "never". */
+const TRANSIENT = /disabled|not permitted|permission denied|timed out|temporar|busy|locked|os error (1|5|11|13|35)\b/i;
 /** A failed thumbnail is tried again after this long (a busy moment is not a verdict). */
 const RETRY_MS = 20_000;
 const cache = new Map<string, string>();
@@ -243,9 +245,16 @@ export function Thumb({
             if (alive) setUrl(made);
           } catch (e) {
             // A drive that a copy is using is left alone for now: try again a little later instead of giving up.
-            if (String(e).includes("drive-busy")) {
+            const why = String(e);
+            if (why.includes("drive-busy")) {
               if (alive) retry = setTimeout(() => setAgain((n) => n + 1), 5000);
-            } else giveUp(key);
+            } else {
+              giveUp(key);
+              // Some refusals are a moment, not a verdict (thumbnails switched off for a while, the system asking the
+              // person for permission, a locked file): the tile asks again once the memo has expired, instead of
+              // staying blank until the folder is opened again.
+              if (alive && TRANSIENT.test(why)) retry = setTimeout(() => setAgain((n) => n + 1), RETRY_MS + 500);
+            }
           }
         },
       });

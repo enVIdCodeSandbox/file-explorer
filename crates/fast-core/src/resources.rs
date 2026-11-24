@@ -135,7 +135,10 @@ pub fn dimmed(b: &Budget, mode: &str, attention: Attention) -> Budget {
             d.background_indexing = false;
             d.prefetch = false;
             d.prefetch_limit = 0;
-            d.thumbnails = false;
+            // Only out of sight are thumbnails given up. Behind another window the picture is still on screen (and a
+            // system permission dialog counts as "another window"): turning them off there left whole folders without
+            // them, and they were not asked for again.
+            d.thumbnails = d.thumbnails && attention != Attention::Away;
             d.prewarm_images = false;
             d.prewarm_limit = 0;
             d.folder_fill_limit = 16;
@@ -477,8 +480,9 @@ mod tests {
         let g = dimmed(&b, "gentle", Attention::Away);
         assert!(g.background && g.io_threads == b.io_threads / 2 && !g.prefetch && g.thumbnails);
         let a = dimmed(&b, "aggressive", Attention::Behind);
-        assert!(a.background && a.io_threads == 1 && !a.thumbnails && !a.background_indexing && a.cache_mb <= 32 && a.progress_ms >= 1000);
+        assert!(a.background && a.io_threads == 1 && a.thumbnails && !a.background_indexing && a.cache_mb <= 32 && a.progress_ms >= 1000);
         assert!(a.index_max_entries <= b.index_max_entries);
         assert_eq!(dimmed(&b, "aggressive", Attention::Away).progress_ms, 2000);
+        assert!(!dimmed(&b, "aggressive", Attention::Away).thumbnails, "out of sight: no thumbnails");
     }
 }

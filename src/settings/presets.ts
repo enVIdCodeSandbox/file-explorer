@@ -193,6 +193,23 @@ const LEVELS: Level[] = [
   },
 ];
 
+/** The per-view thumbnail switches a level sets (Settings > Thumbnails). */
+export function thumbViews(l: Pick<Level, "thumbs" | "thumbPx">): Patch {
+  const on = l.thumbs;
+  return {
+    "advanced.thumbs.inDetails": on && l.thumbPx >= 160,
+    "advanced.thumbs.inList": on && l.thumbPx >= 160,
+    "advanced.thumbs.inSmall": on && l.thumbPx >= 96,
+    "advanced.thumbs.inMedium": on,
+    "advanced.thumbs.inLarge": on,
+    "advanced.thumbs.inXl": on,
+    "advanced.thumbs.inPane": on,
+    "advanced.thumbs.onDevices": on,
+    "advanced.thumbs.highPerfAlways": on && l.thumbPx >= 128,
+    "advanced.thumbs.videoPrewarm": on && l.thumbPx >= 128 ? "auto" : "off",
+  };
+}
+
 function perfPatch(l: Level): Patch {
   return {
     "performance.priority": "manual",
@@ -228,6 +245,10 @@ function perfPatch(l: Level): Patch {
     "advanced.thumbs.images": l.thumbs,
     "advanced.thumbs.documents": l.thumbs,
     "advanced.thumbs.videos": l.thumbs,
+    // Which views show pictures follows the level too, so a lighter level really does show fewer: none without
+    // thumbnails, then the three icon views and the details pane, then the small icons, and only the strongest levels
+    // put them in the Details and List rows or force them on in every large view.
+    ...thumbViews(l),
     "advanced.thumbs.quality": l.thumbQuality ?? "normal",
     "advanced.thumbs.prewarmImages": l.prewarmImages ?? "auto",
     "advanced.thumbs.maxImageMb": l.maxImageMb ?? 64,
