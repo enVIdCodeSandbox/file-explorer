@@ -50,7 +50,9 @@ const Viewer = lazy(() => import("./components/Viewer").then((m) => ({ default: 
 const Setup = lazy(() => import("./components/Setup").then((m) => ({ default: m.Setup })));
 const SettingsView = lazy(() => import("./components/SettingsView").then((m) => ({ default: m.SettingsView })));
 const TerminalPanel = lazy(() => import("./components/Terminal").then((m) => ({ default: m.TerminalPanel })));
+const DetachedTerminal = lazy(() => import("./components/Terminal").then((m) => ({ default: m.DetachedTerminal })));
 const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({ default: m.BatchRename })));
+const MacAccessPrompt = lazy(() => import("./components/MacAccess").then((m) => ({ default: m.MacAccessPrompt })));
 const NetworkSignIn = lazy(() => import("./components/NetworkSignIn").then((m) => ({ default: m.NetworkSignIn })));
 const ConnectServer = lazy(() => import("./components/ConnectServer").then((m) => ({ default: m.ConnectServer })));
 const ShareDialog = lazy(() => import("./components/Share").then((m) => ({ default: m.ShareDialog })));
@@ -439,6 +441,7 @@ function AppInner() {
             <Part later><BatchRename /></Part>
             <Part later><ConnectServer /></Part>
             <Part later><NetworkSignIn /></Part>
+            <Part later><MacAccessPrompt /></Part>
             <Dialog />
             <Toast />
           </>
@@ -532,7 +535,8 @@ function AppInner() {
       <Part later><ShareDialog /></Part>
       <Part later><BatchRename /></Part>
       <Part later><ConnectServer /></Part>
-            <Part later><NetworkSignIn /></Part>
+      <Part later><NetworkSignIn /></Part>
+      <Part later><MacAccessPrompt /></Part>
       <DragOverlay />
       <Tooltips />
       <Dialog />

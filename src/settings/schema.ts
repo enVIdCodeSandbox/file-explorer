@@ -25,6 +25,8 @@ export type Control =
   | { type: "profiles" }
   | { type: "resources" }
   | { type: "locks" }
+  | { type: "macAccess" }
+  | { type: "deleteGuard" }
   | { type: "defaultFm" }
   | { type: "updates" }
   | { type: "icons" }
@@ -223,6 +225,9 @@ export const SETTINGS: SettingDef[] = [
 
   // ---- Privacy and locks ----
   { key: "privacy.locks", section: "Privacy and locks", label: "Locked folders and drives", description: "Passcodes that keep folders and drives closed inside this app.", control: { type: "locks" }, keywords: "passcode password lock protect private secure hide" },
+
+  { key: "privacy.deleteGuard", section: "Privacy and locks", label: "Password for deleting for good", description: "Off by default. Asks for a password before anything is deleted permanently, so nothing goes by accident.", control: { type: "deleteGuard" }, keywords: "password permanent delete shift delete confirm protect accident empty trash recycle bin" },
+  { key: "privacy.mac", section: "Privacy and locks", label: "Folder permissions (macOS)", description: "One permission so macOS stops asking folder by folder, and what the app may search in the background.", control: { type: "macAccess" }, keywords: "permission full disk access mac macos privacy allow folders desktop documents downloads prompt" },
 
   // ---- Right-click menu ----
   { key: "contextMenu.hidden", section: "Right-click menu", label: "Entries shown in the right-click menu", control: { type: "menuItems" }, keywords: "context menu customize" },

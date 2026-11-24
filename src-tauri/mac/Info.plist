@@ -21,5 +21,21 @@
 			</array>
 		</dict>
 	</array>
+	<!-- What macOS shows when the person opens one of these folders themselves. The app asks for Full Disk Access
+	     once instead (Settings > Permissions), which stops these prompts for good. -->
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>FAST File Explorer shows the files in this folder when you open it.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>FAST File Explorer shows the files in this folder when you open it.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>FAST File Explorer shows the files in this folder when you open it.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>FAST File Explorer shows the files on this drive when you open it.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>FAST File Explorer shows the files on this network drive when you open it.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>FAST File Explorer shows the files in your Music folder when you open it.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>FAST File Explorer shows the files in your Pictures folder when you open it.</string>
 </dict>
 </plist>

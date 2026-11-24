@@ -5,6 +5,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ScanActivity } from "./ScanActivity";
+import { MacAccessHelp, MacAccessNote } from "./MacAccess";
 import { api, on, type Analysis, type AnalysisProgress, type SizeNode } from "../api";
 import { deletePaths, openFile, showPermissions, showProperties, useStore } from "../store";
 import {
@@ -354,7 +355,7 @@ export function AnalyzerView({ path }: { path: string }) {
     return (
       <div className="page">
         {picker}
-        <div className="empty-state" data-error>{error}</div>
+        <div className="empty-state" data-error>{error}<MacAccessHelp error={error} /></div>
       </div>
     );
   }
@@ -418,6 +419,7 @@ export function AnalyzerView({ path }: { path: string }) {
         else if (e.key === "Escape") setExts(new Set());
       }}
     >
+      <MacAccessNote />
       <div className="section-head">
         <div className="breadcrumbs">
           {trail.map((p, i) => (

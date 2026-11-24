@@ -34,6 +34,21 @@ pub struct Settings {
     pub active_profile: String,
     /// False until the person has been through the first-run setup.
     pub setup_done: bool,
+    /// What the person decided about macOS folder permissions (see `access.rs`).
+    pub mac_access: MacAccess,
+}
+
+/// macOS asks permission per kind of folder unless the app has Full Disk Access. The app asks for that one permission
+/// itself, once, and never nags afterwards; these are the person's choices.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MacAccess {
+    /// The permission screen has been shown once (in the first-run setup, or on the first launch of an existing
+    /// install). It is never shown by itself again; Settings keeps its buttons.
+    pub asked: bool,
+    /// Kinds of folder (ids from `access::categories`) the person does not want searched, sized or watched in the
+    /// background even though the app is allowed to.
+    pub off: Vec<String>,
 }
 
 /// A command for the button bar / Commands menu. The program is started directly, never through a shell.

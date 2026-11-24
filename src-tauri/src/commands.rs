@@ -297,7 +297,7 @@ fn prefetch_now(st: &Shared, paths: Vec<String>) {
     let max_entries = if intensity >= 80 { 100_000 } else { 20_000 };
     for path in paths.into_iter().take(limit) {
         let p = PathBuf::from(path);
-        if st.listings.lock().contains(&p) || cache_off(st, &p) || on_network(st, &p) {
+        if st.listings.lock().contains(&p) || cache_off(st, &p) || on_network(st, &p) || !bg_ok(st, &p) {
             continue;
         }
         if let Ok(entries) = entry::list_dir(&p, show_hidden) {
@@ -494,7 +494,7 @@ pub async fn folder_sizes_start(app: AppHandle, state: State<'_, Shared>, dir: S
         let mut todo: Vec<String> = Vec::new();
         for name in names {
             let path = Path::new(&dir).join(&name);
-            if is_locked(&st, &path.to_string_lossy()) {
+            if is_locked(&st, &path.to_string_lossy()) || !bg_ok(&st, &path) {
                 continue;
             }
             // Walking a folder on a card or share that a copy is using would compete with it.
@@ -827,6 +827,55 @@ pub async fn network_link() -> CmdResult<fast_core::network::Link> {
     blocking(|| Ok(fast_core::network::link())).await
 }
 
+/// What the app may see on this system, for the permission screens. Only macOS has anything to ask for.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessStatus {
+    /// This system protects folders (macOS).
+    applies: bool,
+    /// The app can open everything without asking.
+    full_access: bool,
+    /// Where the app is, so it can be shown in Finder and dragged into the list.
+    app_path: Option<String>,
+    categories: Vec<fast_core::access::Category>,
+}
+
+#[tauri::command]
+pub async fn access_status(recheck: Option<bool>) -> CmdResult<AccessStatus> {
+    blocking(move || {
+        let full_access = if recheck.unwrap_or(false) { fast_core::access::recheck() } else { fast_core::access::full_access() };
+        Ok(AccessStatus {
+            applies: fast_core::access::applies(),
+            full_access,
+            app_path: fast_core::access::app_bundle().map(|p| p.to_string_lossy().into_owned()),
+            categories: fast_core::access::categories(),
+        })
+    })
+    .await
+}
+
+/// Open a pane of System Settings: "fullDisk", "files", "photos" or "media".
+#[tauri::command]
+pub async fn access_open_pane(pane: String) -> CmdResult<()> {
+    blocking(move || {
+        let pane = fast_core::access::Pane::parse(&pane).ok_or_else(|| format!("unknown pane {pane}"))?;
+        fast_core::access::open_pane(pane).map_err(err)
+    })
+    .await
+}
+
+/// Show the app in Finder.
+#[tauri::command]
+pub async fn access_reveal_app() -> CmdResult<()> {
+    blocking(|| fast_core::access::reveal_app().map_err(err)).await
+}
+
+/// Start the app again (a new permission is picked up only by a new process).
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 #[tauri::command]
 pub async fn get_devices(state: State<'_, Shared>) -> CmdResult<Vec<fast_core::devices::Device>> {
     let st = state.inner().clone();
@@ -892,6 +941,7 @@ pub fn known_folders() -> Vec<Place> {
 /// Everything the index leaves out: the built-in skips plus the folders and drives with caching off.
 fn index_skip(st: &Shared) -> Vec<PathBuf> {
     let mut skip = fast_core::index::default_skip_list();
+    skip.extend(fast_core::access::skip_list(&st.settings.read().mac_access.off));
     skip.extend(cache_rules(st).into_iter().map(|r| {
         let t = r.trim_end_matches(['/', '\\']);
         PathBuf::from(if t.is_empty() { r.as_str() } else { t })
@@ -902,7 +952,7 @@ fn index_skip(st: &Shared) -> Vec<PathBuf> {
 fn index_roots(st: &Shared) -> Vec<PathBuf> {
     let rules = cache_rules(st);
     let all = index_roots_all(st);
-    all.into_iter().filter(|r| !fast_core::cachepolicy::excluded(&rules, r)).collect()
+    all.into_iter().filter(|r| !fast_core::cachepolicy::excluded(&rules, r) && bg_ok(st, r)).collect()
 }
 
 /// The places search would index, before caching rules are applied.
@@ -1066,7 +1116,7 @@ fn run_index_updates(app: AppHandle, st: Shared) {
             let mut dirs = dirs;
             dirs.sort();
             for dir in dirs {
-                if cache_off(&st, &dir) {
+                if cache_off(&st, &dir) || !bg_ok(&st, &dir) {
                     continue;
                 }
                 let set = st.index.read().clone();
@@ -1380,7 +1430,7 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
                 });
                 let r = usage::scan(
                     &root,
-                    &UsageOptions { threads, cancel: Some(&cancel), progress: Some(&progress), partial: Some(&on_partial), ..Default::default() },
+                    &UsageOptions { threads, cancel: Some(&cancel), progress: Some(&progress), partial: Some(&on_partial), skip: usage_skip(&st, &root), ..Default::default() },
                 );
                 finished.store(true, Ordering::Relaxed);
                 r
@@ -1407,6 +1457,15 @@ pub async fn analyze_start(app: AppHandle, state: State<'_, Shared>, path: Strin
         })
         .map_err(err)?;
     Ok(())
+}
+
+/// What a disk-usage scan leaves out: the usual pseudo-folders, and on macOS the folders that ask for permission
+/// until the app has Full Disk Access. A scan that was started *inside* such a folder is the person's own request,
+/// so that folder is allowed.
+fn usage_skip(st: &Shared, root: &Path) -> Vec<PathBuf> {
+    let mut skip = fast_core::index::default_skip_list();
+    skip.extend(fast_core::access::skip_list(&st.settings.read().mac_access.off).into_iter().filter(|s| !root.starts_with(s)));
+    skip
 }
 
 #[tauri::command]
@@ -2644,6 +2703,12 @@ fn on_network(st: &crate::state::AppState, path: &Path) -> bool {
         let mount = mount.trim_end_matches(['/', '\\']);
         d.media == fast_core::drives::Media::Network && !mount.is_empty() && text.starts_with(mount)
     })
+}
+
+/// May background work (index, sizes, preload) look inside `path`? On macOS, folders that ask for permission stay
+/// closed to it until the app has Full Disk Access; elsewhere always true. See `fast_core::access`.
+fn bg_ok(st: &crate::state::AppState, path: &Path) -> bool {
+    fast_core::access::background_ok(path, &st.settings.read().mac_access.off)
 }
 
 fn cache_off(st: &crate::state::AppState, path: &Path) -> bool {

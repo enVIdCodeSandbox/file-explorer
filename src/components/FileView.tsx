@@ -41,6 +41,7 @@ import { adv } from "../settings/advanced";
 import { closestIndex, nextText } from "../util/typeFind";
 import { taskFromSelection } from "./tasksUtil";
 import { LockedCard } from "./Locks";
+import { MacAccessHelp } from "./MacAccess";
 import { commandsFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
@@ -1461,6 +1462,7 @@ export function FileView({ path }: { path: string }) {
           <div className="empty-state" data-error>
             <strong>This folder can't be opened</strong>
             <span>{error}</span>
+            <MacAccessHelp error={error} />
           </div>
         ) : !current ? (
           <div className="loading-bar" />

@@ -706,6 +706,30 @@ export interface Settings {
   activeProfile: string;
   /** False until the first-run setup has been completed or skipped. */
   setupDone: boolean;
+  /** What the person decided about macOS folder permissions. */
+  macAccess: MacAccessSettings;
+}
+
+export interface MacAccessSettings {
+  /** The permission screen was shown once; it never appears by itself again. */
+  asked: boolean;
+  /** Kinds of folder the person does not want searched, sized or watched in the background. */
+  off: string[];
+}
+
+export interface AccessCategory {
+  id: string;
+  label: string;
+  where: string;
+}
+
+export interface AccessStatus {
+  /** This system protects folders the way macOS does. */
+  applies: boolean;
+  /** The app can open every folder without asking. */
+  fullAccess: boolean;
+  appPath: string | null;
+  categories: AccessCategory[];
 }
 
 export interface Profile {
@@ -975,6 +999,10 @@ export const api = {
   getDrives: () => invoke<Drive[]>("get_drives"),
   getDevices: () => invoke<Device[]>("get_devices"),
   networkLink: () => invoke<NetworkLink>("network_link"),
+  accessStatus: (recheck = false) => invoke<AccessStatus>("access_status", { recheck }),
+  accessOpenPane: (pane: "fullDisk" | "files" | "photos" | "media") => invoke<void>("access_open_pane", { pane }),
+  accessRevealApp: () => invoke<void>("access_reveal_app"),
+  restartApp: () => invoke<void>("restart_app"),
   connectDevice: (id: string) => invoke<string | null>("connect_device", { id }),
   openDeviceInSystem: (open: string) => invoke<void>("open_device_in_system", { open }),
   knownFolders: () => invoke<{ label: string; path: string }[]>("known_folders"),
