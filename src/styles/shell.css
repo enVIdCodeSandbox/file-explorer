@@ -576,13 +576,13 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 /* Window buttons on the left look like traffic lights */
 .window-controls[data-side="left"] { margin-left: 0; margin-right: 8px; align-self: center; gap: 8px; padding-left: 12px; order: -1; }
 .window-controls[data-look="round"] button { width: 14px; height: 14px; padding: 0; border: 0; border-radius: 50%; color: transparent; background: #f5bf4f; }
-.window-controls[data-look="round"] button:nth-child(2) { background: #61c554; }
-.window-controls[data-look="round"] .close { background: #ee6a5e; order: -1; }
-/* The colors are stated again for hover and focus: a bare "background: inherit" there turned the yellow and green
-   buttons black (they inherited the strip's background) and a focus ring drew a hollow blue circle. */
-.window-controls[data-look="round"] button:first-child:hover, .window-controls[data-look="round"] button:first-child:focus-visible { background: #f5bf4f; }
-.window-controls[data-look="round"] button:nth-child(2):hover, .window-controls[data-look="round"] button:nth-child(2):focus-visible { background: #61c554; }
-.window-controls[data-look="round"] .close:hover, .window-controls[data-look="round"] .close:focus-visible { background: #ee6a5e; }
+.window-controls[data-look="round"] button.close { background: #ee6a5e; order: -1; }
+.window-controls[data-look="round"] button.min { background: #f5bf4f; order: 0; }
+.window-controls[data-look="round"] button.zoom { background: #61c554; order: 1; }
+/* Match .toolbar button:hover:not(:disabled) specificity so hovered lights keep their traffic-light color instead of turning dark. */
+.window-controls[data-look="round"] button.close:hover:not(:disabled), .window-controls[data-look="round"] button.close:focus-visible { background: #ee6a5e; }
+.window-controls[data-look="round"] button.min:hover:not(:disabled), .window-controls[data-look="round"] button.min:focus-visible { background: #f5bf4f; }
+.window-controls[data-look="round"] button.zoom:hover:not(:disabled), .window-controls[data-look="round"] button.zoom:focus-visible { background: #61c554; }
 .window-controls[data-look="round"] button:hover { filter: brightness(0.92); }
 .window-controls[data-look="round"]:hover button { color: rgba(0, 0, 0, 0.6); }
 .window-controls[data-look="round"] button:focus { outline: none; }

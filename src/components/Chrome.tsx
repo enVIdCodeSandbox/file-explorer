@@ -88,10 +88,10 @@ function WindowControls({ side = "right" }: { side?: "left" | "right" }) {
   const win = () => getCurrentWindow();
   return (
     <div className="window-controls" data-side={side} data-look={side === "left" ? "round" : undefined}>
-      <button aria-label="Minimize" title="Minimize" onClick={() => void win().minimize()}>
+      <button className="min" aria-label="Minimize" title="Minimize" onClick={() => void win().minimize()}>
         <Icon name="minimize" size={12} />
       </button>
-      <button aria-label={maximized ? "Restore" : "Maximize"} title={maximized ? "Restore" : "Maximize"} onClick={() => void win().toggleMaximize()}>
+      <button className="zoom" aria-label={maximized ? "Restore" : "Maximize"} title={maximized ? "Restore" : "Maximize"} onClick={() => void win().toggleMaximize()}>
         <Icon name={maximized ? "restore" : "maximize"} size={12} />
       </button>
       <button className="close" aria-label="Close" title="Close" onClick={() => void win().close()}>
@@ -132,6 +132,7 @@ function TrafficLights() {
           <Icon name="close" size={9} />
         </button>
         <button
+          className="min"
           aria-label="Minimize"
           title="Minimize"
           onClick={() => {
@@ -141,7 +142,7 @@ function TrafficLights() {
         >
           <Icon name="minimize" size={9} />
         </button>
-        <button aria-label="Exit full screen" title="Exit full screen" onClick={leave}>
+        <button className="zoom" aria-label="Exit full screen" title="Exit full screen" onClick={leave}>
           <Icon name="restore" size={9} />
         </button>
       </div>
