@@ -152,18 +152,14 @@ function AppInner() {
       if (!name) return;
       crumb("startup: the previous run ended unexpectedly");
       const { notify, showToast } = useStore.getState();
-      const copyAll = () => void api.crashLogRead(name).then((t) => navigator.clipboard.writeText(t)).catch(() => {});
       notify("error", "The app closed unexpectedly last time", "A crash report was saved on this computer.", {
         important: true,
         seconds: 90,
         actions: [
           {
             label: "Send to developer",
-            run: () => {
-              // The page opens in the browser with the report filled in; the full text is copied in case it had to be shortened.
-              copyAll();
-              void api.crashSend(name).then((m) => showToast(m)).catch((e) => showToast(String(e)));
-            },
+            // Filled into the bug report form for the person: nothing to open, nothing to press.
+            run: () => void api.crashSend(name).then((m) => showToast(m)).catch((e) => showToast(String(e))),
           },
           {
             label: "View crash log",

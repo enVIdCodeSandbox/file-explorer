@@ -217,15 +217,11 @@ jobs:
       - name: Build packages (signed)
         if: steps.wincert.outputs.thumbprint != ''
         shell: pwsh
-        env:
-          FAST_CRASH_TOKEN: ${{ secrets.FAST_CRASH_TOKEN }}
         run: |
           $config = '{"bundle":{"windows":{"certificateThumbprint":"${{ steps.wincert.outputs.thumbprint }}","digestAlgorithm":"sha256","timestampUrl":"http://timestamp.digicert.com"}}}'
           npx tauri build ${{ matrix.args }} --config $config
       - name: Build packages
         if: steps.wincert.outputs.thumbprint == ''
-        env:
-          FAST_CRASH_TOKEN: ${{ secrets.FAST_CRASH_TOKEN }}
         run: npx tauri build ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:

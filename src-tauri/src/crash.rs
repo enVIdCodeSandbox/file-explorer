@@ -1,15 +1,11 @@
-//! Crash log commands, and the optional sending of reports to the project's GitHub issues.
-//! Sending is off until the person turns it on in Settings (`crash.github`), or presses Send on one report.
+//! Crash log commands, and the sending of reports to the developer through the project's bug report form.
+//! Automatic sending is off until the person turns it on in Settings (`crash.github`), or presses Send on one report.
 
 use crate::commands::CmdResult;
 use crate::state::Shared;
 use fast_core::crashlog;
 use serde::Serialize;
 use tauri::State;
-
-/// A read-and-issue token for the project's repository, put in at build time (`FAST_CRASH_TOKEN`).
-/// It should be a fine-grained token that can only write issues on that one repository.
-const TOKEN: Option<&str> = option_env!("FAST_CRASH_TOKEN");
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,82 +53,80 @@ pub fn crash_log_read(state: State<'_, Shared>, name: String) -> CmdResult<Strin
     std::fs::read_to_string(state.paths.crash.join(name)).map_err(|e| e.to_string())
 }
 
-/// Sends one report to the project's issues. Without a token built in, opens a pre-filled "new issue"
-/// page in the browser instead (the person signs in there and presses Submit).
+/// Sends one report to the developer: it is filled into the project's bug report form (a Google Form that needs no
+/// sign-in and collects no e-mail address), so there is nothing for the person to do.
 #[tauri::command]
 pub async fn crash_send(state: State<'_, Shared>, name: String) -> CmdResult<String> {
     if !safe_name(&name) {
         return Err("Not a crash log".into());
     }
-    let st = state.inner().clone();
-    let repo = st.settings.read().updates.repo.clone();
-    let path = st.paths.crash.join(&name);
-    tauri::async_runtime::spawn_blocking(move || send(&repo, &path)).await.map_err(|e| e.to_string())?
+    let path = state.paths.crash.join(&name);
+    tauri::async_runtime::spawn_blocking(move || send(&path)).await.map_err(|e| e.to_string())?
 }
 
+/// Where the form takes its answers, and the one question in it (a paragraph box).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const FORM_URL: &str = "https://docs.google.com/forms/d/e/1FAIpQLSdoBKWIIjyzHu5WcpxBid2BwjiaEnd_gwVwOiTb3Oze0sJBIw/formResponse";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const FORM_FIELD: &str = "entry.1859183185";
+/// Longest answer sent. A longer report keeps its start (problem, computer, state) and its end (the last events).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const FORM_MAX_CHARS: usize = 40_000;
+
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn send(_repo: &str, _path: &std::path::Path) -> CmdResult<String> {
+fn send(_path: &std::path::Path) -> CmdResult<String> {
     Err("Sending crash reports is available on computers only. Copy the report from Settings > Storage instead.".into())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn send(repo: &str, path: &std::path::Path) -> CmdResult<String> {
+fn send(path: &std::path::Path) -> CmdResult<String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let kind = text.lines().find_map(|l| l.strip_prefix("Kind: ")).unwrap_or("Crash").to_string();
-    let version = env!("CARGO_PKG_VERSION");
-    let os = std::env::consts::OS;
-    let title = format!("Crash report: {kind} (v{version}, {os})");
-    let Some(token) = TOKEN.filter(|t| !t.is_empty()) else {
-        // No token in this build: let the person file it themselves, with as much as fits in a link.
-        // A link can only be about 8000 characters long once encoded: keep the start (problem, computer, state)
-        // and the end (the last events), which are the parts that matter.
-        let note = "\n\n(Shortened to fit a link. The full report was copied to the clipboard; paste it here if you can.)";
-        let (mut head, mut tail) = (2200usize, 1800usize);
-        let url = loop {
-            let chars: Vec<char> = text.chars().collect();
-            let body = if chars.len() <= head + tail {
-                format!("```\n{text}\n```")
-            } else {
-                format!("```\n{}\n[...]\n{}\n```{note}", chars[..head].iter().collect::<String>(), chars[chars.len() - tail..].iter().collect::<String>())
-            };
-            let url = format!("https://github.com/{repo}/issues/new?labels=crash&title={}&body={}", enc(&title), enc(&body));
-            if url.len() <= 7500 || head < 400 {
-                break url;
-            }
-            head = head * 3 / 4;
-            tail = tail * 3 / 4;
-        };
-        open::that_detached(url).map_err(|e| e.to_string())?;
-        return Ok("Opened a new issue in your browser. Press Submit there to send it.".into());
-    };
-    let body: String = text.chars().take(60000).collect();
-    let payload = serde_json::json!({ "title": title, "body": format!("```\n{body}\n```"), "labels": ["crash"] });
+    let body = form_body(&text);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(15)))
         .timeout_global(Some(std::time::Duration::from_secs(40)))
         .http_status_as_error(false)
+        // A redirect is how Google says "sign in first": it must be seen, not followed.
+        .max_redirects(0)
         .user_agent("FAST-File-Explorer-crash")
         .build()
         .into();
-    let mut resp = agent
-        .post(&format!("https://api.github.com/repos/{repo}/issues"))
-        .header("Authorization", &format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .content_type("application/json")
-        .send(payload.to_string())
-        .map_err(|e| e.to_string())?;
-    let code = resp.status().as_u16();
-    if code == 201 {
-        crashlog::mark_sent(path);
-        let url = resp.body_mut().read_to_string().ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v["html_url"].as_str().map(str::to_string)).unwrap_or_default();
-        if !url.is_empty() {
-            let _ = open::that_detached(&url);
-        }
-        Ok(format!("Sent. {url}").trim().to_string())
-    } else {
-        Err(format!("GitHub answered {code}"))
+    let resp = agent.post(FORM_URL).content_type("application/x-www-form-urlencoded").send(body).map_err(|e| format!("Could not reach Google Forms: {e}. Check the internet connection and try again."))?;
+    let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string);
+    outcome(resp.status().as_u16(), location.as_deref())?;
+    crashlog::mark_sent(path);
+    Ok("Sent to the developer. Thank you.".into())
+}
+
+/// What the form's answer means. Success is a plain 200; a redirect to Google's sign-in, or a 401/403, means the form
+/// asks for an account now.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn outcome(code: u16, location: Option<&str>) -> Result<(), String> {
+    match code {
+        200 => Ok(()),
+        301 | 302 | 303 | 307 | 308 if location.is_some_and(|l| l.contains("accounts.google.")) => Err("Google asked for a sign-in before it would take the report. Sign in to a Google account in your browser, then try again.".into()),
+        401 | 403 => Err("Google asked for a sign-in before it would take the report. Sign in to a Google account in your browser, then try again.".into()),
+        301 | 302 | 303 | 307 | 308 => Err(format!("Google Forms redirected the report instead of taking it ({code}). Try again later.")),
+        400 | 404 => Err(format!("Google Forms did not accept the report ({code}); the form may have been changed or closed. Save the crash log as a text file and send that instead.")),
+        429 => Err("Google Forms says there were too many reports just now. Try again in a few minutes.".into()),
+        other => Err(format!("Google Forms answered {other}. Try again later.")),
     }
+}
+
+/// The answer as the form wants it: one field, the whole report, shortened in the middle if it is very long.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn form_body(text: &str) -> String {
+    format!("{FORM_FIELD}={}", enc(&shorten(text, FORM_MAX_CHARS)))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn shorten(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let (head, tail) = (max * 3 / 10, max * 7 / 10);
+    format!("{}\n[... shortened ...]\n{}", chars[..head].iter().collect::<String>(), chars[chars.len() - tail..].iter().collect::<String>())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -148,20 +142,52 @@ fn enc(s: &str) -> String {
     o
 }
 
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod form_tests {
+    use super::*;
+
+    #[test]
+    fn the_report_goes_into_the_one_field() {
+        let b = form_body("Kind: Crash\nline two & more=");
+        assert_eq!(b, "entry.1859183185=Kind%3A%20Crash%0Aline%20two%20%26%20more%3D");
+    }
+
+    #[test]
+    fn a_long_report_keeps_its_start_and_its_end() {
+        let text: String = (0..100_000).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let s = shorten(&text, 1000);
+        assert!(s.chars().count() < 1100);
+        assert!(s.starts_with(&text[..300]));
+        assert!(s.ends_with(&text[text.len() - 700..]));
+        assert!(s.contains("[... shortened ...]"));
+        assert_eq!(shorten("short", 1000), "short");
+    }
+
+    #[test]
+    fn google_answers_are_read() {
+        assert!(outcome(200, None).is_ok());
+        assert!(outcome(302, Some("https://accounts.google.com/ServiceLogin?x=1")).unwrap_err().contains("sign-in"));
+        assert!(outcome(401, None).unwrap_err().contains("sign-in"));
+        assert!(outcome(302, Some("https://docs.google.com/forms/x")).unwrap_err().contains("redirected"));
+        assert!(outcome(400, None).unwrap_err().contains("did not accept"));
+        assert!(outcome(429, None).unwrap_err().contains("too many"));
+        assert!(outcome(500, None).unwrap_err().contains("500"));
+    }
+}
+
 /// At start: if sending is on, send reports that were not sent yet (a few at most, quietly).
 pub fn send_pending(st: &crate::state::AppState) {
     let on = st.settings.read().advanced.get("crash.github").and_then(|v| v.as_bool()).unwrap_or(false);
-    if !on || TOKEN.map_or(true, str::is_empty) {
+    if !on {
         return;
     }
-    let repo = st.settings.read().updates.repo.clone();
     let todo: Vec<_> = crashlog::list(&st.paths.crash).into_iter().filter(|l| !l.sent).take(3).collect();
     if todo.is_empty() {
         return;
     }
     std::thread::spawn(move || {
         for l in todo {
-            if send(&repo, &l.path).is_err() {
+            if send(&l.path).is_err() {
                 break;
             }
         }

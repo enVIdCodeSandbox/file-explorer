@@ -629,7 +629,7 @@ export function StoragePanel() {
                 </button>
                 {!c.sent && (
                   <button className="secondary" onClick={() => sendLog(c.name)}>
-                    Send to GitHub issues
+                    Send to the developer
                   </button>
                 )}
                 {c.name in shown && <pre className="crash-text">{shown[c.name]}</pre>}
