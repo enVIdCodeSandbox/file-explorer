@@ -44,7 +44,8 @@ function keepPageFromOpeningDrops(): () => void {
   const stop = (e: DragEvent) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
-    if (e.type === "dragover" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    if (e.type === "dragover" && e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    if (e.type === "drop") e.stopPropagation();
   };
   for (const t of ["dragenter", "dragover", "drop"]) window.addEventListener(t, stop as EventListener);
   return () => {
@@ -54,6 +55,7 @@ function keepPageFromOpeningDrops(): () => void {
 
 /** Start listening. Returns a function that stops. */
 export async function listenForExternalDrops(): Promise<() => void> {
+  let alive = true;
   const unguard = keepPageFromOpeningDrops();
   const off = await getCurrentWebview().onDragDropEvent((event) => {
     const p = event.payload;
@@ -65,7 +67,8 @@ export async function listenForExternalDrops(): Promise<() => void> {
     if (p.type === "enter" || p.type === "over") {
       const paths = p.type === "enter" ? p.paths : undefined;
       if (paths && isOwnDrag(paths)) return;
-      const dpr = window.devicePixelRatio || 1;
+      // macOS AppKit draggingLocation is already in logical points; Windows/Linux report physical pixels.
+      const dpr = useStore.getState().info?.os === "macos" ? 1 : (window.devicePixelRatio || 1);
       const { dest, el } = targetAt(p.position.x / dpr, p.position.y / dpr);
       clearMarks();
       if (el) el.setAttribute("data-drop-over", "");
@@ -87,7 +90,7 @@ export async function listenForExternalDrops(): Promise<() => void> {
     clearMarks();
     useDragView.setState({ view: null });
     if (isOwnDrag(p.paths) || !p.paths.length) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = useStore.getState().info?.os === "macos" ? 1 : (window.devicePixelRatio || 1);
     const { dest } = targetAt(p.position.x / dpr, p.position.y / dpr);
     const s = useStore.getState();
     if (!dest) {
@@ -96,7 +99,13 @@ export async function listenForExternalDrops(): Promise<() => void> {
     }
     void s.startTransfer(p.paths, dest, "copy");
   });
+  if (!alive) {
+    unguard();
+    off();
+    return () => {};
+  }
   return () => {
+    alive = false;
     unguard();
     off();
   };

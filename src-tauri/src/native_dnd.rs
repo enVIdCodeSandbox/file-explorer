@@ -259,21 +259,164 @@ mod imp {
             .run_on_main_thread(move || {
                 // A panic here would take the whole window down; report it as an error instead.
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let icon = drag::Image::Raw(include_bytes!("../icons/32x32.png").to_vec());
-                let item = drag::DragItem::Files(files);
-                #[cfg(target_os = "linux")]
-                let result = match win.gtk_window() {
-                    Ok(gtk) => drag::start_drag(&gtk, item, icon, |_, _| {}, drag::Options::default()).map_err(|e| e.to_string()),
-                    Err(e) => Err(e.to_string()),
-                };
-                #[cfg(not(target_os = "linux"))]
-                let result = drag::start_drag(&win, item, icon, |_, _| {}, drag::Options::default()).map_err(|e| e.to_string());
-                result
+                    #[cfg(target_os = "macos")]
+                    {
+                        macos_drag_out(&win, &files, include_bytes!("../icons/32x32.png"))
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let icon = drag::Image::Raw(include_bytes!("../icons/32x32.png").to_vec());
+                        let item = drag::DragItem::Files(files);
+                        #[cfg(target_os = "linux")]
+                        let result = match win.gtk_window() {
+                            Ok(gtk) => drag::start_drag(&gtk, item, icon, |_, _| {}, drag::Options::default()).map_err(|e| e.to_string()),
+                            Err(e) => Err(e.to_string()),
+                        };
+                        #[cfg(not(target_os = "linux"))]
+                        let result = drag::start_drag(&win, item, icon, |_, _| {}, drag::Options::default()).map_err(|e| e.to_string());
+                        result
+                    }
                 }));
                 let _ = tx.send(outcome.unwrap_or_else(|_| Err("The system could not start the drag for this file".to_string())));
             })
             .map_err(|e| e.to_string())?;
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(Ok(()))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_drag_out(win: &tauri::WebviewWindow, files: &[std::path::PathBuf], icon_bytes: &[u8]) -> CmdResult<()> {
+        use std::cell::RefCell;
+
+        use objc2::{
+            define_class, msg_send,
+            rc::Retained,
+            runtime::{NSObject, NSObjectProtocol, ProtocolObject},
+            AnyThread, MainThreadMarker, MainThreadOnly,
+        };
+        use objc2_app_kit::{
+            NSApp, NSDragOperation, NSDraggingContext, NSDraggingItem, NSDraggingSession,
+            NSDraggingSource, NSEvent, NSEventModifierFlags, NSEventType, NSImage, NSView,
+        };
+        use objc2_foundation::{
+            NSData, NSMutableArray, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL,
+        };
+
+        thread_local! {
+            // Keep the Objective-C NSDraggingSource retained until AppKit ends the dragging session.
+            static ACTIVE_SOURCE: RefCell<Option<Retained<MacDragSource>>> = const { RefCell::new(None) };
+        }
+
+        struct MacDragSourceIvars;
+
+        define_class!(
+            #[unsafe(super(NSObject))]
+            #[thread_kind = MainThreadOnly]
+            #[name = "FastExplorerDragSource"]
+            #[ivars = MacDragSourceIvars]
+            struct MacDragSource;
+
+            unsafe impl NSObjectProtocol for MacDragSource {}
+
+            unsafe impl NSDraggingSource for MacDragSource {
+                #[unsafe(method(draggingSession:sourceOperationMaskForDraggingContext:))]
+                unsafe fn dragging_session_mask(
+                    &self,
+                    session: &NSDraggingSession,
+                    _context: NSDraggingContext,
+                ) -> NSDragOperation {
+                    session.setAnimatesToStartingPositionsOnCancelOrFail(false);
+                    NSDragOperation::Copy.union(NSDragOperation::Move)
+                }
+
+                #[unsafe(method(draggingSession:endedAtPoint:operation:))]
+                unsafe fn dragging_session_ended(
+                    &self,
+                    _session: &NSDraggingSession,
+                    _ended_at_point: NSPoint,
+                    _operation: NSDragOperation,
+                ) {
+                    ACTIVE_SOURCE.with(|slot| {
+                        *slot.borrow_mut() = None;
+                    });
+                }
+            }
+        );
+
+        impl MacDragSource {
+            fn new(mtm: MainThreadMarker) -> Retained<Self> {
+                let this = Self::alloc(mtm).set_ivars(MacDragSourceIvars);
+                unsafe { msg_send![super(this), init] }
+            }
+        }
+
+        let ptr = win.ns_view().map_err(|e| e.to_string())?;
+        if ptr.is_null() {
+            return Err("Missing macOS view handle".into());
+        }
+
+        unsafe {
+            let mtm = MainThreadMarker::new_unchecked();
+            let ns_view = &*(ptr as *const NSView);
+            let window = ns_view.window().ok_or_else(|| "Missing macOS window".to_string())?;
+            let content_view = window.contentView().ok_or_else(|| "Missing macOS contentView".to_string())?;
+            let current_position: NSPoint = window.mouseLocationOutsideOfEventStream();
+
+            let data = NSData::from_vec(icon_bytes.to_vec());
+            let img = NSImage::initWithData(NSImage::alloc(), &data)
+                .ok_or_else(|| "Failed to decode macOS drag icon".to_string())?;
+            let image_size: NSSize = img.size();
+            let image_rect = NSRect::new(
+                NSPoint::new(
+                    current_position.x - image_size.width / 2.,
+                    current_position.y - image_size.height / 2.,
+                ),
+                image_size,
+            );
+
+            let dragging_items = NSMutableArray::new();
+            for path in files {
+                // Pass path.is_dir() accurately so Finder accepts dropped folders.
+                let nsurl = NSURL::fileURLWithPath_isDirectory(
+                    &NSString::from_str(&path.display().to_string()),
+                    path.is_dir(),
+                );
+                let item = NSDraggingItem::initWithPasteboardWriter(
+                    NSDraggingItem::alloc(),
+                    &ProtocolObject::from_retained(nsurl),
+                );
+                item.setDraggingFrame_contents(image_rect, Some(&*img));
+                dragging_items.addObject(&*item);
+            }
+
+            // Inside run_on_main_thread (GCD), NSApp.currentEvent() is usually nil; systemUptime matches the event clock so CoreDrag does not cancel timestamp 0.
+            let timestamp = NSApp(mtm)
+                .currentEvent()
+                .map(|e| e.timestamp())
+                .unwrap_or_else(|| NSProcessInfo::processInfo().systemUptime());
+            let drag_event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                NSEventType::LeftMouseDragged,
+                current_position,
+                NSEventModifierFlags::empty(),
+                timestamp,
+                window.windowNumber(),
+                None,
+                0,
+                1,
+                1.0,
+            )
+            .ok_or_else(|| "Failed to construct macOS drag event".to_string())?;
+
+            let source = MacDragSource::new(mtm);
+            ACTIVE_SOURCE.with(|slot| {
+                *slot.borrow_mut() = Some(source.clone());
+            });
+            let _ = content_view.beginDraggingSessionWithItems_event_source(
+                &dragging_items,
+                &drag_event,
+                &ProtocolObject::<dyn NSDraggingSource>::from_retained(source),
+            );
+            Ok(())
+        }
     }
 }
 

@@ -110,8 +110,17 @@ export interface DragView {
 
 /** Paths this app has handed to the system's own drag; if they come back to our window they are ignored. */
 let ownDrag: string[] = [];
+let ownDragTimer = 0;
 export function noteOwnDrag(paths: string[]) {
   ownDrag = paths;
+  window.clearTimeout(ownDragTimer);
+  ownDragTimer = window.setTimeout(() => {
+    ownDrag = [];
+  }, 4000);
+}
+export function clearOwnDrag() {
+  window.clearTimeout(ownDragTimer);
+  ownDrag = [];
 }
 export function isOwnDrag(paths: string[]): boolean {
   return paths.length > 0 && paths.every((p) => ownDrag.includes(p));
@@ -183,9 +192,16 @@ function targetAt(x: number, y: number, p: DragPayload): Hit {
 }
 
 /** Start dragging once the pointer moves a few pixels. `get` is read at that moment. */
-export function beginDrag(down: { clientX: number; clientY: number; button: number; ctrlKey: boolean; shiftKey: boolean }, get: () => DragPayload | null) {
+export function beginDrag(
+  down: { clientX: number; clientY: number; button: number; ctrlKey: boolean; shiftKey: boolean; pointerId?: number; currentTarget?: EventTarget | null; target?: EventTarget | null },
+  get: () => DragPayload | null,
+) {
   if (down.button !== 0) return;
+  clearOwnDrag();
   const [sx, sy] = [down.clientX, down.clientY];
+  const captureEl = (down.currentTarget ?? down.target) as Element | null;
+  const pointerId = typeof down.pointerId === "number" ? down.pointerId : null;
+  let captured = false;
   let payload: DragPayload | null = null;
   let mods: Mods = { ctrl: false, shift: false };
   let last = { x: sx, y: sy };
@@ -317,6 +333,15 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
       if (Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
       payload = get();
       if (!payload) return finish(false);
+      // Keep pointermove firing outside the window bounds (notably macOS WKWebView) until handoff to OS drag.
+      if (pointerId !== null && captureEl && "setPointerCapture" in captureEl) {
+        try {
+          captureEl.setPointerCapture(pointerId);
+          captured = true;
+        } catch {
+          /* ignore synthetic or detached targets */
+        }
+      }
       document.body.setAttribute("data-dragging", "");
       if (payload.navItem) document.body.setAttribute("data-dragging-nav", "");
       // Items inside an archive do not exist on disk. Unpack them now, while the pointer is
@@ -369,6 +394,14 @@ export function beginDrag(down: { clientX: number; clientY: number; button: numb
 
   function finish(commit: boolean) {
     if (!handingOver) stopFetching();
+    if (captured && pointerId !== null && captureEl && "releasePointerCapture" in captureEl) {
+      captured = false;
+      try {
+        if (captureEl.hasPointerCapture?.(pointerId)) captureEl.releasePointerCapture(pointerId);
+      } catch {
+        /* ignore detached targets */
+      }
+    }
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", cancel);
