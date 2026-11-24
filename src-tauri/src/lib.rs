@@ -306,6 +306,7 @@ pub fn run() {
             commands::share_list,
             commands::system_report,
             commands::open_transfers_window,
+            commands::open_terminal_window,
             commands::open_settings_window,
             commands::reattach,
             commands::resolve_path,

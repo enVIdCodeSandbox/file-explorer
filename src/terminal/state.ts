@@ -80,6 +80,10 @@ interface TerminalState {
   patchPane: (paneId: string, patch: Partial<Pane>) => void;
   /** Re-read the host's list of sessions (a shell ended, one was added elsewhere). */
   refresh: () => Promise<void>;
+  /** Take a pane out of the panel without ending its shell (it moves to a window of its own); returns the shell's id. */
+  release: (tabId: string, paneId: string) => string | null;
+  /** Show a shell that is already running (one that was in a window of its own) as a new tab. */
+  adopt: (sid: string) => Promise<void>;
 }
 
 async function startPane(cwd: string, elevated: boolean, title: string | null = null): Promise<Pane> {
@@ -211,6 +215,34 @@ export const useTerminal = create<TerminalState>((set, get) => ({
 
   patchPane: (paneId, patch) => set((s) => ({ tabs: s.tabs.map((t) => ({ ...t, panes: t.panes.map((p) => (p.id === paneId ? { ...p, ...patch } : p)) })) })),
 
+  release: (tabId, paneId) => {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    const pane = tab?.panes.find((p) => p.id === paneId);
+    if (!tab || !pane?.sid) return null;
+    if (tab.panes.length === 1) dropTab(tabId);
+    else {
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, panes: t.panes.filter((p) => p.id !== paneId), active: t.active === paneId ? t.panes.find((p) => p.id !== paneId)!.id : t.active } : t)),
+      }));
+    }
+    return pane.sid;
+  },
+
+  adopt: async (sid) => {
+    if (!get().ready) await get().init();
+    if (get().tabs.some((t) => t.panes.some((p) => p.sid === sid))) return;
+    let found: TermSession | undefined;
+    try {
+      found = (await api.termList()).find((s) => s.sid === sid);
+    } catch {
+      /* the host is not answering; the shell is shown with what is known */
+    }
+    if (!found) return;
+    const pane: Pane = { id: uid(), sid, title: found.title, cwd: found.cwd, elevated: found.elevated, exited: found.alive ? null : found.exit ?? 0 };
+    const tab: Tab = { id: uid(), panes: [pane], active: pane.id };
+    set((s) => ({ tabs: [...s.tabs, tab], active: tab.id, open: true }));
+  },
+
   refresh: async () => {
     let live: TermSession[];
     try {
@@ -246,6 +278,8 @@ export const useTerminalClear = create<{ tick: number; paneId: string | null }>(
 
 // Keep what the panel looks like for the next start.
 useTerminal.subscribe((s, prev) => {
+  // A terminal in a window of its own shows one shell and must not overwrite what the main window saved.
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "terminal") return;
   if (s.open === prev.open && s.tabs === prev.tabs && s.active === prev.active) return;
   const out: Saved = {
     open: s.open,

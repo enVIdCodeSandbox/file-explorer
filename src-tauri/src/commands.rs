@@ -4057,6 +4057,44 @@ pub async fn open_transfers_window(app: AppHandle) -> CmdResult<()> {
     open_detached(&app, "transfers", "Transfers - FAST File Explorer", (780.0, 580.0), (420.0, 300.0))
 }
 
+/// Show one terminal session in a window of its own (a terminal dragged out of the panel). Each session gets its own
+/// window, labelled by the session, so asking again for the same one brings that window forward.
+#[tauri::command]
+pub async fn open_terminal_window(app: AppHandle, sid: String, x: Option<f64>, y: Option<f64>) -> CmdResult<()> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if cfg!(mobile) {
+        return Err(ONE_WINDOW.into());
+    }
+    let clean: String = sid.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if clean.is_empty() {
+        return Err("That terminal is not running.".into());
+    }
+    let label = format!("terminal-{clean}");
+    if let Some(w) = app.get_webview_window(&label) {
+        #[cfg(desktop)]
+        let _ = w.unminimize();
+        w.set_focus().map_err(err)?;
+        return Ok(());
+    }
+    let script = format!("window.__VIEW__ = 'terminal'; window.__SID__ = {};", serde_json::to_string(&sid).map_err(err)?);
+    let mut builder = WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
+        .title("Terminal - FAST File Explorer")
+        .inner_size(820.0, 520.0)
+        .min_inner_size(360.0, 220.0)
+        .resizable(true)
+        .background_color(crate::theme::for_new_window(&app))
+        .initialization_script(&script);
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.decorations(true).title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    }
+    if let (Some(x), Some(y)) = (x, y) {
+        builder = builder.position((x - 120.0).max(0.0), (y - 20.0).max(0.0));
+    }
+    builder.build().map_err(err)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn open_settings_window(app: AppHandle) -> CmdResult<()> {
     open_detached(&app, "settings", "Settings - FAST File Explorer", (980.0, 700.0), (560.0, 360.0))

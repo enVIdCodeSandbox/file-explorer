@@ -1101,6 +1101,7 @@ export const api = {
   termResize: (sid: string, cols: number, rows: number) => invoke<void>("term_resize", { sid, cols, rows }),
   termDo: (action: "kill" | "remove" | "clear" | "title", sid: string, title?: string) => invoke<void>("term_do", { action, sid, title: title ?? null }),
   termOpenUrl: (url: string) => invoke<void>("term_open_url", { url }),
+  termWindow: (sid: string, x?: number, y?: number) => invoke<void>("open_terminal_window", { sid, x, y }),
   termPopout: (sid: string) => invoke<void>("term_popout", { sid }),
   termTranscript: (sid: string, forget: boolean) => invoke<string | null>("term_transcript", { sid, forget }),
   termSweepTranscripts: (keep: string[]) => invoke<void>("term_sweep_transcripts", { keep }),
@@ -1188,7 +1189,7 @@ export const api = {
   /** These tabs of `source` were taken. */
   mergeDone: (source: string, ids: string[]) => invoke<void>("merge_done", { source, ids }),
   openSettingsWindow: () => invoke<void>("open_settings_window"),
-  reattach: (kind: "settings" | "transfers", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
+  reattach: (kind: "settings" | "transfers" | "terminal", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
   folderSizesStart: (dir: string, names: string[], refresh: boolean, policy: SizePolicy) => invoke<void>("folder_sizes_start", { dir, names, refresh, policy }),
   cacheUsage: () => invoke<CacheEntry[]>("cache_usage"),
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),

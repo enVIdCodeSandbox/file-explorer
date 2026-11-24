@@ -2,6 +2,7 @@
 // panels, a tray for popped-out ones, and the on-screen editing mode.
 
 import { useEffect, useRef, useState } from "react";
+import { TerminalDropPreview } from "./TerminalDrag";
 import { DOCK_LABEL, PANELS, PRESETS, RESIZABLE, moveTo, nudge, panelsAt, resolveLayout, zoneAt, type Dock, type Layout, type PanelId } from "../util/layout";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
@@ -312,6 +313,7 @@ export function Shell({ render, content }: ShellProps) {
           </button>
         </div>
       )}
+      <TerminalDropPreview />
       {edit && drag && (
         <div className="drop-zones" aria-hidden="true">
           {(["top", "left", "right", "bottom"] as const).map((z) => (

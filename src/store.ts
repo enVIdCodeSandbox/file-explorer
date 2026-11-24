@@ -778,7 +778,7 @@ export const useStore = create<State>((set, get) => ({
     // A window made by dragging a tab out starts with just that tab and does
     // not touch the saved session of the main window.
     const opened = (window as unknown as { __OPEN__?: string }).__OPEN__;
-    detachedView = (window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers";
+    detachedView = ["transfers", "terminal"].includes((window as unknown as { __VIEW__?: string }).__VIEW__ ?? "");
     secondary = typeof opened === "string" || detachedView;
     const patch = startState(settings, session, info, secondary, opened, launches[0]?.folder)!;
     // When the window was drawn from the saved copy, what the person has done since (opened a folder, a tab)

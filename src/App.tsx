@@ -268,8 +268,11 @@ function AppInner() {
       // Another app (or a second start of this one) asked for a folder.
       on("task-notice", (m) => useStore.getState().showToast(m)),
       on("launch", () => void api.takeLaunch().then((l) => useStore.getState().showLaunches(l)).catch(() => {})),
-      on("reattach", ({ kind }) => {
-        if (kind === "settings") useStore.setState({ settingsOpen: true });
+      on("reattach", ({ kind, payload }) => {
+        if (kind === "terminal") {
+          const sid = (payload as { sid?: string } | undefined)?.sid;
+          if (sid) void useTerminal.getState().adopt(sid);
+        } else if (kind === "settings") useStore.setState({ settingsOpen: true });
         else if (kind === "transfers") useStore.setState({ transfersOpen: true });
       }),
       // A tab was dragged here from another window: slot it in under the pointer.
@@ -413,6 +416,11 @@ function AppInner() {
   if (!ready || !location) return <div className="app-loading" />;
 
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "transfers") return <DetachedTransfers />;
+
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "terminal") {
+    const sid = (window as unknown as { __SID__?: string }).__SID__ ?? "";
+    return <Part><DetachedTerminal sid={sid} /></Part>;
+  }
 
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <Part><SettingsView detached /></Part>;
 

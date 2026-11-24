@@ -7,6 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, on } from "../api";
 import { adv } from "../settings/advanced";
 import { commandFor } from "../settings/keys";
@@ -16,6 +17,7 @@ import { startFolder, useTerminal, useTerminalClear, type Pane, type Tab } from 
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { useLayout } from "./Layout";
+import { beginTerminalDrag, detachShell } from "./TerminalDrag";
 import { wheelSteps, zoomStep } from "../util/zoomKeys";
 
 const encoder = new TextEncoder();
@@ -359,7 +361,19 @@ export function TerminalPanel({ dock }: { dock: string }) {
 
   return (
     <section className="term" aria-label="Terminal" data-dock={dock} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="term-bar">
+      <div
+        className="term-bar"
+        title="Drag the title bar to dock the terminal somewhere else, or out of the window to open it on its own"
+        onPointerDown={(e) =>
+          beginTerminalDrag(e, {
+            docks: PANELS.find((p) => p.id === "terminal")!.docks,
+            layout,
+            setLayout,
+            current: dock as Dock,
+            detach: (x, y) => activePane?.sid && current && void detachShell(current.id, activePane.id, activePane.sid, x, y),
+          })
+        }
+      >
         <div className="term-tabs" role="tablist" aria-label="Terminals">
           {tabs.map((tab) => {
             const p = tab.panes.find((x) => x.id === tab.active) ?? tab.panes[0];
@@ -443,6 +457,80 @@ export function TerminalPanel({ dock }: { dock: string }) {
         )}
       </div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+    </section>
+  );
+}
+
+/** A terminal dragged out of the panel: one shell filling a window of its own. */
+export function DetachedTerminal({ sid }: { sid: string }) {
+  const info = useTerminal((s) => s.info);
+  const [session, setSession] = useState<{ title: string; cwd: string; elevated: boolean; exited: number | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const leaving = useRef(false);
+
+  useEffect(() => {
+    let live = true;
+    void Promise.all([api.termInfo(), api.termList()])
+      .then(([i, list]) => {
+        if (!live) return;
+        useTerminal.setState({ info: i });
+        const s = list.find((x) => x.sid === sid);
+        if (!s) setError("This terminal has ended.");
+        else setSession({ title: s.title, cwd: s.cwd, elevated: s.elevated, exited: s.alive ? null : s.exit ?? 0 });
+      })
+      .catch((e) => live && setError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [sid]);
+
+  // Closing the window ends its shell, as closing a terminal tab does; putting it back in the app does not.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void getCurrentWindow()
+      .onCloseRequested(() => {
+        if (!leaving.current) void api.termDo("remove", sid).catch(() => {});
+      })
+      .then((u) => (off = u))
+      .catch(() => {});
+    return () => off?.();
+  }, [sid]);
+
+  const back = async () => {
+    leaving.current = true;
+    try {
+      await api.reattach("terminal", { sid });
+    } catch (e) {
+      leaving.current = false;
+      useStore.getState().showToast(String(e));
+    }
+  };
+
+  const pane: Pane | null = session ? { id: `window-${sid}`, sid, title: session.title, cwd: session.cwd, elevated: session.elevated, exited: session.exited } : null;
+  const tab: Tab | null = pane ? { id: `window-tab-${sid}`, panes: [pane], active: pane.id } : null;
+  return (
+    <section className="term term-window" aria-label="Terminal" data-dock="window">
+      <div className="term-bar">
+        <Icon name="terminal" size={13} />
+        <span className="term-tab-name">{pane ? pane.title || pane.cwd.split(/[\\/]/).filter(Boolean).pop() || "Terminal" : "Terminal"}</span>
+        <span className="grow" />
+        <button className="secondary reattach" title="Put this terminal back in the main window" onClick={() => void back()}>
+          <Icon name="popin" size={13} /> Back to the app
+        </button>
+      </div>
+      <div className="term-body" data-side="column">
+        {!pane && !error && <div className="loading-bar" />}
+        {error && (
+          <div className="empty-state" data-error>
+            <strong>{error}</strong>
+          </div>
+        )}
+        {pane && tab && info && (
+          <div className="term-group" data-side="column">
+            <TermPane tab={tab} pane={pane} visible focused />
+          </div>
+        )}
+      </div>
     </section>
   );
 }
