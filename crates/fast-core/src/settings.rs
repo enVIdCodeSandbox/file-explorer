@@ -57,6 +57,9 @@ pub struct MacAccess {
     /// Who macOS thought the app was when `granted` was written (`access::identity_token`). If it differs now, macOS has
     /// forgotten those answers and they are not trusted.
     pub granted_for: String,
+    /// The app's identity (`access::identity_token`) for which the stale Full Disk Access entry was already cleared once,
+    /// so it is cleared automatically once per build and never in a loop.
+    pub reset_for: String,
     /// Kinds of folder (ids from `access::categories`) the person does not want searched, sized or watched in the
     /// background even though the app is allowed to.
     pub off: Vec<String>,
@@ -540,19 +543,56 @@ impl Settings {
 }
 
 /// Write JSON atomically (temp file + rename) so a crash cannot corrupt it.
+///
+/// Two saves of the same file can arrive at once (a screen that records several things as it opens). They used to share
+/// one temp file, so the second rename found nothing to rename and reported the real file as "not found". Writes are now
+/// taken one at a time, each with a temp file of its own.
 pub fn write_json<T: Serialize>(file: &Path, value: &T) -> Result<()> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(|e| CoreError::io(dir, e))?;
     }
-    let tmp = file.with_extension("tmp");
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut name = file.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+    name.push(format!(".{}.{n}.tmp", std::process::id()));
+    let tmp = file.with_file_name(name);
     let data = serde_json::to_vec_pretty(value).map_err(|e| CoreError::Invalid(e.to_string()))?;
     std::fs::write(&tmp, data).map_err(|e| CoreError::io(&tmp, e))?;
-    std::fs::rename(&tmp, file).map_err(|e| CoreError::io(file, e))
+    std::fs::rename(&tmp, file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        CoreError::io(file, e)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_the_same_file_at_once_never_fails() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("cfg/settings.json");
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let f = file.clone();
+                std::thread::spawn(move || {
+                    for j in 0..20 {
+                        let mut s = Settings::default();
+                        s.general.show_hidden = (i + j) % 2 == 0;
+                        s.save(&f).expect("a save must not fail because another save ran at the same moment");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let _ = Settings::load(&file);
+        let leftovers = std::fs::read_dir(file.parent().unwrap()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(leftovers, 0);
+    }
 
     #[test]
     fn partial_files_fill_in_defaults() {

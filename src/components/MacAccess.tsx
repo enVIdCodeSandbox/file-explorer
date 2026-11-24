@@ -32,7 +32,7 @@ export function useAccess(poll = false): { status: AccessStatus | null; refresh:
 }
 
 /** Change what is remembered about this screen. */
-function remember(patch: Partial<{ asked: boolean; dismissed: boolean; verified: boolean; granted: string[]; grantedFor: string }>) {
+function remember(patch: Partial<{ asked: boolean; dismissed: boolean; verified: boolean; granted: string[]; grantedFor: string; resetFor: string }>) {
   const { settings, updateSettings, saveSettings } = useStore.getState();
   if (!settings) return;
   updateSettings((st) => {
@@ -124,7 +124,7 @@ function Steps({ status, refresh }: { status: AccessStatus; refresh: () => void 
       <ol className="access-steps">
         <li>Press <strong>Open Full Disk Access</strong>. System Settings opens on that list.</li>
         <li>Switch on <strong>FAST File Explorer</strong>. If it is missing, press <strong>Show the app in Finder</strong> and drag it into the list.</li>
-        <li>If it already shows as on but this screen still says <em>Not working yet</em>, the entry belongs to an earlier version of the app{unstable ? " (this build has no developer signature, so macOS ties every permission to one exact build)" : ""}. Press <strong>Remove the old entry and start over</strong>, then switch it on again.</li>
+        <li>If it already shows as on but this screen still says <em>Not working yet</em>, the entry belongs to an earlier version of the app{unstable ? " (this build has no developer signature, so macOS ties every permission to one exact build)" : ""}. Press <strong>Remove the old entry and start over</strong>. If the entry is still in the list afterwards, select it there, press the <strong>−</strong> button under the list, then drag the app in again with <strong>Show the app in Finder</strong>.</li>
         <li>This screen notices by itself. If it does not, press <strong>Check again</strong> or restart the app.</li>
       </ol>
       <div className="dialog-buttons access-buttons">
@@ -158,6 +158,15 @@ export function MacAccessPrompt() {
   useEffect(() => {
     if (settings && status?.applies && status.fullAccess && !verified) remember({ verified: true });
   }, [settings, status, verified]);
+
+  // A build without a developer signature is a new app to macOS every time, so a Full Disk Access entry left by an
+  // earlier build shows as on and does nothing. Clear it once per build, before the person is asked to switch it on.
+  const resetFor = settings?.macAccess?.resetFor ?? "";
+  useEffect(() => {
+    if (!settings || !status?.applies || status.fullAccess || status.identity === "stable" || !status.token || resetFor === status.token) return;
+    remember({ resetFor: status.token });
+    void api.accessResetGrant().catch(() => {});
+  }, [settings, status, resetFor]);
 
   useEffect(() => {
     if (open || leftAlone || !settings || dismissed || !status?.applies || status.fullAccess) return;

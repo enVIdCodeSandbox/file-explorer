@@ -101,13 +101,61 @@ function WindowControls({ side = "right" }: { side?: "left" | "right" }) {
   );
 }
 
+/** Whether the window is full screen. macOS hides its own window buttons then, so the app draws them. */
+function useFullscreen(): boolean {
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const win = getCurrentWindow();
+    const sync = () => void win.isFullscreen().then((v) => alive && setFull(v)).catch(() => {});
+    sync();
+    const off = win.onResized(sync);
+    return () => {
+      alive = false;
+      void off.then((f) => f());
+    };
+  }, []);
+  return full;
+}
+
+/** The room macOS keeps for its close, minimize and zoom buttons at the top left. In full screen macOS removes those
+ * buttons, so the same three are drawn here: close, minimize (leaves full screen first) and leave full screen. */
+function TrafficLights() {
+  const full = useFullscreen();
+  const win = getCurrentWindow();
+  if (!full) return <div className="traffic-light-space" data-tauri-drag-region />;
+  const leave = () => void win.setFullscreen(false);
+  return (
+    <div className="traffic-light-space traffic-light-fullscreen" data-tauri-drag-region>
+      <div className="window-controls" data-side="left" data-look="round">
+        <button className="close" aria-label="Close" title="Close" onClick={() => void win.close()}>
+          <Icon name="close" size={9} />
+        </button>
+        <button
+          aria-label="Minimize"
+          title="Minimize"
+          onClick={() => {
+            // A full screen window cannot be minimized: leave full screen first, then minimize.
+            void win.setFullscreen(false).then(() => window.setTimeout(() => void win.minimize(), 700));
+          }}
+        >
+          <Icon name="minimize" size={9} />
+        </button>
+        <button aria-label="Exit full screen" title="Exit full screen" onClick={leave}>
+          <Icon name="restore" size={9} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** A slim strip with the window buttons, for when the tabs are not in the top row. */
 export function CaptionStrip() {
   const os = useStore((s) => s.info?.os);
   const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   return (
     <div className="title-bar caption-strip" data-tauri-drag-region data-os={os}>
-      {os === "macos" && <div className="traffic-light-space" data-tauri-drag-region />}
+      {os === "macos" && <TrafficLights />}
       {os !== "macos" && side === "left" && <WindowControls side="left" />}
       <span className="caption-title" data-tauri-drag-region>FAST File Explorer</span>
       <div className="title-drag" data-tauri-drag-region />
@@ -120,7 +168,7 @@ export function CaptionStrip() {
 function HeaderControls() {
   const os = useStore((s) => s.info?.os);
   const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
-  if (os === "macos") return side === "left" ? <div className="traffic-light-space" data-tauri-drag-region /> : null;
+  if (os === "macos") return side === "left" ? <TrafficLights /> : null;
   return <WindowControls side={side} />;
 }
 
@@ -329,7 +377,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
   let slot = 0;
   return (
     <div className="title-bar" data-tauri-drag-region data-os={os} data-vertical={vertical || undefined} data-controls={controls || undefined}>
-     {controls && os === "macos" && <div className="traffic-light-space" data-tauri-drag-region />}
+     {controls && os === "macos" && <TrafficLights />}
      {controls && os !== "macos" && side === "left" && <WindowControls side="left" />}
      <div className="tab-strip" data-vertical={vertical || undefined}>
       {more.before && (

@@ -845,6 +845,8 @@ pub struct AccessStatus {
     /// Why a permission given to the app as it runs now would not count (a copy run from a download), if known.
     problem: Option<String>,
     identity: fast_core::access::Identity,
+    /// Who macOS takes this build to be (empty when unknown).
+    token: String,
 }
 
 #[tauri::command]
@@ -858,6 +860,7 @@ pub async fn access_status(recheck: Option<bool>) -> CmdResult<AccessStatus> {
             categories: fast_core::access::categories(),
             problem: fast_core::access::running_location_problem().map(str::to_string),
             identity: fast_core::access::identity(),
+            token: fast_core::access::identity_token(),
         })
     })
     .await

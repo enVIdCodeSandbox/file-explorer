@@ -368,6 +368,53 @@ pub fn appimage_script(new_file: &Path, target: &Path) -> String {
     )
 }
 
+/// POSIX shell text that replaces a Mac app with the one inside a downloaded disk image and starts it again. It runs
+/// after the app has quit. Nothing is left half done: the old app is moved aside and put back if the copy fails, and
+/// whatever happens the person ends up with an app that opens (the old one, and the disk image shown for a manual
+/// install). The result is written to `result_file` ("0" for success).
+pub fn macos_script(dmg: &Path, app: &Path, result_file: &Path) -> String {
+    let q = |p: &Path| format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"));
+    let (dmg_q, app_q, result_q) = (q(dmg), q(app), q(result_file));
+    let new_q = q(&PathBuf::from(format!("{}.new", app.display())));
+    let old_q = q(&PathBuf::from(format!("{}.old", app.display())));
+    format!(
+        r#"sleep 1
+RESULT={result_q}
+MNT=$(mktemp -d /tmp/fast-update.XXXXXX)
+finish() {{
+  hdiutil detach "$MNT" -force >/dev/null 2>&1
+  rmdir "$MNT" 2>/dev/null
+}}
+fail() {{
+  echo "$1" > "$RESULT"
+  finish
+  rm -rf {new_q}
+  /usr/bin/open -n {app_q}
+  /usr/bin/open {dmg_q}
+  exit 1
+}}
+hdiutil attach -nobrowse -noverify -noautoopen -readonly -mountpoint "$MNT" {dmg_q} >/dev/null 2>&1 || fail 2
+NEW=$(ls -d "$MNT"/*.app 2>/dev/null | head -n 1)
+[ -n "$NEW" ] || fail 3
+rm -rf {new_q}
+ditto "$NEW" {new_q} || fail 4
+xattr -dr com.apple.quarantine {new_q} >/dev/null 2>&1
+rm -rf {old_q}
+if [ -e {app_q} ]; then
+  mv {app_q} {old_q} || fail 5
+fi
+if ! mv {new_q} {app_q}; then
+  [ -e {old_q} ] && mv {old_q} {app_q}
+  fail 6
+fi
+rm -rf {old_q}
+echo 0 > "$RESULT"
+finish
+exec /usr/bin/open -n {app_q}
+"#
+    )
+}
+
 /// Unpack a downloaded build into `into`. Names that would land outside it are refused.
 pub fn unzip(zip_file: &Path, into: &Path) -> std::io::Result<()> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_file)?).map_err(std::io::Error::other)?;
@@ -539,6 +586,11 @@ mod tests {
         assert!(s.contains("\"C:\\tmp\\fast setup.exe\" /S") && s.contains("start \"\" \"C:\\Apps\\FAST\\fast.exe\""), "{s}");
         assert!(s.find("/S").unwrap() < s.find("start \"\"").unwrap());
         assert!(windows_script(Path::new("a.msi"), InstallerKind::Msi, Path::new("x.exe"), Path::new("r.txt")).contains("msiexec /i"));
+        let m = macos_script(Path::new("/tmp/it's.dmg"), Path::new("/Applications/FAST File Explorer.app"), Path::new("/tmp/r.txt"));
+        assert!(m.contains("'/tmp/it'\\''s.dmg'"), "{m}");
+        assert!(m.contains("mv '/Applications/FAST File Explorer.app' '/Applications/FAST File Explorer.app.old'"), "{m}");
+        assert!(m.contains("exec /usr/bin/open -n '/Applications/FAST File Explorer.app'"), "{m}");
+        assert!(m.find("ditto").unwrap() < m.find(".app.old'").unwrap(), "the new copy is made before the old one is touched");
         let a = appimage_script(Path::new("/tmp/it's new.AppImage"), Path::new("/home/me/FAST.AppImage"));
         assert!(a.contains("'/tmp/it'\\''s new.AppImage'") && a.contains("exec '/home/me/FAST.AppImage'"), "{a}");
     }

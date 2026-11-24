@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "fast-core"
-version = "0.37.5"
+version = "0.37.6"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "fast-file-explorer"
-version = "0.37.5"
+version = "0.37.6"
 dependencies = [
  "base64 0.22.1",
  "chrono",

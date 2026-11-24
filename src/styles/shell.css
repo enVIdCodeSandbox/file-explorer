@@ -1239,3 +1239,7 @@ body[data-terminal-dragging] * { cursor: grabbing !important; }
    underneath the file list. Raising them above the content, below dialogs, puts those back on top. ---- */
 :root[data-chrome="macos"] .toolbar { position: relative; z-index: 45; }
 :root[data-chrome="macos"] .sidebar-wrap { position: relative; z-index: 40; }
+
+/* Full screen on a Mac: macOS removes its own window buttons, so the app's round ones sit in the same place. */
+.traffic-light-fullscreen { display: flex; align-items: center; }
+.traffic-light-fullscreen .window-controls { margin: 0; padding-left: 14px; align-self: center; }

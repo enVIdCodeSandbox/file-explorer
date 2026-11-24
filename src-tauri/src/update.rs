@@ -602,6 +602,25 @@ fn start_download(app: &AppHandle, st: &Shared, latest: Latest) -> CmdResult<u64
 /// background after the app has closed, with no installer screens. Other packages cannot be installed
 /// silently by a program without administrator rights, so they are handed to the system's own installer.
 #[cfg(desktop)]
+/// Where the new Mac app goes: over the running one when the folder it sits in can be written to, or, for a copy run
+/// from a disk image or a download (which must not be replaced), into Applications. None when neither can be written,
+/// and the disk image is shown instead.
+#[cfg(desktop)]
+fn mac_app_replaceable() -> Option<PathBuf> {
+    let running = fast_core::access::app_bundle()?;
+    let writable = |dir: &Path| {
+        let probe = dir.join(format!(".fast-update-probe-{}", std::process::id()));
+        let ok = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        ok
+    };
+    if fast_core::access::location_problem(&running, None).is_none() {
+        return running.parent().filter(|d| writable(d)).map(|_| running.clone());
+    }
+    let target = Path::new("/Applications").join(running.file_name()?);
+    writable(Path::new("/Applications")).then_some(target)
+}
+
 fn apply(app: &AppHandle, st: &Shared, ready: &Ready) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let work = st.paths.update_dir.clone();
@@ -639,14 +658,21 @@ fn apply(app: &AppHandle, st: &Shared, ready: &Ready) -> Result<(), String> {
             std::fs::write(&script, core::appimage_script(&ready.installer, &target)).map_err(|e| e.to_string())?;
             std::process::Command::new("sh").arg(&script).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().map_err(|e| e.to_string())?;
         }
+        InstallerKind::Dmg if cfg!(target_os = "macos") && mac_app_replaceable().is_some() => {
+            // Replace the app in place and start it again, instead of leaving a disk image for the person to drag
+            // across (and a new mounted volume for every update).
+            let app_path = mac_app_replaceable().unwrap_or_default();
+            let script = work.join("finish-update.sh");
+            std::fs::write(&script, core::macos_script(&ready.installer, &app_path, &result_file)).map_err(|e| e.to_string())?;
+            std::process::Command::new("/bin/sh").arg(&script).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().map_err(|e| e.to_string())?;
+        }
         _ => {
             // .deb, .rpm, .dmg and the like: the system's installer takes over, with its own screens.
             let _ = &exe;
             fast_core::platform::open_path(&ready.installer).map_err(|e| e.to_string())?;
-            remember(st, |m| {
-                m.ready = None;
-                m.applied = None;
-            });
+            // `applied` stays: if this app comes back as the same build, the update did not take, and that is then
+            // reported once instead of the same build being offered, downloaded and opened again and again.
+            remember(st, |m| m.ready = None);
             return Ok(());
         }
     }

@@ -720,6 +720,8 @@ export interface MacAccessSettings {
   /** Kinds of folder allowed one by one, and who macOS thought the app was at the time. */
   granted?: string[];
   grantedFor?: string;
+  /** The identity for which the old Full Disk Access entry was cleared automatically. */
+  resetFor?: string;
   /** Kinds of folder the person does not want searched, sized or watched in the background. */
   off: string[];
 }
@@ -753,6 +755,7 @@ export interface AccessStatus {
   problem?: string | null;
   /** "perBuild": no developer signature, so macOS forgets permissions when the app is updated. */
   identity?: "stable" | "perBuild" | "unknown";
+  token?: string;
 }
 
 export interface Profile {
