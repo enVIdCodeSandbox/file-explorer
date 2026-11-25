@@ -37,7 +37,7 @@ const NETWORK_FS: &[&str] = &[
     "fuse.sshfs", "sshfs", "9p", "ncpfs", "fuse.rclone", "ceph", "glusterfs",
 ];
 
-#[cfg(not(any(target_os = "android", target_os = "ios", windows)))]
+#[cfg(any(all(unix, not(any(target_os = "android", target_os = "ios"))), test))]
 const PSEUDO_FS: &[&str] = &[
     "tmpfs", "devtmpfs", "overlay", "squashfs", "proc", "sysfs", "devfs", "autofs",
     "efivarfs", "ramfs", "cgroup", "cgroup2", "fusectl", "tracefs", "debugfs", "nullfs",
@@ -56,12 +56,14 @@ pub fn list_drives() -> Vec<Drive> {
         let fs = d.file_system().to_string_lossy().to_lowercase();
         #[cfg(not(windows))]
         {
-            if PSEUDO_FS.contains(&fs.as_str())
-                || mount.starts_with("/snap")
-                || mount.starts_with("/boot")
-                || mount.starts_with("/System/Volumes")
-                || mount.starts_with("/private/var")
-                || d.total_space() == 0
+            if d.total_space() == 0
+                || is_hidden_unix_mount(
+                    &mount,
+                    &fs,
+                    d.is_read_only(),
+                    cfg!(target_os = "macos"),
+                    || Path::new(&mount).join("FAST File Explorer.app").exists(),
+                )
             {
                 continue;
             }
@@ -100,8 +102,52 @@ pub fn list_drives() -> Vec<Drive> {
     }
     #[cfg(windows)]
     win::add_other_drives(&mut out);
+    #[cfg(target_os = "macos")]
+    mac::add_network_drives(&mut out);
     out.sort_by(|a, b| a.mount.cmp(&b.mount));
     out
+}
+
+#[cfg(any(all(unix, not(any(target_os = "android", target_os = "ios"))), test))]
+fn is_hidden_unix_mount(
+    mount: &str,
+    fs: &str,
+    read_only: bool,
+    is_macos: bool,
+    has_app_bundle: impl FnOnce() -> bool,
+) -> bool {
+    if PSEUDO_FS.contains(&fs)
+        || mount.starts_with("/snap")
+        || mount.starts_with("/boot")
+        || mount.starts_with("/System/Volumes")
+        || mount.starts_with("/private/var")
+        || mount.starts_with("/dev")
+        || mount.starts_with("/Volumes/.timemachine")
+    {
+        return true;
+    }
+    if is_macos && read_only && mount.starts_with("/Volumes/") {
+        let name = Path::new(mount).file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        if name == "FAST File Explorer" || name.starts_with("FAST File Explorer ") || has_app_bundle() {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn normalize_mac_remote(from: &str) -> Option<String> {
+    let trimmed = from.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((scheme, rest)) = trimmed.split_once("://") {
+        if matches!(scheme.to_ascii_lowercase().as_str(), "smb" | "cifs" | "afp") {
+            return Some(format!("//{rest}"));
+        }
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 /// A cheap fingerprint of "what is plugged in": it changes when a volume is mounted,
@@ -313,6 +359,73 @@ pub fn media_for(path: &Path, drives: &[Drive]) -> Media {
         return Media::Network;
     }
     volume_for(path, drives).map(|d| d.media).unwrap_or(Media::Unknown)
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::{display_name, is_hidden_unix_mount, normalize_mac_remote, parse_remote, Drive, Media, NETWORK_FS};
+    use std::ffi::CStr;
+    use std::path::Path;
+
+    const MNT_RDONLY: u32 = 0x0000_0001;
+
+    /// `sysinfo` skips every non-local volume on macOS (`kCFURLVolumeIsLocalKey == false`),
+    /// which hides SMB, AFP, NFS and WebDAV shares mounted under `/Volumes`. Read the
+    /// live mount table non-blockingly (`MNT_NOWAIT`) so network locations appear in This Mac.
+    pub(super) fn add_network_drives(out: &mut Vec<Drive>) {
+        let count = unsafe { libc::getfsstat(std::ptr::null_mut(), 0, libc::MNT_NOWAIT) };
+        if count <= 0 {
+            return;
+        }
+        let mut stats: Vec<libc::statfs> = Vec::with_capacity(count as usize);
+        let bufsize = (count as usize).saturating_mul(std::mem::size_of::<libc::statfs>()) as libc::c_int;
+        let actual = unsafe { libc::getfsstat(stats.as_mut_ptr(), bufsize, libc::MNT_NOWAIT) };
+        if actual <= 0 {
+            return;
+        }
+        unsafe { stats.set_len((actual as usize).min(count as usize)) };
+
+        for s in stats {
+            if (s.f_flags & (libc::MNT_LOCAL as u32)) != 0 || (s.f_flags & (libc::MNT_DONTBROWSE as u32)) != 0 {
+                continue;
+            }
+            let mount = unsafe { CStr::from_ptr(s.f_mntonname.as_ptr()) }.to_string_lossy().into_owned();
+            let fs = unsafe { CStr::from_ptr(s.f_fstypename.as_ptr()) }.to_string_lossy().to_lowercase();
+            let read_only = (s.f_flags & MNT_RDONLY) != 0;
+            if mount == "/"
+                || mount.starts_with("/System")
+                || out.iter().any(|o| o.mount == mount)
+                || is_hidden_unix_mount(&mount, &fs, read_only, true, || {
+                    Path::new(&mount).join("FAST File Explorer.app").exists()
+                })
+            {
+                continue;
+            }
+            if !NETWORK_FS.contains(&fs.as_str()) && !mount.starts_with("/Volumes/") {
+                continue;
+            }
+            let from = unsafe { CStr::from_ptr(s.f_mntfromname.as_ptr()) }.to_string_lossy().into_owned();
+            let share = normalize_mac_remote(&from).as_deref().and_then(parse_remote);
+            let bsize = s.f_bsize as u64;
+            let total = s.f_blocks.saturating_mul(bsize);
+            let available = s.f_bavail.saturating_mul(bsize);
+            out.push(Drive {
+                name: match &share {
+                    Some(sh) => sh.display(&mount),
+                    None => display_name(&from, &mount),
+                },
+                remote: share.map(|sh| sh.remote).or_else(|| (!from.is_empty()).then_some(from)),
+                mount,
+                fs,
+                total,
+                available,
+                media: Media::Network,
+                removable: false,
+                read_only,
+                online: true,
+            });
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -618,6 +731,18 @@ mod tests {
         let drives = list_drives();
         assert!(!drives.is_empty());
         assert!(drives.iter().all(|d| d.available <= d.total));
+    }
+
+    #[test]
+    fn hides_macos_app_installer_volume_and_normalizes_network_remotes() {
+        assert!(is_hidden_unix_mount("/Volumes/FAST File Explorer", "hfs", true, true, || true));
+        assert!(is_hidden_unix_mount("/Volumes/FAST File Explorer 1", "apfs", true, true, || false));
+        assert!(is_hidden_unix_mount("/Volumes/CustomName", "hfs", true, true, || true));
+        assert!(!is_hidden_unix_mount("/Volumes/Backup", "apfs", false, true, || false));
+        assert!(!is_hidden_unix_mount("/Volumes/media", "smbfs", false, true, || false));
+        assert_eq!(normalize_mac_remote("//user@nas/media").as_deref(), Some("//user@nas/media"));
+        assert_eq!(normalize_mac_remote("smb://user@nas/media").as_deref(), Some("//user@nas/media"));
+        assert_eq!(normalize_mac_remote("https://dav.example.com/files"), None);
     }
 }
 
