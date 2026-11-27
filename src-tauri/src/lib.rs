@@ -279,6 +279,7 @@ pub fn run() {
             remote::remote_remove_start,
             remote::servers_list,
             remote::servers_save,
+            remote::servers_rename,
             remote::servers_remove,
             remote::servers_forget_host,
             commands::prefetch,

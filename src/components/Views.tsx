@@ -13,7 +13,7 @@ import { sameShell, useShellItems } from "./shellMenu";
 import { driveLetter, driveName, driveRemote, hidesAddress, visibleDrives, withoutLetter } from "../util/drives";
 import { iconMenuItems } from "./IconPicker";
 import { driveSlot } from "../util/customIcons";
-import { deviceSlot, deviceTarget, driveTarget, serverSlot, serverTarget } from "../util/iconTarget";
+import { deviceSlot, deviceTarget, driveTarget, serverSlot } from "../util/iconTarget";
 import { KIND_LABEL, deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { applyFilter, isFiltering } from "../util/filter";
 import { adv } from "../settings/advanced";
@@ -25,7 +25,7 @@ import type { SortKey } from "../store";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
 import { analyzeLocation, baseName, isRemote, maskAddresses, parentPath, savedServerUrl } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
-import { driveMenuItems, networkMenuItems } from "./driveActions";
+import { driveMenuItems, networkMenuItems, renameServer, serverMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
 import { sniffedLook } from "../util/sniffCache";
 
@@ -135,7 +135,7 @@ export function DrivesView() {
   const servers = useStore((s) => s.servers);
   const os = useStore((s) => s.info?.os);
   const appearance = useStore((s) => s.settings!.appearance);
-  const { navigate, showToast, updateSettings } = useStore.getState();
+  const { navigate, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   const showSpace = appearance.showDriveSpace;
@@ -383,20 +383,17 @@ export function DrivesView() {
                     key={sv.name}
                     className="card drive-card"
                     onDoubleClick={() => navigate(url)}
-                    onKeyDown={(e) => e.key === "Enter" && navigate(url)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") navigate(url);
+                      else if (e.key === "F2") void renameServer(sv);
+                    }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       setMenu({
                         x: e.clientX,
                         y: e.clientY,
-                        items: [
-                          { id: "open", label: "Open", run: () => navigate(url) },
-                          { id: "server-login", label: "Log in again…", separatorBefore: true, run: () => useStore.getState().openConnect({ saved: sv }) },
-                          { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((err) => showToast(String(err))) },
-                          { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(useStore.getState().setServers).catch((err) => showToast(String(err))) },
-                          ...iconMenuItems(serverTarget(sv.name)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
-                        ],
+                        items: serverMenuItems(sv, { includeOpen: true }),
                       });
                     }}
                     title={`${sv.name}\n${shownUrl}\nDouble-click to open`}

@@ -368,10 +368,33 @@ pub async fn servers_list(state: State<'_, Shared>) -> CmdResult<Vec<SavedServer
 }
 
 #[tauri::command]
-pub async fn servers_save(state: State<'_, Shared>, entry: SavedServer) -> CmdResult<Vec<SavedServer>> {
+pub async fn servers_save(state: State<'_, Shared>, entry: SavedServer, previous_name: Option<String>) -> CmdResult<Vec<SavedServer>> {
     let mut list = load_saved(&state.paths.servers);
-    list.retain(|s| s.name != entry.name);
+    let prev = previous_name.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    list.retain(|s| s.name != entry.name && prev.is_none_or(|p| s.name != p));
     list.push(entry);
+    list.sort_by_key(|s| s.name.to_lowercase());
+    store_saved(&state.paths.servers, &list)?;
+    Ok(list)
+}
+
+#[tauri::command]
+pub async fn servers_rename(state: State<'_, Shared>, old_name: String, new_name: String) -> CmdResult<Vec<SavedServer>> {
+    let trimmed = new_name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Enter a name for the server.".into());
+    }
+    let mut list = load_saved(&state.paths.servers);
+    if old_name == trimmed {
+        return Ok(list);
+    }
+    if list.iter().any(|s| s.name != old_name && s.name.eq_ignore_ascii_case(&trimmed)) {
+        return Err(format!("There is already a server called \"{trimmed}\"."));
+    }
+    let Some(entry) = list.iter_mut().find(|s| s.name == old_name) else {
+        return Err(format!("Server \"{old_name}\" was not found."));
+    };
+    entry.name = trimmed;
     list.sort_by_key(|s| s.name.to_lowercase());
     store_saved(&state.paths.servers, &list)?;
     Ok(list)

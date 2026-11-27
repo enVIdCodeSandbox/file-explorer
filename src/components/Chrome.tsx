@@ -62,9 +62,9 @@ import { SIDEBAR_LIMITS } from "../util/limits";
 import { splitMenuItems } from "./Split";
 import { dropOnPanes, endHover, hoverPanes } from "../split/state";
 import { driveSlot } from "../util/customIcons";
-import { deviceSlot, deviceTarget, driveTarget, iconTarget, serverSlot, serverTarget } from "../util/iconTarget";
+import { deviceSlot, deviceTarget, driveTarget, iconTarget, serverSlot } from "../util/iconTarget";
 import { SETTING as LAYOUT_KEY, isDefault as layoutIsDefault, moveNav, parseLayout, placed, serializeLayout, zoneOf, type NavId, type Zone } from "../util/sideLayout";
-import { driveMenuItems, networkMenuItems } from "./driveActions";
+import { driveMenuItems, networkMenuItems, serverMenuItems } from "./driveActions";
 import { SIDE_NAMES, useChrome } from "../util/chrome";
 import { toggleTerminalPanel, useTerminal } from "../terminal/state";
 import { fileToolsItems } from "./toolsOpen";
@@ -1637,12 +1637,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
               sub: undefined,
               drop: "folder",
               tip: `${sv.name}\n${maskAddresses(url)}`,
-              menu: [
-                { id: "server-login", label: "Log in again…", run: () => useStore.getState().openConnect({ saved: sv }) },
-                { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((e) => showToast(String(e))) },
-                { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(useStore.getState().setServers).catch((e) => showToast(String(e))) },
-                ...iconMenuItems(serverTarget(sv.name)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
-              ],
+              menu: serverMenuItems(sv),
             });
           })}
           <button className="side-item" title="Connect to an FTP, SFTP, SSH or WebDAV server" onClick={() => useStore.getState().openConnect()}>

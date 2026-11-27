@@ -1,11 +1,14 @@
 // Actions on drives and network locations, shared by the sidebar, This PC and
 // the command bar so every right-click menu offers the same things.
 
-import { api, type Drive } from "../api";
+import { api, type Drive, type SavedServer } from "../api";
 import { ask, useStore } from "../store";
-import { analyzeLocation, clearLocation } from "../util/path";
+import { analyzeLocation, clearLocation, savedServerUrl } from "../util/path";
 import { driveName, hidesAddress } from "../util/drives";
+import { ICONS_KEY, iconMap, withIcon } from "../util/customIcons";
+import { serverSlot, serverTarget } from "../util/iconTarget";
 import type { MenuItem } from "./ContextMenu";
+import { iconMenuItems } from "./IconPicker";
 
 /** Pick a drive letter that is not in use, for the Map network drive dialog. */
 function freeLetters(drives: Drive[]): string[] {
@@ -180,5 +183,56 @@ export function networkMenuItems(drives: Drive[], os: string | undefined, appear
       disabled: network.length === 0,
       children: network.map((d) => ({ id: `disc-${d.mount}`, label: driveName(d, appearance), run: () => void disconnectDrive(d) })),
     },
+  ];
+}
+
+/** Move any custom icon override when a saved server is renamed. */
+export function migrateServerIcon(oldName: string, newName: string) {
+  const oldSlot = serverSlot(oldName);
+  const newSlot = serverSlot(newName);
+  if (oldSlot === newSlot) return;
+  useStore.getState().updateSettings((s) => {
+    const map = iconMap(s.advanced[ICONS_KEY]);
+    const choice = map[oldSlot];
+    if (!choice) return;
+    let raw = withIcon(s.advanced[ICONS_KEY], oldSlot, null);
+    raw = withIcon(raw, newSlot, choice);
+    s.advanced[ICONS_KEY] = raw;
+  });
+}
+
+/** Prompt to rename a saved server and persist the change. */
+export async function renameServer(sv: SavedServer) {
+  const { setServers, showToast } = useStore.getState();
+  const r = await ask({
+    title: "Rename server",
+    message: "Change the name shown for this server.",
+    input: sv.name,
+    buttons: [
+      { id: "ok", label: "Rename", primary: true },
+      { id: "cancel", label: "Cancel" },
+    ],
+  });
+  const next = r?.button === "ok" ? r.input.trim() : "";
+  if (!next || next === sv.name) return;
+  try {
+    setServers(await api.serversRename(sv.name, next));
+    migrateServerIcon(sv.name, next);
+  } catch (e) {
+    showToast(String(e));
+  }
+}
+
+/** Shared context menu for saved servers in both the sidebar and This PC. */
+export function serverMenuItems(sv: SavedServer, opts?: { includeOpen?: boolean }): MenuItem[] {
+  const url = savedServerUrl(sv);
+  const { navigate, openConnect, setServers, showToast } = useStore.getState();
+  return [
+    ...(opts?.includeOpen ? [{ id: "open", label: "Open", run: () => navigate(url) }] : []),
+    { id: "server-rename", label: "Rename…", icon: "rename", shortcut: "F2", separatorBefore: !!opts?.includeOpen, run: () => void renameServer(sv) },
+    { id: "server-login", label: "Log in again…", separatorBefore: true, run: () => openConnect({ saved: sv }) },
+    { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((e) => showToast(String(e))) },
+    { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(setServers).catch((e) => showToast(String(e))) },
+    ...iconMenuItems(serverTarget(sv.name)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
   ];
 }

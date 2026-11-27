@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { useTerminal } from "../terminal/state";
 import { pickFile, sshFolder } from "../util/pickFile";
 import { rawRemoteLabel, splitRemote } from "../util/path";
+import { migrateServerIcon } from "./driveActions";
 
 const PROTOCOLS: { id: ServerProtocol; label: string }[] = [
   { id: "sftp", label: "SFTP (SSH)" },
@@ -96,8 +97,10 @@ export function ConnectServer() {
     try {
       const url = await api.remoteConnect(server, f.path.trim() || undefined);
       if (f.remember) {
+        const previous = request.saved?.name;
         const entry: SavedServer = { name: f.name.trim() || rawRemoteLabel(url), protocol: server.protocol, host: server.host, port: server.port, user: server.user, tls: server.tls, keyFile: server.keyFile, path: f.path.trim() };
-        useStore.getState().setServers(await api.serversSave(entry));
+        useStore.getState().setServers(await api.serversSave(entry, previous));
+        if (previous && previous !== entry.name) migrateServerIcon(previous, entry.name);
       }
       close();
       useStore.getState().navigate(url);
