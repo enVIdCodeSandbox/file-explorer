@@ -161,8 +161,9 @@ describe("interface presets", () => {
     applyUiPreset(s, byId("windows"), false);
     expect(s.keys).toEqual({});
     expect(s.appearance.style.icons).toBe("fluent");
-    expect(s.appearance.theme).toBe("win11-light");
+    expect(s.appearance.theme).toBe("win11-dark");
     expect(differences(s, byId("windows").patch)).toEqual([]);
+    s.appearance.theme = "system";
     applyUiPreset(s, byId("windows10"), false);
     expect(s.appearance.theme).toBe("win10-light");
     expect(s.appearance.style.icons).toBe("outline");
