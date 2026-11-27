@@ -18,6 +18,7 @@ import {
   snapshotOf,
   toggleSettingLock,
 } from "./presets";
+import { resolveLayout } from "../util/layout";
 import { THEMES } from "../util/themes";
 import { getSetting } from "./schema";
 
@@ -167,7 +168,8 @@ describe("interface presets", () => {
     expect(s.appearance.style.icons).toBe("outline");
     expect(s.appearance.style.radius).toBeLessThanOrEqual(2);
     expect(s.appearance.density).toBe("compact");
-    expect(s.appearance.layout.commands.order).toBeLessThan(s.appearance.layout.address.order);
+    const win10Layout = resolveLayout(s.appearance.layout);
+    expect(win10Layout.commands.order).toBeLessThan(win10Layout.address.order);
     expect(differences(s, byId("windows10").patch)).toEqual([]);
   });
   it("recognizes an applied preset even when saved keys come back in another order", () => {
