@@ -220,7 +220,9 @@ function AppInner() {
     let alive = true;
     void api
       .remoteIsConnected(location)
-      .then((ok) => alive && ok && useTerminal.getState().openForSsh(location))
+      .then((ok) => {
+        if (alive && ok) return useTerminal.getState().openForSsh(location);
+      })
       .catch(() => {});
     return () => {
       alive = false;
