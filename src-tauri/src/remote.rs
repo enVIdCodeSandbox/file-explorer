@@ -759,6 +759,25 @@ impl Reporter {
     }
 }
 
+/// Ensure an `open` staging job produced an actual local file without errors, cleaning up on failure.
+fn finalize_staged_open(stage_dir: Option<&Path>, target: &Path, failed: &[(String, String)], items_done: u64) -> CmdResult<()> {
+    let err_msg = if let Some((_, why)) = failed.first() {
+        Some(why.clone())
+    } else if target.as_os_str().is_empty() || !target.exists() {
+        let _ = items_done;
+        Some("The file could not be fetched to open.".to_string())
+    } else {
+        None
+    };
+    if let Some(why) = err_msg {
+        if let Some(dir) = stage_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        return Err(why);
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct Outcome {
     /// What was made (for "open": the downloaded file).
@@ -1001,11 +1020,17 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
         })();
 
         // Staging is only needed while copying between servers; a file fetched
-        // to be opened stays until the cache is cleaned.
-        if let (Some(dir), false) = (&stage, open) {
+        // to be opened stays until the cache is cleaned (unless fetching failed).
+        let res = result.and_then(|()| {
+            if open {
+                finalize_staged_open(stage.as_deref(), Path::new(&out.result), &tally.failed, tally.files)?;
+            }
+            Ok(())
+        });
+        if let (Some(dir), true) = (&stage, !open || res.is_err()) {
             let _ = std::fs::remove_dir_all(dir);
         }
-        result?;
+        res?;
         out.items = tally.files;
         out.bytes = done.load(Ordering::Relaxed);
         out.failed = tally.failed;
@@ -1217,7 +1242,9 @@ pub async fn archive_copy_start(app: AppHandle, state: State<'_, Shared>, source
             }
         }
         if open {
-            out.result = into.join(&first_target).to_string_lossy().into_owned();
+            let target = into.join(&first_target);
+            finalize_staged_open(Some(&into), &target, &out.failed, out.items)?;
+            out.result = target.to_string_lossy().into_owned();
         } else {
             out.result = dest.clone();
             out.local_dirs.push(PathBuf::from(&dest));
@@ -1518,5 +1545,28 @@ mod credential_tests {
         remove_credential(&file, "ssh://me@example.com").unwrap();
         assert!(load_credentials(&file).is_empty());
         assert!(!file.exists());
+    }
+
+    #[test]
+    fn finalize_staged_open_rejects_failures_and_missing_files_and_cleans_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let stage = dir.path().join("job-1");
+        std::fs::create_dir_all(&stage).unwrap();
+        let missing = stage.join("shadow.bak");
+
+        let err = finalize_staged_open(Some(&stage), &missing, &[("shadow.bak".into(), "The server does not allow this".into())], 0).unwrap_err();
+        assert!(err.contains("The server does not allow this"));
+        assert!(!stage.exists());
+
+        std::fs::create_dir_all(&stage).unwrap();
+        let err = finalize_staged_open(Some(&stage), &missing, &[], 0).unwrap_err();
+        assert!(err.contains("could not be fetched"));
+        assert!(!stage.exists());
+
+        std::fs::create_dir_all(&stage).unwrap();
+        let present = stage.join("ok.txt");
+        std::fs::write(&present, b"hello").unwrap();
+        finalize_staged_open(Some(&stage), &present, &[], 1).unwrap();
+        assert!(present.exists());
     }
 }

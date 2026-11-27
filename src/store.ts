@@ -2117,6 +2117,14 @@ export async function openFile(path: string): Promise<void> {
   const picking = useStore.getState().picker;
   if (picking) return picking.done(path);
   const { showToast, chooseApp, info } = useStore.getState();
+  if (isRemote(path)) {
+    api.remoteCopyStart([path], "", false, true).catch((err) => showToast(String(err)));
+    return;
+  }
+  if (isArchiveLoc(path)) {
+    api.archiveCopyStart([path], "", true).catch((err) => showToast(String(err)));
+    return;
+  }
   if (isMobileOs(info?.os)) {
     // A phone opens files through its own "open with" sheet; the app only hands the file over.
     const said = openOutside(path);
@@ -2619,6 +2627,11 @@ function remoteFinished(p: DeleteProgress) {
     return s.notify("error", `Could not ${verb} ${name}`, friendlyRemoteError(message));
   }
   if (p.action === "open") {
+    if (p.errors.length > 0 || p.errorCount > 0) {
+      const message = p.errors[0]?.message ?? "The file could not be opened.";
+      s.notify("error", `Could not open ${name}`, friendlyRemoteError(message));
+      return;
+    }
     if (p.result) void openFile(p.result);
     return;
   }

@@ -2337,6 +2337,9 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
         guard(&st, &path)?;
         // The order: the app set for this kind of file, then what the system itself does with it,
         // then the program that suits it best, and only when there is none the chooser.
+        if !path.contains("://") && !Path::new(&path).exists() {
+            return Err(format!("Cannot find '{}'.", path));
+        }
         let local = !path.contains("://") && Path::new(&path).exists();
         // A program chosen with "Always" here, or a `.ts` that is video: the app knows these better than the extension does.
         if local {
