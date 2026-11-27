@@ -160,6 +160,11 @@ pub async fn remote_is_connected(state: State<'_, Shared>, location: String) -> 
     Ok(state.remotes.lock().contains_key(&key))
 }
 
+/// In-memory server credentials/options for a connected remote key (`ssh://user@host`).
+pub fn server_for(st: &Shared, key: &str) -> Option<Server> {
+    st.remotes.lock().get(key).map(|r| r.server.clone())
+}
+
 pub fn list(st: &Shared, url: &str) -> CmdResult<Listing> {
     let loc = Location::parse(url).map_err(err)?;
     let show_hidden = st.settings.read().general.show_hidden;

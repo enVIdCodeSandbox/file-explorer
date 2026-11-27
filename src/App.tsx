@@ -34,7 +34,7 @@ import { commandById, commandsFor, mouseComboOf } from "./settings/keys";
 import { startLiveTracker } from "./util/liveFiles";
 import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
-import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, parentPath, parseLocation } from "./util/path";
+import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, isSshLoc, parentPath, parseLocation } from "./util/path";
 import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
@@ -213,6 +213,19 @@ function AppInner() {
       }),
     [],
   );
+
+  // Entering or switching to an already-connected SSH folder opens the terminal routed there.
+  useEffect(() => {
+    if (!ready || !location || !isSshLoc(location)) return;
+    let alive = true;
+    void api
+      .remoteIsConnected(location)
+      .then((ok) => alive && ok && useTerminal.getState().openForSsh(location))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [ready, location]);
 
   // Tell the backend which folders are open, so it can watch them and refresh
   // the listing when another program changes one. The key is a string so the

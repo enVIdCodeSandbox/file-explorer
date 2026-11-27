@@ -7,7 +7,7 @@ import { viewLevelOf } from "../util/viewLevel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, type Drive, type SavedServer, type TerminalMode } from "../api";
+import { api, type Drive, type TerminalMode } from "../api";
 import {
   GROUP_COLORS,
   VIEW_LEVELS,
@@ -45,9 +45,11 @@ import {
   isArchiveFile,
   isArchiveLoc,
   isRemote,
+  isSshLoc,
   maskAddresses,
   parentPath,
   parseLocation,
+  savedServerUrl,
   searchLocation,
   type SearchMode,
 } from "../util/path";
@@ -615,13 +617,18 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
     return () => window.removeEventListener("keydown", onKey);
   }, [up, back, forward, navigate, parts.join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A folder inside an archive or on a server is not a folder a terminal can open in.
+  // A folder inside an archive or on a server is not a local folder for a desktop shell; ssh:// opens inside the app terminal.
   const inArchive = !!folder && isArchiveLoc(folder);
   const onServer = !!folder && isRemote(folder);
+  const inSsh = !!folder && isSshLoc(folder);
   const realFolder = folder && !inArchive && !onServer ? folder : null;
   const terminalDir = realFolder ?? info?.home ?? "/";
   const openTerminal = async (mode: TerminalMode, plain = false) => {
     try {
+      if (inSsh && folder && mode === "here") {
+        await useTerminal.getState().openForSsh(folder);
+        return;
+      }
       const { terminal } = useStore.getState().settings!;
       let dir = terminalDir;
       // The plain button follows the settings: the home folder, or the one selected folder.
@@ -655,7 +662,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
           ]
         : [
             { id: "plain", label: "Open terminal", run: () => void openTerminal("here", true) },
-            { id: "here", label: "Open in this folder", disabled: !realFolder, run: () => void openTerminal("here") },
+            { id: "here", label: "Open in this folder", disabled: !realFolder && !inSsh, run: () => void openTerminal("here") },
             { id: "home", label: "Open in home folder", run: () => void openTerminal("home") },
             { id: "drive", label: "Open at drive root", disabled: !realFolder, run: () => void openTerminal("driveRoot") },
             { id: "admin", label: `Open here ${admin}`, separatorBefore: true, disabled: onServer, run: () => void openTerminal("admin") },
@@ -1212,13 +1219,7 @@ const MIN_WIDTH = SIDEBAR_LIMITS.min;
 const MAX_WIDTH = SIDEBAR_LIMITS.max;
 
 /** The address a saved server opens at. */
-export function serverUrl(s: SavedServer): string {
-  const scheme = s.protocol === "dav" ? (s.tls ? "davs" : "dav") : s.protocol;
-  const port = s.port === (s.protocol === "ftp" ? 21 : s.protocol === "sftp" ? 22 : s.tls ? 443 : 80) ? "" : `:${s.port}`;
-  const user = s.user ? `${s.user}@` : "";
-  const path = s.path ? (s.path.startsWith("/") ? s.path : `/${s.path}`) : "/";
-  return `${scheme}://${user}${s.host}${port}${path}`;
-}
+export const serverUrl = savedServerUrl;
 
 export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   const pins = useStore((s) => s.pins);
@@ -1640,7 +1641,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
               ],
             });
           })}
-          <button className="side-item" title="Connect to an FTP, SFTP or WebDAV server" onClick={() => useStore.getState().openConnect()}>
+          <button className="side-item" title="Connect to an FTP, SFTP, SSH or WebDAV server" onClick={() => useStore.getState().openConnect()}>
             <Icon name="network" />
             {!collapsed && <span className="side-label">Connect to server…</span>}
           </button>

@@ -44,7 +44,8 @@ import { LockedCard } from "./Locks";
 import { MacAccessHelp } from "./MacAccess";
 import { commandsFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
-import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
+import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, isSshLoc, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
+import { useTerminal } from "../terminal/state";
 import { takeSelection } from "../util/unload";
 import { usePulse } from "../util/pulse";
 import { COLUMN_MAX_WIDTH } from "../util/limits";
@@ -191,6 +192,7 @@ export function FileView({ path }: { path: string }) {
         pacer.cancel();
         if (alive) {
           setListing(l);
+          if (isSshLoc(l.path)) void useTerminal.getState().openForSsh(l.path);
           if (Date.now() - startedAt > 800) rememberVisit(path, l.entries.length, Date.now() - startedAt);
         }
       } catch (e) {

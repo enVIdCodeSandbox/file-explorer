@@ -4,10 +4,11 @@
 
 import { create } from "zustand";
 import { api, type TermInfo, type TermSession } from "../api";
-import { isAppLocation, isArchiveLoc, isRemote } from "../util/path";
+import { isAppLocation, isArchiveLoc, isRemote, isSshLoc, remoteLabel, splitRemote } from "../util/path";
 import { adv } from "../settings/advanced";
 import { useStore } from "../store";
 import { moveTo, resolveLayout } from "../util/layout";
+import { isMobileOs } from "../util/native";
 
 export interface Pane {
   id: string;
@@ -49,15 +50,26 @@ function loadSaved(): Saved {
 
 export const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
 
-/** Where a new terminal starts: the folder being viewed, when it is a real folder on this computer. */
+/** Where a new terminal starts: the folder being viewed, when it is a real local folder or an SSH folder. */
 export function startFolder(): string {
   const s = useStore.getState();
   const home = s.info?.home ?? "";
   if (adv<string>(s.settings, "terminal.startIn") === "home") return home;
   const loc = s.tabs.find((t) => t.id === s.activeTab)?.location ?? "";
+  if (isSshLoc(loc)) return loc;
   if (!loc || isAppLocation(loc) || isRemote(loc) || isArchiveLoc(loc)) return home;
   return loc;
 }
+
+const b64Encoder = new TextEncoder();
+const encodeB64 = (text: string): string => {
+  const bytes = b64Encoder.encode(text);
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(out);
+};
+
+let sshQueue: Promise<void> = Promise.resolve();
 
 interface TerminalState {
   open: boolean;
@@ -69,7 +81,9 @@ interface TerminalState {
   setOpen: (open: boolean) => void;
   toggle: () => void;
   init: () => Promise<void>;
-  newTab: (opts?: { cwd?: string; elevated?: boolean }) => Promise<void>;
+  newTab: (opts?: { cwd?: string; elevated?: boolean; title?: string | null }) => Promise<void>;
+  /** Open the terminal for an `ssh://` folder, reusing and routing an existing SSH shell for the same server. */
+  openForSsh: (url: string) => Promise<void>;
   split: () => Promise<void>;
   activate: (id: string) => void;
   activatePane: (tabId: string, paneId: string) => void;
@@ -115,6 +129,8 @@ async function startUp(): Promise<void> {
           used.add(s.sid);
           panes.push({ ...p, title: s.title || p.title, cwd: s.cwd || p.cwd, elevated: s.elevated, exited: s.alive ? null : s.exit ?? 0 });
         } else {
+          // Saved SSH tabs require an active server login first; do not auto-connect before the user signs in.
+          if (isSshLoc(p.cwd)) continue;
           // Its shell is gone (the app was closed): show what it printed, then start a new shell in the same folder.
           const transcript = p.sid ? (await api.termTranscript(p.sid, true).catch(() => null)) ?? undefined : undefined;
           const fresh = await startPane(p.cwd, p.elevated && info.os !== "windows", p.title || null);
@@ -161,9 +177,50 @@ export const useTerminal = create<TerminalState>((set, get) => ({
 
   newTab: async (opts = {}) => {
     if (!get().ready) await get().init();
-    const pane = await startPane(opts.cwd ?? startFolder(), !!opts.elevated);
+    const cwd = opts.cwd ?? startFolder();
+    const title = opts.title !== undefined ? opts.title : isSshLoc(cwd) ? remoteLabel(cwd) : null;
+    const pane = await startPane(cwd, !!opts.elevated, title);
     const tab: Tab = { id: uid(), panes: [pane], active: pane.id };
     set((s) => ({ tabs: [...s.tabs, tab], active: tab.id, open: true }));
+  },
+
+  openForSsh: (url) => {
+    if (!isSshLoc(url)) return Promise.resolve();
+    const appState = useStore.getState();
+    if (isMobileOs(appState.info?.os)) return Promise.resolve();
+    const task = async () => {
+      const s = useStore.getState();
+      const layout = resolveLayout(s.settings?.appearance.layout);
+      if (layout.terminal.dock === "hidden") {
+        s.updateSettings((x) => void (x.appearance.layout = moveTo(layout, "terminal", "bottom")));
+      }
+      if (!get().open) set({ open: true });
+      if (!get().ready) await get().init();
+
+      const { origin, path } = splitRemote(url);
+      const originKey = origin.toLowerCase();
+      for (const tab of get().tabs) {
+        const pane = tab.panes.find(
+          (p) => p.exited === null && p.sid && isSshLoc(p.cwd) && splitRemote(p.cwd).origin.toLowerCase() === originKey,
+        );
+        if (!pane || !pane.sid) continue;
+        get().activatePane(tab.id, pane.id);
+        if (splitRemote(pane.cwd).path !== path) {
+          const quoted = `'${path.replace(/'/g, "'\\''")}'`;
+          await api.termInput(pane.sid, encodeB64(` cd ${quoted}\r`)).catch(() => {});
+          get().patchPane(pane.id, { cwd: url });
+          void api.termDo("cwd", pane.sid, url).catch(() => {});
+        }
+        return;
+      }
+
+      const pane = await startPane(url, false, remoteLabel(url));
+      const tab: Tab = { id: uid(), panes: [pane], active: pane.id };
+      set((st) => ({ tabs: [...st.tabs, tab], active: tab.id, open: true }));
+    };
+    const next = sshQueue.then(task, task);
+    sshQueue = next;
+    return next;
   },
 
   split: async () => {
