@@ -14,64 +14,78 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::State;
 
 static RTT_PROBING: AtomicBool = AtomicBool::new(false);
 
-struct SamplerState {
-    subscribers: HashSet<String>,
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct DesktopHardwareState {
     sys: Option<System>,
     networks: Option<Networks>,
     components: Option<Components>,
     disks: Option<Disks>,
-    last_sample: Option<Instant>,
     last_slow_refresh: Option<Instant>,
     last_disk_read: u64,
     last_disk_write: u64,
-    last_remote_read: u64,
-    last_remote_write: u64,
     last_net_rx: u64,
     last_net_tx: u64,
-    rtt_cache: HashMap<String, (Instant, Option<f64>)>,
     cached_disks: Vec<DiskVolumeMetric>,
     cached_temps: Vec<TempMetric>,
 }
 
-impl Default for SamplerState {
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl Default for DesktopHardwareState {
     fn default() -> Self {
         Self {
-            subscribers: HashSet::new(),
             sys: None,
             networks: None,
             components: None,
             disks: None,
-            last_sample: None,
             last_slow_refresh: None,
             last_disk_read: 0,
             last_disk_write: 0,
-            last_remote_read: 0,
-            last_remote_write: 0,
             last_net_rx: 0,
             last_net_tx: 0,
-            rtt_cache: HashMap::new(),
             cached_disks: Vec::new(),
             cached_temps: Vec::new(),
         }
     }
 }
 
+struct SamplerState {
+    subscribers: HashSet<String>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    hw: DesktopHardwareState,
+    last_sample: Option<Instant>,
+    last_remote_read: u64,
+    last_remote_write: u64,
+    rtt_cache: HashMap<String, (Instant, Option<f64>)>,
+}
+
+impl Default for SamplerState {
+    fn default() -> Self {
+        Self {
+            subscribers: HashSet::new(),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            hw: DesktopHardwareState::default(),
+            last_sample: None,
+            last_remote_read: 0,
+            last_remote_write: 0,
+            rtt_cache: HashMap::new(),
+        }
+    }
+}
+
 impl SamplerState {
     fn clear_samplers(&mut self) {
-        self.sys = None;
-        self.networks = None;
-        self.components = None;
-        self.disks = None;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            self.hw = DesktopHardwareState::default();
+        }
         self.last_sample = None;
-        self.last_slow_refresh = None;
         self.rtt_cache.clear();
-        self.cached_disks.clear();
-        self.cached_temps.clear();
     }
 }
 
@@ -472,20 +486,46 @@ pub async fn metrics_snapshot(state: State<'_, Shared>) -> CmdResult<MetricsSnap
         .map_err(|e| e.to_string())?
 }
 
-fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
+struct HardwareSample {
+    os_name: String,
+    kernel_version: String,
+    uptime_secs: u64,
+    load_avg: [f64; 3],
+    cpu_percent: f32,
+    per_core_cpu: Vec<f32>,
+    cpu_freq_mhz: u64,
+    physical_cores: usize,
+    logical_cores: usize,
+    mem_total: u64,
+    mem_used: u64,
+    mem_avail: u64,
+    swap_total: u64,
+    swap_used: u64,
+    app_pid: u32,
+    app_cpu_percent: f32,
+    app_memory_bytes: u64,
+    app_virtual_bytes: u64,
+    app_disk_read_per_sec: f64,
+    app_disk_write_per_sec: f64,
+    app_disk_read_total: u64,
+    app_disk_write_total: u64,
+    net_rx_per_sec: f64,
+    net_tx_per_sec: f64,
+    net_total_rx: u64,
+    net_total_tx: u64,
+    interfaces: Vec<NetIfaceMetric>,
+    disks_out: Vec<DiskVolumeMetric>,
+    temps_out: Vec<TempMetric>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<HardwareSample> {
     let pid = sysinfo::get_current_pid().map_err(|e| e.to_string())?;
-    let mut g = sampler().lock();
-    if g.subscribers.is_empty() {
-        // If invoked directly (e.g. initial open), ensure active tracking is enabled.
-        g.subscribers.insert("default".into());
-        telemetry::set_active(true);
-    }
+    let had_prev = g.last_sample.is_some();
+    let hw = &mut g.hw;
+    let do_slow = hw.last_slow_refresh.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1));
 
-    let now = Instant::now();
-    let dt = g.last_sample.map(|t| now.saturating_duration_since(t).as_secs_f64()).unwrap_or(0.0);
-    let do_slow = g.last_slow_refresh.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1));
-
-    let sys = g.sys.get_or_insert_with(System::new_all);
+    let sys = hw.sys.get_or_insert_with(System::new_all);
     sys.refresh_memory();
     sys.refresh_cpu_usage();
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::everything());
@@ -507,7 +547,7 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
     let swap_total = sys.total_swap();
     let swap_used = sys.used_swap();
 
-    let networks = g.networks.get_or_insert_with(Networks::new_with_refreshed_list);
+    let networks = hw.networks.get_or_insert_with(Networks::new_with_refreshed_list);
     networks.refresh(true);
     let mut net_total_rx = 0u64;
     let mut net_total_tx = 0u64;
@@ -538,27 +578,147 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
     }
     interfaces.sort_by(|a, b| (b.rx_per_sec + b.tx_per_sec).total_cmp(&(a.rx_per_sec + a.tx_per_sec)).then_with(|| a.name.cmp(&b.name)));
 
-    let net_rx_per_sec = if dt > 0.002 && g.last_sample.is_some() {
-        net_total_rx.saturating_sub(g.last_net_rx) as f64 / dt
+    let net_rx_per_sec = if dt > 0.002 && had_prev {
+        net_total_rx.saturating_sub(hw.last_net_rx) as f64 / dt
     } else {
         0.0
     };
-    let net_tx_per_sec = if dt > 0.002 && g.last_sample.is_some() {
-        net_total_tx.saturating_sub(g.last_net_tx) as f64 / dt
+    let net_tx_per_sec = if dt > 0.002 && had_prev {
+        net_total_tx.saturating_sub(hw.last_net_tx) as f64 / dt
     } else {
         0.0
     };
 
-    let app_disk_read_per_sec = if dt > 0.002 && g.last_sample.is_some() {
-        proc_disk.total_read_bytes.saturating_sub(g.last_disk_read) as f64 / dt
+    let app_disk_read_per_sec = if dt > 0.002 && had_prev {
+        proc_disk.total_read_bytes.saturating_sub(hw.last_disk_read) as f64 / dt
     } else {
         0.0
     };
-    let app_disk_write_per_sec = if dt > 0.002 && g.last_sample.is_some() {
-        proc_disk.total_written_bytes.saturating_sub(g.last_disk_write) as f64 / dt
+    let app_disk_write_per_sec = if dt > 0.002 && had_prev {
+        proc_disk.total_written_bytes.saturating_sub(hw.last_disk_write) as f64 / dt
     } else {
         0.0
     };
+
+    if do_slow {
+        let disks = hw.disks.get_or_insert_with(Disks::new_with_refreshed_list);
+        disks.refresh(true);
+        hw.cached_disks = disks
+            .iter()
+            .map(|d| DiskVolumeMetric {
+                name: d.name().to_string_lossy().into_owned(),
+                mount: d.mount_point().to_string_lossy().into_owned(),
+                fs: d.file_system().to_string_lossy().into_owned(),
+                kind: format!("{:?}", d.kind()),
+                total_bytes: d.total_space(),
+                available_bytes: d.available_space(),
+                read_only: d.is_read_only(),
+            })
+            .collect();
+
+        let comps = hw.components.get_or_insert_with(Components::new_with_refreshed_list);
+        comps.refresh(true);
+        hw.cached_temps = comps
+            .iter()
+            .filter_map(|c| {
+                let t = c.temperature()?;
+                Some(TempMetric {
+                    label: c.label().to_string(),
+                    celsius: t,
+                    max_celsius: c.max(),
+                    critical_celsius: c.critical(),
+                })
+            })
+            .collect();
+        hw.last_slow_refresh = Some(now);
+    }
+
+    hw.last_disk_read = proc_disk.total_read_bytes;
+    hw.last_disk_write = proc_disk.total_written_bytes;
+    hw.last_net_rx = net_total_rx;
+    hw.last_net_tx = net_total_tx;
+
+    let load = System::load_average();
+    Ok(HardwareSample {
+        os_name: System::long_os_version().unwrap_or_else(|| platform::os_name().to_string()),
+        kernel_version: System::kernel_version().unwrap_or_default(),
+        uptime_secs: System::uptime(),
+        load_avg: [load.one, load.five, load.fifteen],
+        cpu_percent,
+        per_core_cpu,
+        cpu_freq_mhz,
+        physical_cores,
+        logical_cores,
+        mem_total,
+        mem_used,
+        mem_avail,
+        swap_total,
+        swap_used,
+        app_pid: pid.as_u32(),
+        app_cpu_percent,
+        app_memory_bytes,
+        app_virtual_bytes,
+        app_disk_read_per_sec,
+        app_disk_write_per_sec,
+        app_disk_read_total: proc_disk.total_read_bytes,
+        app_disk_write_total: proc_disk.total_written_bytes,
+        net_rx_per_sec,
+        net_tx_per_sec,
+        net_total_rx,
+        net_total_tx,
+        interfaces,
+        disks_out: hw.cached_disks.clone(),
+        temps_out: hw.cached_temps.clone(),
+    })
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn sample_hardware(_g: &mut SamplerState, _now: Instant, _dt: f64) -> CmdResult<HardwareSample> {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    Ok(HardwareSample {
+        os_name: platform::os_name().to_string(),
+        kernel_version: String::new(),
+        uptime_secs: 0,
+        load_avg: [0.0, 0.0, 0.0],
+        cpu_percent: 0.0,
+        per_core_cpu: Vec::new(),
+        cpu_freq_mhz: 0,
+        physical_cores: cores,
+        logical_cores: cores,
+        mem_total: 0,
+        mem_used: 0,
+        mem_avail: 0,
+        swap_total: 0,
+        swap_used: 0,
+        app_pid: std::process::id(),
+        app_cpu_percent: 0.0,
+        app_memory_bytes: 0,
+        app_virtual_bytes: 0,
+        app_disk_read_per_sec: 0.0,
+        app_disk_write_per_sec: 0.0,
+        app_disk_read_total: 0,
+        app_disk_write_total: 0,
+        net_rx_per_sec: 0.0,
+        net_tx_per_sec: 0.0,
+        net_total_rx: 0,
+        net_total_tx: 0,
+        interfaces: Vec::new(),
+        disks_out: Vec::new(),
+        temps_out: Vec::new(),
+    })
+}
+
+fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
+    let mut g = sampler().lock();
+    if g.subscribers.is_empty() {
+        // If invoked directly (e.g. initial open), ensure active tracking is enabled.
+        g.subscribers.insert("default".into());
+        telemetry::set_active(true);
+    }
+
+    let now = Instant::now();
+    let dt = g.last_sample.map(|t| now.saturating_duration_since(t).as_secs_f64()).unwrap_or(0.0);
+    let hw = sample_hardware(&mut g, now, dt)?;
 
     let (remote_read_total, remote_write_total) = telemetry::remote_io_totals();
     let remote_read_per_sec = if dt > 0.002 && g.last_sample.is_some() {
@@ -572,49 +732,9 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
         0.0
     };
 
-    if do_slow {
-        let disks = g.disks.get_or_insert_with(Disks::new_with_refreshed_list);
-        disks.refresh(true);
-        g.cached_disks = disks
-            .iter()
-            .map(|d| DiskVolumeMetric {
-                name: d.name().to_string_lossy().into_owned(),
-                mount: d.mount_point().to_string_lossy().into_owned(),
-                fs: d.file_system().to_string_lossy().into_owned(),
-                kind: format!("{:?}", d.kind()),
-                total_bytes: d.total_space(),
-                available_bytes: d.available_space(),
-                read_only: d.is_read_only(),
-            })
-            .collect();
-
-        let comps = g.components.get_or_insert_with(Components::new_with_refreshed_list);
-        comps.refresh(true);
-        g.cached_temps = comps
-            .iter()
-            .filter_map(|c| {
-                let t = c.temperature()?;
-                Some(TempMetric {
-                    label: c.label().to_string(),
-                    celsius: t,
-                    max_celsius: c.max(),
-                    critical_celsius: c.critical(),
-                })
-            })
-            .collect();
-        g.last_slow_refresh = Some(now);
-    }
-
     g.last_sample = Some(now);
-    g.last_disk_read = proc_disk.total_read_bytes;
-    g.last_disk_write = proc_disk.total_written_bytes;
     g.last_remote_read = remote_read_total;
     g.last_remote_write = remote_write_total;
-    g.last_net_rx = net_total_rx;
-    g.last_net_tx = net_total_tx;
-
-    let disks_out = g.cached_disks.clone();
-    let temps_out = g.cached_temps.clone();
 
     // Remote endpoint inspection + background RTT probe scheduling
     let raw_remotes: Vec<(String, String, u16, usize)> = {
@@ -667,43 +787,42 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
     #[cfg(not(desktop))]
     let open_terminals = 0usize;
 
-    let load = System::load_average();
     let sampled_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
 
     Ok(MetricsSnapshot {
         sampled_at_ms,
         is_elevated: is_process_elevated(),
         can_elevate: cfg!(desktop),
-        os_name: System::long_os_version().unwrap_or_else(|| platform::os_name().to_string()),
-        kernel_version: System::kernel_version().unwrap_or_default(),
-        uptime_secs: System::uptime(),
-        load_avg: [load.one, load.five, load.fifteen],
-        cpu_percent,
-        per_core_cpu,
-        cpu_freq_mhz,
-        physical_cores,
-        logical_cores,
-        memory_total_bytes: mem_total,
-        memory_used_bytes: mem_used,
-        memory_available_bytes: mem_avail,
-        swap_total_bytes: swap_total,
-        swap_used_bytes: swap_used,
-        app_pid: pid.as_u32(),
+        os_name: hw.os_name,
+        kernel_version: hw.kernel_version,
+        uptime_secs: hw.uptime_secs,
+        load_avg: hw.load_avg,
+        cpu_percent: hw.cpu_percent,
+        per_core_cpu: hw.per_core_cpu,
+        cpu_freq_mhz: hw.cpu_freq_mhz,
+        physical_cores: hw.physical_cores,
+        logical_cores: hw.logical_cores,
+        memory_total_bytes: hw.mem_total,
+        memory_used_bytes: hw.mem_used,
+        memory_available_bytes: hw.mem_avail,
+        swap_total_bytes: hw.swap_total,
+        swap_used_bytes: hw.swap_used,
+        app_pid: hw.app_pid,
         app_uptime_secs: st.started.elapsed().as_secs(),
-        app_cpu_percent,
-        app_memory_bytes,
-        app_virtual_bytes,
+        app_cpu_percent: hw.app_cpu_percent,
+        app_memory_bytes: hw.app_memory_bytes,
+        app_virtual_bytes: hw.app_virtual_bytes,
         app_threads: process_threads(),
         app_handles: process_handles(),
-        app_disk_read_per_sec,
-        app_disk_write_per_sec,
-        app_disk_read_total: proc_disk.total_read_bytes,
-        app_disk_write_total: proc_disk.total_written_bytes,
-        net_rx_per_sec,
-        net_tx_per_sec,
-        net_total_rx,
-        net_total_tx,
-        interfaces,
+        app_disk_read_per_sec: hw.app_disk_read_per_sec,
+        app_disk_write_per_sec: hw.app_disk_write_per_sec,
+        app_disk_read_total: hw.app_disk_read_total,
+        app_disk_write_total: hw.app_disk_write_total,
+        net_rx_per_sec: hw.net_rx_per_sec,
+        net_tx_per_sec: hw.net_tx_per_sec,
+        net_total_rx: hw.net_total_rx,
+        net_total_tx: hw.net_total_tx,
+        interfaces: hw.interfaces,
         remote_read_per_sec,
         remote_write_per_sec,
         remote_read_total,
@@ -726,8 +845,8 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
         thumb_workers_total,
         slow_workers_busy,
         slow_workers_total,
-        disks: disks_out,
-        temperatures: temps_out,
+        disks: hw.disks_out,
+        temperatures: hw.temps_out,
         telemetry: telemetry::snapshot(),
     })
 }

@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 parking_lot = "0.12"
 tokio = { version = "1", features = ["sync"] }
-sysinfo = { version = "0.33", default-features = false, features = ["system", "network", "component", "disk"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 getrandom = "0.3"
 base64 = "0.22"
@@ -57,8 +57,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSURL",
 ] }
 
-# Desktop only: system clipboard with files, and dragging files out to other apps.
+# Desktop only: system clipboard with files, dragging files out to other apps, and extended hardware telemetry.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+sysinfo = { version = "0.33", default-features = false, features = ["system", "network", "component", "disk"] }
 clipboard-rs = "0.3"
 open = "5"
 drag = "2"
