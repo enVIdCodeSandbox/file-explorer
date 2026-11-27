@@ -1411,10 +1411,14 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
     const [label, target, icon, tip] = spec[id];
     if (!target) return null;
     const placedAt = zoneOf(layout, id);
-    const menuItems: MenuItem[] = [
-      ...(placedAt !== "top" ? [{ id: "nav-top", label: "Move back to the top", run: () => move(id, "top") }] : []),
+    const topItems: MenuItem[] = [
+      ...(id === "thispc" ? [{ id: "connectServer", label: "Connect to server…", icon: "network", run: () => useStore.getState().openConnect() }] : []),
+      ...(placedAt !== "top" ? [{ id: "nav-top", label: "Move back to the top", separatorBefore: id === "thispc", run: () => move(id, "top") }] : []),
       ...(layoutIsDefault(layout) ? [] : [{ id: "nav-reset", label: "Put all of these back at the top", run: () => setAdv(LAYOUT_KEY, "") }]),
-      ...iconMenuItems(iconTarget(icon, label)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+    ];
+    const menuItems: MenuItem[] = [
+      ...topItems,
+      ...iconMenuItems(iconTarget(icon, label)).map((m, i) => (i === 0 ? { ...m, separatorBefore: topItems.length > 0 } : m)),
       ...(NAV_KEY[id] ? [{ id: "nav-hide", label: `Hide ${label}`, separatorBefore: true, run: () => setAdv(NAV_KEY[id]!, false) }] : []),
     ];
     return item(`nav-${id}`, label, target, <Icon name={icon} />, { tip, navId: id, drag: { paths: [], dirs: [], navItem: id, label }, menu: menuItems });

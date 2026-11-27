@@ -169,6 +169,7 @@ export function networkMenuItems(drives: Drive[], os: string | undefined, appear
   const windows = os === "windows";
   const network = drives.filter((d) => d.media === "network");
   return [
+    { id: "connectServer", label: "Connect to server…", icon: "network", run: () => useStore.getState().openConnect() },
     { id: "addNetwork", label: "Add a network location…", icon: "network", run: () => void mapNetworkDrive(drives, true, os) },
     ...(windows ? [{ id: "mapDrive", label: "Map network drive…", icon: "network", run: () => void mapNetworkDrive(drives, false, os) } as MenuItem] : []),
     ...(windows && network.length > 0 ? [{ id: "signInAgain", label: "Sign in again to network drives…", icon: "network", run: () => useStore.getState().openSignIn() } as MenuItem] : []),
