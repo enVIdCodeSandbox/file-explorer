@@ -13,7 +13,7 @@ import { adv } from "../settings/advanced";
 import { commandFor } from "../settings/keys";
 import { ask, useStore } from "../store";
 import { DOCK_LABEL, PANELS, moveTo, type Dock } from "../util/layout";
-import { startFolder, useTerminal, useTerminalClear, type Pane, type Tab } from "../terminal/state";
+import { startFolder, toggleTerminalPanel, useTerminal, useTerminalClear, type Pane, type Tab } from "../terminal/state";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { Icon } from "./Icons";
 import { useLayout } from "./Layout";
@@ -54,6 +54,22 @@ function zoomText(step: 1 | -1 | 0) {
 export function windowsScreen(info: { os: string; windowsBuild?: number } | null | undefined) {
   if (info?.os !== "windows") return {};
   return { windowsPty: { backend: "conpty" as const, buildNumber: info.windowsBuild || 19045 } };
+}
+
+/**
+ * Consume the terminal toggle shortcut (`Ctrl+\``) inside the terminal with both `preventDefault` and
+ * `stopPropagation`, preventing Windows WebView2 from playing a default system beep on an unhandled keydown.
+ */
+export function handleTerminalToggleKey(
+  e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey" | "preventDefault" | "stopPropagation">,
+  settings: Parameters<typeof commandFor>[0],
+  onToggle = toggleTerminalPanel,
+): boolean {
+  if (commandFor(settings, e as KeyboardEvent) !== "toggleTerminal") return false;
+  e.preventDefault();
+  e.stopPropagation();
+  onToggle();
+  return true;
 }
 
 /** Colors for the screen, from the theme in use. */
@@ -184,16 +200,22 @@ function TermPane({ tab, pane, visible, focused }: { tab: Tab; pane: Pane; visib
     const paste = () => void navigator.clipboard.readText().then((x) => t.paste(x)).catch(() => {});
     t.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      const stop = (fn: () => void) => {
+        e.preventDefault();
+        e.stopPropagation();
+        fn();
+        return false;
+      };
       const ctrl = e.ctrlKey || e.metaKey;
-      if (ctrl && e.shiftKey && e.code === "KeyC") return copy(), false;
-      if (ctrl && e.shiftKey && e.code === "KeyV") return paste(), false;
+      if (ctrl && e.shiftKey && e.code === "KeyC") return stop(copy);
+      if (ctrl && e.shiftKey && e.code === "KeyV") return stop(paste);
       // Ctrl+C copies when something is selected (as in Windows Terminal) and interrupts otherwise; Cmd+C / Cmd+V on a Mac.
-      if (e.ctrlKey && !e.shiftKey && e.key === "c" && t.hasSelection()) return copy(), t.clearSelection(), false;
-      if (e.metaKey && e.key === "c") return copy(), false;
-      if (e.metaKey && e.key === "v") return paste(), false;
+      if (e.ctrlKey && !e.shiftKey && e.key === "c" && t.hasSelection()) return stop(() => (copy(), t.clearSelection()));
+      if (e.metaKey && e.key === "c") return stop(copy);
+      if (e.metaKey && e.key === "v") return stop(paste);
       const zoom = zoomStep(e);
-      if (zoom !== null) return zoomText(zoom), false;
-      if (commandFor(useStore.getState().settings, e) === "toggleTerminal") return useTerminal.getState().toggle(), false;
+      if (zoom !== null) return stop(() => zoomText(zoom));
+      if (handleTerminalToggleKey(e, useStore.getState().settings)) return false;
       return true;
     });
 
@@ -360,7 +382,14 @@ export function TerminalPanel({ dock }: { dock: string }) {
   const label = (p: Pane) => p.title || p.cwd.split(/[\\/]/).filter(Boolean).pop() || "Terminal";
 
   return (
-    <section className="term" aria-label="Terminal" data-dock={dock} onKeyDown={(e) => e.stopPropagation()}>
+    <section
+      className="term"
+      aria-label="Terminal"
+      data-dock={dock}
+      onKeyDown={(e) => {
+        if (!handleTerminalToggleKey(e, useStore.getState().settings)) e.stopPropagation();
+      }}
+    >
       <div
         className="term-bar"
         title="Drag the title bar to dock the terminal somewhere else, or out of the window to open it on its own"
