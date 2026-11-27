@@ -532,7 +532,7 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .openwith-row[data-picked] { background: var(--surface-active); }
 .openwith-row[data-picked]::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 2px; background: var(--accent); }
 .openwith-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--accent) 22%, var(--surface-hover)); color: var(--text); font-weight: 600; font-size: 17px; flex: none; }
-.openwith-row img { width: 40px; height: 40px; flex: none; }
+.openwith-row img { width: 40px; height: 40px; flex: none; object-fit: contain; }
 .openwith-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .openwith-error { margin: 0 32px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
 .openwith-footer { display: flex; align-items: center; gap: 10px; padding: 16px 32px; background: color-mix(in srgb, var(--text) 4%, var(--surface)); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }

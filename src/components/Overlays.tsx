@@ -189,7 +189,6 @@ export function OpenWithDialog() {
   const info = useStore((st) => st.info);
   const path = request?.path;
   const picking = useStore((st) => !!st.picker);
-  const [view, setView] = useState<"main" | "all">("main");
   const [all, setAll] = useState<OpenApp[] | null>(null);
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -198,7 +197,6 @@ export function OpenWithDialog() {
     setChoices(null);
     setPicked(null);
     setError(null);
-    setView("main");
     setAll(null);
     setQuery("");
     setOffset({ x: 0, y: 0 });
@@ -207,18 +205,15 @@ export function OpenWithDialog() {
     api.openChoices(path).then((c) => {
       if (!alive) return;
       setChoices(c);
-      setPicked(c.default?.id ?? null);
+      setPicked(c.default?.id ?? c.suggested[0]?.id ?? null);
     }).catch((e) => alive && setError(String(e)));
+    api.installedApps(path).then((l) => {
+      if (alive) setAll(l);
+    }).catch(() => {
+      if (alive) setAll([]);
+    });
     return () => { alive = false; };
   }, [path]);
-
-  // The list of every installed app is looked up when it is first asked for.
-  useEffect(() => {
-    if (view !== "all" || all || !path) return;
-    let alive = true;
-    api.installedApps(path).then((l) => alive && setAll(l)).catch((e) => alive && (setError(String(e)), setAll([])));
-    return () => { alive = false; };
-  }, [view, all, path]);
 
   const escCloses = useStore((st) => adv<boolean>(st.settings, "files.openWithEsc"));
   const rememberOpenWith = useStore((st) => adv<boolean>(st.settings, "files.rememberOpenWith"));
@@ -297,8 +292,25 @@ export function OpenWithDialog() {
       {list.map(row)}
     </section>
   );
-  const shown = (all ?? []).filter((a) => !query.trim() || a.name.toLowerCase().includes(query.trim().toLowerCase()));
-  const nothing = choices && !choices.default && !choices.suggested.length && !choices.general.length;
+  const needle = query.trim().toLowerCase();
+  const filterList = (list: OpenApp[]) => (!needle ? list : list.filter((a) => a.name.toLowerCase().includes(needle)));
+  const topSeenIds = new Set(
+    [choices?.default, ...(choices?.suggested ?? []), ...(choices?.general ?? [])]
+      .filter((a): a is OpenApp => !!a)
+      .map((a) => a.id.toLowerCase()),
+  );
+  const topSeenNames = new Set(
+    [choices?.default, ...(choices?.suggested ?? []), ...(choices?.general ?? [])]
+      .filter((a): a is OpenApp => !!a)
+      .map((a) => a.name.toLowerCase()),
+  );
+  const defaultList = filterList(choices?.default ? [choices.default] : []);
+  const suggestedList = filterList(choices?.suggested ?? []);
+  const generalList = filterList(choices?.general ?? []);
+  const restApps = filterList(
+    (all ?? []).filter((a) => !topSeenIds.has(a.id.toLowerCase()) && !topSeenNames.has(a.name.toLowerCase())),
+  );
+  const anyVisible = defaultList.length + suggestedList.length + generalList.length + restApps.length > 0;
 
   // The window is moved by its title bar, like any other, and has a close button of its own.
   const startMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -327,45 +339,33 @@ export function OpenWithDialog() {
           <span className="openwith-titlebar-text">Open with</span>
           <button className="icon-button" aria-label="Close" title="Close (Esc)" onClick={close}><Icon name="close" size={14} /></button>
         </div>
-        <h3>{view === "all" ? "All apps on this computer" : `Choose an app to open this ${label}`}</h3>
+        <h3>{`Choose an app to open this ${label}`}</h3>
         <p className="openwith-why">
           <strong title={path}>{name}</strong>
           {request.reason ? ` — ${request.reason}` : ""}
         </p>
-        {view === "all" && (
-          <div className="openwith-search">
-            <input className="text-input" autoFocus placeholder="Search apps" aria-label="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} />
-          </div>
-        )}
+        <div className="openwith-search">
+          <input className="text-input" placeholder="Search apps" aria-label="Search apps" value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} />
+        </div>
         <div className="openwith-list">
-          {view === "main" && !choices && !error && <div className="muted" style={{ padding: 12 }}>Looking for apps…</div>}
-          {view === "main" && choices && (
-            <>
-              {group("Default app", choices.default ? [choices.default] : [])}
-              {group("Suggested for this file", choices.suggested)}
-              {group("Editors and terminals", choices.general)}
-              {nothing && <div className="muted" style={{ padding: 12 }}>No apps were found for this file. Use “All apps on this computer” or “Find a program”.</div>}
-            </>
+          {!choices && all === null && !error && <div className="muted" style={{ padding: 12 }}>Looking for apps…</div>}
+          {group("Default app", defaultList)}
+          {group("Suggested for this file", suggestedList)}
+          {group("Editors and terminals", generalList)}
+          {group("Other apps on this computer", restApps)}
+          {all === null && !error && <div className="muted" style={{ padding: 12 }}>Loading other installed apps…</div>}
+          {choices && all !== null && !anyVisible && (
+            <div className="muted" style={{ padding: 12 }}>
+              {needle ? "No app has that name." : "No apps were found for this file. Use “Find a program…”."}
+            </div>
           )}
-          {view === "all" && !all && !error && <div className="muted" style={{ padding: 12 }}>Looking through the installed apps…</div>}
-          {view === "all" && all && (shown.length ? <section>{shown.map(row)}</section> : <div className="muted" style={{ padding: 12 }}>{query ? "No app has that name." : "No apps were found."}</div>)}
         </div>
         {error && <div className="openwith-error" role="alert">{error}</div>}
         <div className="openwith-footer">
-          {view === "main" ? <button className="secondary" onClick={() => setView("all")} disabled={busy}>All apps on this computer…</button> : <button className="secondary" onClick={() => setView("main")} disabled={busy}>Back</button>}
           <button className="secondary" onClick={() => void browse()} disabled={busy}>Find a program…</button>
           <span className="grow" />
-          {rememberOpenWith ? (
-            <>
-              <button disabled={!picked || busy} onClick={() => void run(false)} title="Open only this file once without changing the default">Just once</button>
-              <button className="primary" disabled={!picked || busy} onClick={() => void run(true)} title="Open this file and remember this app for all files of this type">Open</button>
-            </>
-          ) : (
-            <>
-              <button disabled={!picked || busy} onClick={() => void run(true)} title="Open this kind of file with this app from now on">Always</button>
-              <button className="primary" disabled={!picked || busy} onClick={() => void run(false)}>Just once</button>
-            </>
-          )}
+          <button className="secondary" disabled={!picked || busy} onClick={() => void run(false)} title="Open only this file once without changing the default">Just once</button>
+          <button className="primary" disabled={!picked || busy} onClick={() => void run(true)} title="Open this file and remember this app for this file type and its supported media types">Always open</button>
         </div>
       </div>
     </div>

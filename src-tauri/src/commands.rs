@@ -2343,8 +2343,8 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
         let local = !path.contains("://") && Path::new(&path).exists();
         // A program chosen with "Always" here, or a `.ts` that is video: the app knows these better than the extension does.
         if local {
-            if let Some(Ok(())) = fast_core::openwith::open_special(Path::new(&path)) {
-                return Ok(None);
+            if let Some(res) = fast_core::openwith::open_special(Path::new(&path)) {
+                return res.map(|()| None).map_err(err);
             }
         }
         let why = if !local {
@@ -2359,7 +2359,7 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
             }
         };
         if let Some(why) = why {
-            let choices = fast_core::openwith::choices(Path::new(&path));
+            let choices = fast_core::openwith::choices_without_icons(Path::new(&path));
             if let Some(app) = fast_core::openwith::likely_app(&choices) {
                 if fast_core::openwith::open_with(Path::new(&path), &app.id, false).is_ok() {
                     return Ok(Some(app.name));

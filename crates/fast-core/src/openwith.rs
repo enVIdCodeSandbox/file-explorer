@@ -168,15 +168,20 @@ pub fn program_exists(program: &str) -> bool {
     if program.ends_with(".desktop") && !program.contains('/') {
         return platform::find(program).and_then(|e| platform::program_of(&e.exec)).is_some_and(|p| program_exists(&p));
     }
-    let p = Path::new(program);
-    if p.is_absolute() || program.contains('/') || program.contains('\\') {
+    let trimmed = program.trim().trim_matches('"');
+    let p = Path::new(trimmed);
+    if p.is_absolute() || trimmed.contains('/') || trimmed.contains('\\') {
         return p.is_file();
     }
     std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths).any(|d| {
-                let f = d.join(program);
-                f.is_file() || (cfg!(windows) && d.join(format!("{program}.exe")).is_file())
+                let f = d.join(trimmed);
+                f.is_file()
+                    || (cfg!(windows)
+                        && (d.join(format!("{trimmed}.exe")).is_file()
+                            || d.join(format!("{trimmed}.cmd")).is_file()
+                            || d.join(format!("{trimmed}.bat")).is_file()))
             })
         })
         .unwrap_or(false)
@@ -438,6 +443,22 @@ mod platform {
         Choices { extension: extension_of(path), content_kind: None, default: default_entry.map(|e| app_of(&e, true)), suggested, others, general: vec![] }
     }
 
+    pub(super) fn choices_fast(path: &Path) -> Choices {
+        choices(path)
+    }
+
+    pub(super) fn exe_icon_url(_id: &str) -> Option<String> {
+        None
+    }
+
+    pub(super) fn app_supported_extensions(_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    pub(super) fn all_registry_apps() -> Vec<App> {
+        Vec::new()
+    }
+
     /// Expand a desktop entry's Exec line for one file.
     pub(super) fn command_for(e: &Entry, path: &Path) -> Vec<String> {
         let file = path.to_string_lossy().into_owned();
@@ -516,25 +537,11 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    use std::collections::{HashMap, HashSet};
     use std::process::Command;
+    use std::sync::{Mutex, OnceLock};
 
-    fn reg(args: &[&str]) -> Option<String> {
-        let out = crate::proc::quiet(Command::new("reg").args(args)).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    }
-
-    /// The text after the value type in a `reg query` line.
-    fn value_of(output: &str, name: &str) -> Option<String> {
-        output.lines().find_map(|l| {
-            let t = l.trim();
-            let rest = if name.is_empty() { t.strip_prefix("(Default)") } else { t.strip_prefix(name) }?;
-            let rest = rest.trim_start();
-            let rest = rest.strip_prefix("REG_SZ").or_else(|| rest.strip_prefix("REG_EXPAND_SZ"))?;
-            Some(rest.trim().to_string())
-        })
-    }
-
-    /// A text value from the registry, read directly (no `reg.exe` process: that took a noticeable fraction of a second each time).
+    /// A text value from the registry, read directly in-process without spawning `reg.exe`.
     fn reg_str(root: windows_sys::Win32::System::Registry::HKEY, sub: &str, name: &str) -> Option<String> {
         use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
         let wsub: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
@@ -555,6 +562,91 @@ mod platform {
             let text = String::from_utf16_lossy(&buf[..n]);
             (!text.trim().is_empty()).then_some(text)
         }
+    }
+
+    fn reg_open(root: windows_sys::Win32::System::Registry::HKEY, sub: &str) -> Option<windows_sys::Win32::System::Registry::HKEY> {
+        use windows_sys::Win32::System::Registry::{RegOpenKeyExW, KEY_READ};
+        let wsub: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut hkey: windows_sys::Win32::System::Registry::HKEY = std::ptr::null_mut();
+        // SAFETY: `wsub` is NUL-terminated and `hkey` receives an open handle closed by `RegCloseKey`.
+        let status = unsafe { RegOpenKeyExW(root, wsub.as_ptr(), 0, KEY_READ, &mut hkey) };
+        if status == 0 { Some(hkey) } else { None }
+    }
+
+    fn reg_enum_values(root: windows_sys::Win32::System::Registry::HKEY, sub: &str) -> Vec<(String, String)> {
+        use windows_sys::Win32::System::Registry::{RegCloseKey, RegEnumValueW, REG_EXPAND_SZ, REG_SZ};
+        let Some(hkey) = reg_open(root, sub) else { return Vec::new() };
+        let mut out = Vec::new();
+        let mut index = 0u32;
+        loop {
+            let mut name_buf = [0u16; 260];
+            let mut name_len = name_buf.len() as u32;
+            let mut kind = 0u32;
+            let mut data_buf = [0u16; 520];
+            let mut data_bytes = (data_buf.len() * 2) as u32;
+            // SAFETY: buffers live for the call and lengths are reset on every iteration.
+            let status = unsafe {
+                RegEnumValueW(
+                    hkey,
+                    index,
+                    name_buf.as_mut_ptr(),
+                    &mut name_len,
+                    std::ptr::null_mut(),
+                    &mut kind,
+                    data_buf.as_mut_ptr().cast(),
+                    &mut data_bytes,
+                )
+            };
+            if status != 0 {
+                break;
+            }
+            index += 1;
+            let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+            let val = if kind == REG_SZ || kind == REG_EXPAND_SZ {
+                let units = (data_bytes as usize / 2).min(data_buf.len());
+                let slice = &data_buf[..units];
+                let end = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                String::from_utf16_lossy(&slice[..end])
+            } else {
+                String::new()
+            };
+            out.push((name, val));
+        }
+        // SAFETY: `hkey` was opened by `RegOpenKeyExW`.
+        unsafe { RegCloseKey(hkey) };
+        out
+    }
+
+    fn reg_enum_subkeys(root: windows_sys::Win32::System::Registry::HKEY, sub: &str) -> Vec<String> {
+        use windows_sys::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW};
+        let Some(hkey) = reg_open(root, sub) else { return Vec::new() };
+        let mut out = Vec::new();
+        let mut index = 0u32;
+        loop {
+            let mut name_buf = [0u16; 260];
+            let mut name_len = name_buf.len() as u32;
+            // SAFETY: buffer lives for the call and `name_len` is reset on each iteration.
+            let status = unsafe {
+                RegEnumKeyExW(
+                    hkey,
+                    index,
+                    name_buf.as_mut_ptr(),
+                    &mut name_len,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status != 0 {
+                break;
+            }
+            index += 1;
+            out.push(String::from_utf16_lossy(&name_buf[..name_len as usize]));
+        }
+        // SAFETY: `hkey` was opened by `RegOpenKeyExW`.
+        unsafe { RegCloseKey(hkey) };
+        out
     }
 
     fn prog_id(ext: &str) -> Option<String> {
@@ -589,6 +681,132 @@ mod platform {
         out
     }
 
+    /// Extract a 32x32 PNG data URL icon from an `.exe` / program path, cached in memory.
+    pub(super) fn exe_icon_url(id: &str) -> Option<String> {
+        static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+        let path_str = id.trim().trim_matches('"');
+        if path_str.is_empty() {
+            return None;
+        }
+        let resolved = if Path::new(path_str).is_file() {
+            path_str.to_string()
+        } else {
+            app_path(path_str)?
+        };
+        let key = resolved.to_lowercase();
+        let cache = CACHE.get_or_init(Default::default);
+        if let Ok(guard) = cache.lock() {
+            if let Some(cached) = guard.get(&key) {
+                return cached.clone();
+            }
+        }
+        let encoded = extract_icon_png(&resolved);
+        if let Ok(mut guard) = cache.lock() {
+            if guard.len() > 1024 {
+                guard.clear();
+            }
+            guard.insert(key, encoded.clone());
+        }
+        encoded
+    }
+
+    fn extract_icon_png(file: &str) -> Option<String> {
+        use base64::Engine;
+        use windows::core::PCWSTR;
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush, GetDC, ReleaseDC, SelectObject,
+            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP,
+        };
+        use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL};
+
+        let wfile: Vec<u16> = file.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut shfi = SHFILEINFOW::default();
+        // SAFETY: `wfile` is NUL-terminated; any returned `hIcon` is destroyed below.
+        let ok = unsafe {
+            SHGetFileInfoW(
+                PCWSTR(wfile.as_ptr()),
+                windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut shfi),
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            )
+        };
+        if ok == 0 || shfi.hIcon.is_invalid() {
+            return None;
+        }
+        let size = 32i32;
+        let out = (|| unsafe {
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let bi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: size,
+                    biHeight: -size,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let dib: HBITMAP = match CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(h) => h,
+                Err(_) => {
+                    let _ = DeleteDC(dc);
+                    ReleaseDC(None, screen);
+                    return None;
+                }
+            };
+            if dib.is_invalid() || bits.is_null() {
+                if !dib.is_invalid() {
+                    let _ = DeleteObject(dib.into());
+                }
+                let _ = DeleteDC(dc);
+                ReleaseDC(None, screen);
+                return None;
+            }
+            let byte_len = (size * size * 4) as usize;
+            std::ptr::write_bytes(bits, 0, byte_len);
+            let old = SelectObject(dc, dib.into());
+            let _ = DrawIconEx(dc, 0, 0, shfi.hIcon, size, size, 0, None, DI_NORMAL);
+            let _ = GdiFlush();
+            let raw = std::slice::from_raw_parts(bits as *const u8, byte_len);
+            let mut px = raw.to_vec();
+            SelectObject(dc, old);
+            let _ = DeleteObject(dib.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+
+            let has_alpha = px.chunks_exact(4).any(|p| p[3] != 0);
+            for p in px.chunks_exact_mut(4) {
+                let (b, g, r, a) = (p[0], p[1], p[2], p[3]);
+                if has_alpha {
+                    let un = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255) / a as u32).min(255) as u8 };
+                    p[0] = un(r);
+                    p[1] = un(g);
+                    p[2] = un(b);
+                } else {
+                    p[0] = r;
+                    p[1] = g;
+                    p[2] = b;
+                    p[3] = if b != 0 || g != 0 || r != 0 { 255 } else { 0 };
+                }
+            }
+            let img = image::RgbaImage::from_raw(size as u32, size as u32, px)?;
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+            Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
+        })();
+        // SAFETY: `shfi.hIcon` was returned by `SHGetFileInfoW`.
+        unsafe {
+            let _ = DestroyIcon(shfi.hIcon);
+        }
+        out
+    }
+
     pub fn check(path: &Path) -> Check {
         if path.is_dir() {
             return Check::Ready;
@@ -609,79 +827,206 @@ mod platform {
         }
     }
 
-    fn app_from_exe(exe: &str, with_name: Option<&str>) -> App {
+    fn app_from_exe(exe: &str, with_name: Option<&str>, with_icon: bool) -> App {
         let stem = Path::new(exe).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| exe.to_string());
-        App { id: exe.to_string(), name: with_name.map(str::to_string).unwrap_or(stem), icon_url: None }
+        App { id: exe.to_string(), name: with_name.map(str::to_string).unwrap_or(stem), icon_url: if with_icon { exe_icon_url(exe) } else { None } }
     }
 
     pub fn choices(path: &Path) -> Choices {
+        choices_with(path, true)
+    }
+
+    pub(super) fn choices_fast(path: &Path) -> Choices {
+        choices_with(path, false)
+    }
+
+    fn choices_with(path: &Path, with_icon: bool) -> Choices {
+        use windows_sys::Win32::System::Registry::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         let ext = extension_of(path);
         let mut suggested = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        // Programs Windows remembers for this extension.
-        if let Some(o) = reg(&["query", &format!(r"HKCR\{ext}\OpenWithList"), "/s"]) {
-            for exe in o.lines().filter_map(|l| l.trim().split_whitespace().last()).filter(|e| e.to_lowercase().ends_with(".exe")) {
-                if let Some(full) = app_path(exe) {
-                    if seen.insert(full.to_lowercase()) {
-                        suggested.push(app_from_exe(&full, None));
+        let mut seen = HashSet::new();
+
+        if !ext.is_empty() {
+            // Programs Windows remembers in HKCR\<ext>\OpenWithList and User FileExts OpenWithList.
+            for (root, sub) in [
+                (HKEY_CLASSES_ROOT, format!(r"{ext}\OpenWithList")),
+                (HKEY_CURRENT_USER, format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\OpenWithList")),
+            ] {
+                for exe in reg_enum_subkeys(root, &sub) {
+                    if exe.to_lowercase().ends_with(".exe") {
+                        if let Some(full) = app_path(&exe) {
+                            if seen.insert(full.to_lowercase()) {
+                                suggested.push(app_from_exe(&full, None, with_icon));
+                            }
+                        }
+                    }
+                }
+                for (name, val) in reg_enum_values(root, &sub) {
+                    let cand = if val.to_lowercase().ends_with(".exe") { val } else { name };
+                    if cand.to_lowercase().ends_with(".exe") {
+                        if let Some(full) = app_path(&cand) {
+                            if seen.insert(full.to_lowercase()) {
+                                suggested.push(app_from_exe(&full, None, with_icon));
+                            }
+                        }
+                    }
+                }
+            }
+            for exe in reg_enum_subkeys(HKEY_CLASSES_ROOT, "Applications") {
+                if reg_str(HKEY_CLASSES_ROOT, &format!(r"Applications\{exe}\SupportedTypes"), &ext).is_some() {
+                    if let Some(cmd) = reg_str(HKEY_CLASSES_ROOT, &format!(r"Applications\{exe}\shell\open\command"), "") {
+                        if let Some(full) = split_command(&expand_env(&cmd)).into_iter().next() {
+                            if full.to_lowercase().ends_with(".exe") && Path::new(&full).is_file() && seen.insert(full.to_lowercase()) {
+                                suggested.push(app_from_exe(&full, None, with_icon));
+                            }
+                        }
+                    }
+                }
+            }
+            for app in registered_apps_for(&ext, with_icon) {
+                if seen.insert(app.id.to_lowercase()) {
+                    suggested.push(app);
+                }
+            }
+        }
+
+        let mut others = Vec::new();
+        for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            for sub in reg_enum_subkeys(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") {
+                if let Some(raw) = reg_str(hive, &format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{sub}"), "") {
+                    let exe = expand_env(raw.trim_matches('"'));
+                    if exe.to_lowercase().ends_with(".exe") && Path::new(&exe).is_file() && seen.insert(exe.to_lowercase()) {
+                        others.push(app_from_exe(&exe, None, with_icon));
                     }
                 }
             }
         }
-        // Programs that registered themselves as able to open this type (how VLC, browsers,
-        // viewers and editors say so), and the ones listed for it under OpenWithProgids.
-        for app in registered_apps(&ext) {
-            if seen.insert(app.id.to_lowercase()) {
-                suggested.push(app);
-            }
-        }
-        // Everything registered under App Paths.
-        let mut others = Vec::new();
-        if let Some(o) = reg(&["query", r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths", "/s", "/ve"]) {
-            for exe in o.lines().filter_map(|l| value_of(l, "(Default)")).map(|p| expand_env(p.trim_matches('"'))) {
-                if exe.to_lowercase().ends_with(".exe") && Path::new(&exe).is_file() && seen.insert(exe.to_lowercase()) {
-                    others.push(app_from_exe(&exe, None));
-                }
-            }
-        }
         others.sort_by_key(|a| a.name.to_lowercase());
-        let default = prog_id(&ext).and_then(|p| open_command(&p)).and_then(|c| split_command(&expand_env(&c)).into_iter().next()).filter(|e| Path::new(e).is_file()).map(|e| app_from_exe(&e, None));
+        let default = if ext.is_empty() {
+            None
+        } else {
+            prog_id(&ext)
+                .and_then(|p| open_command(&p))
+                .and_then(|c| split_command(&expand_env(&c)).into_iter().next())
+                .filter(|e| Path::new(e).is_file())
+                .map(|e| app_from_exe(&e, None, with_icon))
+        };
         Choices { extension: ext, content_kind: None, default, suggested, others, general: vec![] }
     }
 
-    /// Programs that say they can open `ext`: each entry under RegisteredApplications points
-    /// at a Capabilities key whose FileAssociations name the ProgId used for that extension.
-    fn registered_apps(ext: &str) -> Vec<App> {
+    fn registered_apps_for(ext: &str, with_icon: bool) -> Vec<App> {
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         let mut out = Vec::new();
-        for hive in ["HKLM", "HKCU"] {
-            let Some(list) = reg(&["query", &format!(r"{hive}\SOFTWARE\RegisteredApplications")]) else { continue };
-            for line in list.lines() {
-                let Some((name, cap)) = line.trim().split_once("REG_SZ") else { continue };
-                let (name, cap) = (name.trim(), cap.trim());
+        for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            for (name, cap) in reg_enum_values(hive, r"SOFTWARE\RegisteredApplications") {
                 if name.is_empty() || cap.is_empty() {
                     continue;
                 }
-                let Some(assoc) = reg(&["query", &format!(r"{hive}\{cap}\FileAssociations"), "/v", ext]) else { continue };
-                let Some(prog) = value_of(&assoc, ext) else { continue };
+                let Some(prog) = reg_str(hive, &format!(r"{cap}\FileAssociations"), ext) else { continue };
                 let Some(exe) = open_command(&prog).and_then(|c| split_command(&expand_env(&c)).into_iter().next()) else { continue };
                 if !exe.to_lowercase().ends_with(".exe") || !Path::new(&exe).is_file() {
                     continue;
                 }
-                let shown = reg(&["query", &format!(r"{hive}\{cap}"), "/v", "ApplicationName"])
-                    .and_then(|o| value_of(&o, "ApplicationName"))
+                let shown = reg_str(hive, &cap, "ApplicationName")
                     .filter(|n| !n.starts_with('@') && !n.is_empty())
-                    .unwrap_or_else(|| name.to_string());
-                out.push(App { id: exe, name: shown, icon_url: None });
+                    .unwrap_or(name);
+                out.push(app_from_exe(&exe, Some(&shown), with_icon));
+            }
+        }
+        out
+    }
+
+    /// Return all extensions a Windows program advertises under `SupportedTypes` or `RegisteredApplications`.
+    pub(super) fn app_supported_extensions(id: &str) -> Vec<String> {
+        use windows_sys::Win32::System::Registry::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        let target = id.trim().trim_matches('"').to_lowercase();
+        let target_exe = Path::new(&target).file_name().and_then(|n| n.to_str()).unwrap_or(&target).to_string();
+        if target_exe.is_empty() {
+            return Vec::new();
+        }
+        let mut exts = Vec::new();
+        for (val_name, _) in reg_enum_values(HKEY_CLASSES_ROOT, &format!(r"Applications\{target_exe}\SupportedTypes")) {
+            let e = val_name.trim().to_lowercase();
+            if e.starts_with('.') && e != ".*" {
+                exts.push(e);
+            }
+        }
+        for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            for (_, cap) in reg_enum_values(hive, r"SOFTWARE\RegisteredApplications") {
+                if cap.is_empty() {
+                    continue;
+                }
+                for (ext, prog) in reg_enum_values(hive, &format!(r"{cap}\FileAssociations")) {
+                    let e = ext.trim().to_lowercase();
+                    if !e.starts_with('.') {
+                        continue;
+                    }
+                    let Some(cmd) = open_command(&prog) else { continue };
+                    let Some(first) = split_command(&expand_env(&cmd)).into_iter().next() else { continue };
+                    let first_exe = Path::new(&first).file_name().and_then(|n| n.to_str()).unwrap_or(&first).to_lowercase();
+                    if first_exe == target_exe || first.to_lowercase() == target {
+                        exts.push(e);
+                    }
+                }
+            }
+        }
+        exts
+    }
+
+    pub(super) fn all_registry_apps() -> Vec<App> {
+        use windows_sys::Win32::System::Registry::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        let mut out = Vec::new();
+        for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            for sub in reg_enum_subkeys(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") {
+                if let Some(raw) = reg_str(hive, &format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{sub}"), "") {
+                    let exe = expand_env(raw.trim_matches('"'));
+                    if exe.to_lowercase().ends_with(".exe") && Path::new(&exe).is_file() {
+                        out.push(app_from_exe(&exe, None, false));
+                    }
+                }
+            }
+            for (name, cap) in reg_enum_values(hive, r"SOFTWARE\RegisteredApplications") {
+                if name.is_empty() || cap.is_empty() {
+                    continue;
+                }
+                let shown = reg_str(hive, &cap, "ApplicationName").filter(|n| !n.starts_with('@') && !n.is_empty()).unwrap_or(name);
+                for (_, prog) in reg_enum_values(hive, &format!(r"{cap}\FileAssociations")).into_iter().take(1) {
+                    if let Some(exe) = open_command(&prog).and_then(|c| split_command(&expand_env(&c)).into_iter().next()) {
+                        if exe.to_lowercase().ends_with(".exe") && Path::new(&exe).is_file() {
+                            out.push(app_from_exe(&exe, Some(&shown), false));
+                        }
+                    }
+                }
+            }
+        }
+        for app_key in reg_enum_subkeys(HKEY_CLASSES_ROOT, "Applications") {
+            if !app_key.to_lowercase().ends_with(".exe") {
+                continue;
+            }
+            if let Some(cmd) = reg_str(HKEY_CLASSES_ROOT, &format!(r"Applications\{app_key}\shell\open\command"), "") {
+                if let Some(exe) = split_command(&expand_env(&cmd)).into_iter().next() {
+                    if exe.to_lowercase().ends_with(".exe") && Path::new(&exe).is_file() {
+                        let shown = reg_str(HKEY_CLASSES_ROOT, &format!(r"Applications\{app_key}"), "FriendlyAppName")
+                            .filter(|n| !n.starts_with('@') && !n.is_empty());
+                        out.push(app_from_exe(&exe, shown.as_deref(), false));
+                    }
+                }
             }
         }
         out
     }
 
     fn app_path(exe: &str) -> Option<String> {
-        reg(&["query", &format!(r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"), "/ve"])
-            .and_then(|o| value_of(&o, ""))
-            .map(|p| expand_env(p.trim_matches('"')))
-            .filter(|p| Path::new(p).is_file())
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        for hive in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            if let Some(raw) = reg_str(hive, &format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"), "") {
+                let expanded = expand_env(raw.trim_matches('"'));
+                if Path::new(&expanded).is_file() {
+                    return Some(expanded);
+                }
+            }
+        }
+        None
     }
 
     /// A command prompt, PowerShell or Windows Terminal chosen for a file opens a new console in its folder and runs
@@ -724,8 +1069,7 @@ mod platform {
     /// (the entry is protected so that no program can take over a file type behind the person's back). So "always"
     /// is kept by this app: it opens that kind of file with the program from here on, and shows it as the one it opens with.
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
-        let done = launch(path, id);
-        done
+        launch(path, id)
     }
 
     /// Open a file with the program set for the type of file `stand_in` (an extension such as ".mp4").
@@ -785,6 +1129,22 @@ mod platform {
         Choices { extension: extension_of(path), content_kind: None, default: None, suggested: vec![], others: apps, general: vec![] }
     }
 
+    pub(super) fn choices_fast(path: &Path) -> Choices {
+        choices(path)
+    }
+
+    pub(super) fn exe_icon_url(_id: &str) -> Option<String> {
+        None
+    }
+
+    pub(super) fn app_supported_extensions(_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    pub(super) fn all_registry_apps() -> Vec<App> {
+        Vec::new()
+    }
+
     pub fn open_with(path: &Path, id: &str, _always: bool) -> Result<()> {
         let mut cmd = Command::new("open");
         if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
@@ -807,6 +1167,18 @@ mod platform {
     pub fn choices(path: &Path) -> Choices {
         Choices { extension: extension_of(path), ..Default::default() }
     }
+    pub(super) fn choices_fast(path: &Path) -> Choices {
+        choices(path)
+    }
+    pub(super) fn exe_icon_url(_id: &str) -> Option<String> {
+        None
+    }
+    pub(super) fn app_supported_extensions(_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+    pub(super) fn all_registry_apps() -> Vec<App> {
+        Vec::new()
+    }
     pub fn open_with(_: &Path, _: &str, _: bool) -> Result<()> {
         Err(CoreError::Unsupported("choosing an app is handled by the mobile shell"))
     }
@@ -818,7 +1190,7 @@ mod platform {
 pub fn open_with(path: &Path, id: &str, always: bool) -> Result<()> {
     let done = platform::open_with(path, id, always);
     if always && done.is_ok() {
-        set_app_default(&open_key(path), id);
+        bind_app_defaults(path, id);
         forget_openers();
     }
     done
@@ -868,10 +1240,20 @@ fn stand_in(kind: &str) -> Option<(&'static str, Found)> {
     })
 }
 
-/// What decides the program a file opens with: its extension, with the kind of content after it when that differs
-/// (".ts+video"). The answer for one kind is never given for the other.
+/// What decides the program a file opens with: its extension (plus content kind when shared like `.ts+video`),
+/// or `n:<lowercase filename>` when the file has no extension (e.g. `Dockerfile`, `Makefile`).
 pub fn open_key(path: &Path) -> String {
     let ext = extension_of(path);
+    if ext.is_empty() {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if name.is_empty() {
+            return String::new();
+        }
+        return match content_kind(path) {
+            Some(kind) => format!("n:{name}+{kind}"),
+            None => format!("n:{name}"),
+        };
+    }
     match content_kind(path) {
         Some(kind) => format!("{ext}+{kind}"),
         None => ext,
@@ -901,20 +1283,60 @@ pub fn app_default_for(key: &str) -> Option<String> {
     app_defaults().lock().ok().and_then(|d| d.apps.get(key).cloned())
 }
 
-/// Remember `id` as the program for this kind of file.
-#[allow(dead_code)] // only where the system does not take the choice itself
-pub fn set_app_default(key: &str, id: &str) {
-    if key.is_empty() {
-        return;
-    }
-    let Ok(mut d) = app_defaults().lock() else { return };
-    d.apps.insert(key.to_string(), id.to_string());
+fn write_app_defaults(d: &AppDefaults) {
     if let (Some(file), Ok(text)) = (&d.file, serde_json::to_string_pretty(&d.apps)) {
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let _ = std::fs::write(file, text);
     }
+}
+
+/// Remember `id` as the program for this kind of file.
+pub fn set_app_default(key: &str, id: &str) {
+    if key.is_empty() {
+        return;
+    }
+    let Ok(mut d) = app_defaults().lock() else { return };
+    d.apps.insert(key.to_string(), id.to_string());
+    write_app_defaults(&d);
+}
+
+/// Collect unassigned extensions of the same media/file family or supported by `id`, plus `open_key(path)`,
+/// and store all of them in a single write when the user chooses "Always open".
+pub fn bind_app_defaults(path: &Path, id: &str) {
+    let primary = open_key(path);
+    if primary.is_empty() {
+        return;
+    }
+    let cur_ext = extension_of(path).trim_start_matches('.').to_lowercase();
+    let shown_name = program_name(id);
+    let friendly_name = friendly(&shown_name, id).unwrap_or(&shown_name);
+    let stem = stem_of(id);
+
+    let mut candidate_exts: Vec<String> = platform::app_supported_extensions(id);
+    for &(exts, keywords) in LIKELY {
+        let app_fits = keywords.iter().any(|k| name_matches(friendly_name, k) || name_matches(&stem, k));
+        let same_group = !cur_ext.is_empty() && exts.contains(&cur_ext.as_str());
+        if app_fits || same_group {
+            candidate_exts.extend(exts.iter().map(|e| format!(".{e}")));
+        }
+    }
+
+    // Check outside `app_defaults()` lock which candidate extensions have no OS default yet.
+    let unassigned: Vec<String> = candidate_exts
+        .into_iter()
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| e.starts_with('.') && e != &primary)
+        .filter(|e| matches!(platform::check(&Path::new("stand-in").with_extension(&e[1..])), Check::Missing(_)))
+        .collect();
+
+    let Ok(mut d) = app_defaults().lock() else { return };
+    d.apps.insert(primary, id.to_string());
+    for ext in unassigned {
+        d.apps.entry(ext).or_insert_with(|| id.to_string());
+    }
+    write_app_defaults(&d);
 }
 
 #[cfg(windows)]
@@ -937,18 +1359,16 @@ pub fn open_special(path: &Path) -> Option<Result<()>> {
     if path.is_dir() {
         return None;
     }
-    let kind = content_kind(path);
-    let key = match kind {
-        Some(k) => format!("{}+{k}", extension_of(path)),
-        None => extension_of(path),
-    };
-    if let Some(id) = app_default_for(&key) {
-        // A program that is gone is skipped, and the system's way takes over.
-        if program_exists(&id) {
-            return Some(platform::open_with(path, &id, false));
+    let key = open_key(path);
+    if !key.is_empty() {
+        if let Some(id) = app_default_for(&key) {
+            if program_exists(&id) {
+                return Some(platform::open_with(path, &id, false));
+            }
         }
     }
-    let (ext, found) = stand_in(kind?)?;
+    let kind = content_kind(path)?;
+    let (ext, found) = stand_in(kind)?;
     Some(open_as_type(path, ext, &found))
 }
 
@@ -1040,6 +1460,9 @@ pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
         if let Some(n) = friendly(&o.name, &o.id) {
             o.name = n.to_string();
         }
+        if with_icon && o.kind == "app" {
+            o.icon_url = defaults::icon(&o.id, "").or_else(|| platform::exe_icon_url(&o.id));
+        }
         return o;
     }
     let hit = memory().lock().ok().and_then(|m| m.get(&key).filter(|(at, _, _)| at.elapsed() < OPENER_TTL).map(|(_, o, icon)| (o.clone(), icon.clone())));
@@ -1070,7 +1493,7 @@ pub fn default_opener(path: &Path, with_icon: bool) -> Opener {
         opener.name = n.to_string();
     }
     if with_icon && opener.kind == "app" {
-        opener.icon_url = defaults::icon(&opener.id, &icon);
+        opener.icon_url = defaults::icon(&opener.id, &icon).or_else(|| platform::exe_icon_url(&opener.id));
     }
     opener
 }
@@ -1368,15 +1791,24 @@ mod defaults {
     }
 }
 
-/// The programs that could open a file, with readable names, the system's helper programs left out, and the editors
-/// and terminals that suit any file picked out.
-pub fn choices(path: &Path) -> Choices {
+fn attach_icons(apps: &mut [App]) {
+    for a in apps.iter_mut() {
+        if a.icon_url.is_none() {
+            a.icon_url = platform::exe_icon_url(&a.id);
+        }
+    }
+}
+
+fn choices_with_opts(path: &Path, with_icons: bool) -> Choices {
     let kind = content_kind(path);
-    let mut out = match as_other_type(path) {
-        // An ambiguous extension whose content identifies another type (e.g. `.ts` video): show programs for that type.
-        Some(fake) => Choices { extension: extension_of(path), ..refine(platform::choices(&fake)) },
-        None => refine(platform::choices(path)),
+    let raw = match as_other_type(path) {
+        Some(fake) => {
+            let base = if with_icons { platform::choices(&fake) } else { platform::choices_fast(&fake) };
+            Choices { extension: extension_of(path), ..refine(base, with_icons) }
+        }
+        None => refine(if with_icons { platform::choices(path) } else { platform::choices_fast(path) }, with_icons),
     };
+    let mut out = raw;
     out.content_kind = kind.map(str::to_string);
     if let Some(id) = app_default_for(&open_key(path)).filter(|id| program_exists(id)) {
         let same = |a: &App| {
@@ -1395,7 +1827,7 @@ pub fn choices(path: &Path) -> Choices {
                 if let Some(n) = friendly(&name, &id) {
                     name = n.to_string();
                 }
-                App { id: id.clone(), name, icon_url: None }
+                App { id: id.clone(), name, icon_url: if with_icons { platform::exe_icon_url(&id) } else { None } }
             });
         out.suggested.retain(|a| !same(a));
         out.others.retain(|a| !same(a));
@@ -1404,22 +1836,56 @@ pub fn choices(path: &Path) -> Choices {
     out
 }
 
+/// Fast program lookup with no icon extraction, used when opening files checks for a likely handler.
+pub fn choices_without_icons(path: &Path) -> Choices {
+    choices_with_opts(path, false)
+}
+
+/// The programs that could open a file, with readable names, icons, helper programs removed,
+/// and general editors and terminals identified.
+pub fn choices(path: &Path) -> Choices {
+    choices_with_opts(path, true)
+}
+
 /// A made-up path with the extension of the kind of file this one's content says it is, for asking the system about it.
 fn as_other_type(path: &Path) -> Option<std::path::PathBuf> {
     let (ext, _) = stand_in(content_kind(path)?)?;
     Some(Path::new("stand-in").with_extension(&ext[1..]))
 }
 
-/// Every program on this computer that could be chosen, by name (Windows: the Start menu's programs; elsewhere the
-/// programs the system lists), without helper programs, once each.
+fn cached_system_apps() -> Vec<App> {
+    use std::sync::{Mutex, OnceLock};
+    const TTL: std::time::Duration = std::time::Duration::from_secs(60);
+    static CACHE: OnceLock<Mutex<Option<(std::time::Instant, Vec<App>)>>> = OnceLock::new();
+    let lock = CACHE.get_or_init(Default::default);
+    if let Ok(guard) = lock.lock() {
+        if let Some((at, apps)) = &*guard {
+            if at.elapsed() < TTL {
+                return apps.clone();
+            }
+        }
+    }
+    let mut base = start_menu_apps();
+    base.extend(platform::all_registry_apps());
+    base.extend(extras());
+    let mut cleaned = tidy_list(base);
+    attach_icons(&mut cleaned);
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some((std::time::Instant::now(), cleaned.clone()));
+    }
+    cleaned
+}
+
+/// Every program on this computer that could be chosen, with icons and readable names, once each.
 pub fn installed_apps(path: &Path) -> Vec<App> {
     let raw = platform::choices(&as_other_type(path).unwrap_or_else(|| path.to_path_buf()));
-    let mut all = start_menu_apps();
-    all.extend(extras());
+    let mut all = cached_system_apps();
     all.extend(raw.default);
     all.extend(raw.suggested);
     all.extend(raw.others);
-    tidy_list(all)
+    let mut list = tidy_list(all);
+    attach_icons(&mut list);
+    list
 }
 
 // ---- Readable names, helpers left out, programs for any file ----------------------------------------------
@@ -1512,7 +1978,7 @@ pub fn general_apps(pool: &[App]) -> Vec<App> {
     out
 }
 
-fn refine(mut c: Choices) -> Choices {
+fn refine(mut c: Choices, with_icons: bool) -> Choices {
     let rename = |a: &mut App| {
         if let Some(n) = friendly(&a.name, &a.id) {
             a.name = n.to_string();
@@ -1527,6 +1993,16 @@ fn refine(mut c: Choices) -> Choices {
     pool.extend(c.suggested.iter().cloned());
     pool.extend(c.others.iter().cloned());
     c.general = general_apps(&pool);
+    if with_icons {
+        if let Some(d) = c.default.as_mut() {
+            if d.icon_url.is_none() {
+                d.icon_url = platform::exe_icon_url(&d.id);
+            }
+        }
+        attach_icons(&mut c.suggested);
+        attach_icons(&mut c.others);
+        attach_icons(&mut c.general);
+    }
     c
 }
 
@@ -1569,19 +2045,82 @@ pub fn parse_start_menu(json: &str) -> Vec<App> {
 }
 
 #[cfg(windows)]
-fn start_menu_apps() -> Vec<App> {
-    use std::process::Command;
-    const SCRIPT: &str = r#"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
-$ErrorActionPreference='SilentlyContinue'
-$sh=New-Object -ComObject WScript.Shell
-$dirs=@("$env:ProgramData\Microsoft\Windows\Start Menu\Programs","$env:APPDATA\Microsoft\Windows\Start Menu\Programs")
-$r=foreach($d in $dirs){ Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk | ForEach-Object { $t=$sh.CreateShortcut($_.FullName).TargetPath; if($t -like '*.exe'){ [pscustomobject]@{n=$_.BaseName;p=$t} } } }
-ConvertTo-Json -InputObject @($r) -Compress"#;
-    let out = crate::proc::quiet(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])).output();
-    match out {
-        Ok(o) if o.status.success() => parse_start_menu(&String::from_utf8_lossy(&o.stdout)).into_iter().filter(|a| Path::new(&a.id).is_file()).collect(),
-        _ => vec![],
+fn collect_lnk_files(dir: &Path, out: &mut Vec<(String, std::path::PathBuf)>, depth: usize) {
+    if depth > 6 {
+        return;
     }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_lnk_files(&p, out, depth + 1);
+        } else if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
+            let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            if !name.is_empty() {
+                out.push((name, p));
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn start_menu_apps() -> Vec<App> {
+    use windows::core::{Interface, HSTRING, PCWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH};
+
+    let mut roots = Vec::new();
+    if let Ok(pd) = std::env::var("ProgramData") {
+        roots.push(std::path::PathBuf::from(pd).join(r"Microsoft\Windows\Start Menu\Programs"));
+    }
+    if let Ok(ad) = std::env::var("APPDATA") {
+        roots.push(std::path::PathBuf::from(ad).join(r"Microsoft\Windows\Start Menu\Programs"));
+    }
+    let mut links = Vec::new();
+    for r in roots {
+        collect_lnk_files(&r, &mut links, 0);
+    }
+    if links.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    // SAFETY: COM apartment is initialized on this worker thread (balanced with `CoUninitialize` when `S_OK` / `S_FALSE`).
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let link: Option<IShellLinkW> = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok();
+        let persist: Option<IPersistFile> = link.as_ref().and_then(|l| l.cast().ok());
+        if let (Some(shell_link), Some(persist_file)) = (link, persist) {
+            for (name, lnk_path) in links {
+                let lower = name.to_lowercase();
+                let skip = ["uninstall", "readme", "release notes", "documentation", "website", "manual", "license", "help", "what's new"].iter().any(|w| lower.contains(w));
+                if skip {
+                    continue;
+                }
+                let h = HSTRING::from(lnk_path.as_os_str());
+                if persist_file.Load(PCWSTR(h.as_ptr()), STGM_READ).is_err() {
+                    continue;
+                }
+                let mut buf = [0u16; 520];
+                let ok = shell_link.GetPath(&mut buf, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32).is_ok();
+                if !ok {
+                    continue;
+                }
+                let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                let target = String::from_utf16_lossy(&buf[..n]);
+                let target = target.trim();
+                if target.to_lowercase().ends_with(".exe") && Path::new(target).is_file() {
+                    out.push(App { id: target.to_string(), name, icon_url: None });
+                }
+            }
+        }
+        if hr.is_ok() {
+            CoUninitialize();
+        }
+    }
+    out
 }
 
 #[cfg(not(windows))]
@@ -1633,6 +2172,115 @@ pub fn system_chooser(path: &Path) -> Result<()> {
 #[cfg(not(windows))]
 pub fn system_chooser(_path: &Path) -> Result<()> {
     Err(CoreError::Unsupported("this system has no app chooser of its own"))
+}
+
+fn pct_encode_uri_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() + 8);
+    if !path.starts_with('/') {
+        out.push('/');
+    }
+    for b in path.bytes() {
+        let safe = b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~' | b':');
+        if safe {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Build a `vscode-remote://ssh-remote+...` file URI for VS Code Remote-SSH.
+pub fn vscode_ssh_file_uri(user: &str, host: &str, port: u16, remote_path: &str) -> String {
+    let mut auth = String::new();
+    if !user.is_empty() {
+        auth.push_str(user);
+        auth.push('@');
+    }
+    auth.push_str(host);
+    if port != 0 && port != 22 {
+        auth.push(':');
+        auth.push_str(&port.to_string());
+    }
+    format!("vscode-remote://ssh-remote+{auth}{}", pct_encode_uri_path(remote_path))
+}
+
+fn find_vscode_program() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let mut candidates = Vec::new();
+        for var in ["LOCALAPPDATA"] {
+            if let Ok(l) = std::env::var(var) {
+                candidates.push(format!(r"{l}\Programs\Microsoft VS Code\Code.exe"));
+                candidates.push(format!(r"{l}\Programs\Microsoft VS Code Insiders\Code - Insiders.exe"));
+                candidates.push(format!(r"{l}\Programs\VSCodium\VSCodium.exe"));
+                candidates.push(format!(r"{l}\Programs\cursor\Cursor.exe"));
+            }
+        }
+        for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Ok(pf) = std::env::var(var) {
+                candidates.push(format!(r"{pf}\Microsoft VS Code\Code.exe"));
+                candidates.push(format!(r"{pf}\VSCodium\VSCodium.exe"));
+            }
+        }
+        if let Some(hit) = candidates.into_iter().find(|p| Path::new(p).is_file()) {
+            return Some(hit);
+        }
+        if program_exists("code") {
+            return Some("code.cmd".to_string());
+        }
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for p in [
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+            "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code",
+            "/Applications/VSCodium.app/Contents/Resources/app/bin/codium",
+            "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        ] {
+            if Path::new(p).is_file() {
+                return Some(p.to_string());
+            }
+        }
+        for bin in ["code", "codium", "cursor"] {
+            if program_exists(bin) {
+                return Some(bin.to_string());
+            }
+        }
+        return None;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for bin in ["code", "code-insiders", "codium", "cursor"] {
+            if program_exists(bin) {
+                return Some(bin.to_string());
+            }
+        }
+        return None;
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+/// Open a remote SSH file directly in Visual Studio Code using VS Code Remote-SSH (`--file-uri`).
+pub fn open_vscode_ssh(user: &str, host: &str, port: u16, remote_path: &str) -> Result<()> {
+    let exe = find_vscode_program().ok_or(CoreError::Unsupported("vscode-not-found"))?;
+    let uri = vscode_ssh_file_uri(user, host, port, remote_path);
+    #[cfg(windows)]
+    if exe.to_ascii_lowercase().ends_with(".cmd") {
+        let mut cmd = std::process::Command::new("cmd");
+        crate::proc::quiet(&mut cmd);
+        cmd.args(["/C", &exe, "--file-uri", &uri])
+            .spawn()
+            .map_err(|e| CoreError::io(Path::new(&exe), e))?;
+        return Ok(());
+    }
+    std::process::Command::new(&exe)
+        .args(["--file-uri", &uri])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| CoreError::io(Path::new(&exe), e))
 }
 
 #[cfg(test)]
@@ -1759,6 +2407,18 @@ mod tests {
     fn finds_programs_on_path() {
         assert!(program_exists(if cfg!(windows) { "cmd" } else { "sh" }));
         assert!(!program_exists("definitely-not-a-program-xyz"));
+    }
+
+    #[test]
+    fn formats_vscode_remote_ssh_uris() {
+        assert_eq!(
+            vscode_ssh_file_uri("alice", "example.com", 22, "/var/backups/shadow.bak"),
+            "vscode-remote://ssh-remote+alice@example.com/var/backups/shadow.bak"
+        );
+        assert_eq!(
+            vscode_ssh_file_uri("bob", "10.0.0.5", 2222, "/home/bob/my notes.txt"),
+            "vscode-remote://ssh-remote+bob@10.0.0.5:2222/home/bob/my%20notes.txt"
+        );
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))]
@@ -1996,6 +2656,39 @@ mod shared_extension_tests {
 
         let c_video = choices(&ts_video_1);
         assert_eq!(c_video.content_kind.as_deref(), Some("video"));
+
+        load_app_defaults(&dir.path().join("reset.json"));
+        forget_openers();
+    }
+
+    #[test]
+    fn extensionless_and_app_media_defaults_persist_and_survive_reload() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("open-with.json");
+        load_app_defaults(&file);
+
+        let dockerfile = dir.path().join("Dockerfile");
+        std::fs::write(&dockerfile, "FROM debian:bookworm\n").unwrap();
+        assert_eq!(open_key(&dockerfile), "n:dockerfile");
+
+        let yml = dir.path().join("docker-compose.yml");
+        std::fs::write(&yml, "services: {}\n").unwrap();
+
+        let exe = std::env::current_exe().unwrap();
+        let exe_s = exe.to_string_lossy().into_owned();
+        bind_app_defaults(&dockerfile, &exe_s);
+        bind_app_defaults(&yml, &exe_s);
+        forget_openers();
+
+        assert_eq!(app_default_for("n:dockerfile").as_deref(), Some(exe_s.as_str()));
+        assert_eq!(default_opener(&dockerfile, false).id, exe_s);
+        assert_eq!(app_default_for(".yml").as_deref(), Some(exe_s.as_str()));
+
+        // Reload from disk and verify both extensionless and extension defaults persist.
+        load_app_defaults(&file);
+        assert_eq!(app_default_for("n:dockerfile").as_deref(), Some(exe_s.as_str()));
+        assert_eq!(app_default_for(".yml").as_deref(), Some(exe_s.as_str()));
 
         load_app_defaults(&dir.path().join("reset.json"));
         forget_openers();
