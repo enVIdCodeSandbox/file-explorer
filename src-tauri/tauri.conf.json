@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FAST File Explorer",
-  "version": "37.13.0",
+  "version": "37.14.0",
   "identifier": "dev.envid.fastfileexplorer",
   "build": {
     "beforeDevCommand": "npm run dev",
