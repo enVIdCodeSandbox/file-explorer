@@ -6,7 +6,7 @@ import { adoptJobs, api, on } from "./api";
 import { adv } from "./settings/advanced";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CaptionStrip, CommandBar, FilterPanel, Sidebar, TabBar, Toolbar } from "./components/Chrome";
-import { useChrome } from "./util/chrome";
+import { isWindowsChrome, useChrome } from "./util/chrome";
 import { DetailsPane } from "./components/DetailsPane";
 import { FileView } from "./components/FileView";
 import { Shell, useLayout } from "./components/Layout";
@@ -472,18 +472,19 @@ function AppInner() {
     );
 
   const loc = parseLocation(location);
+  const winChrome = isWindowsChrome(chrome);
   // A hidden tab strip (Finder and GNOME show it only with two or more tabs) cannot own the window buttons.
-  const topFirst = panelsAt(layout, "top").filter((id) => !(id === "tabs" && chrome !== "windows" && tabCount < 2))[0];
+  const topFirst = panelsAt(layout, "top").filter((id) => !(id === "tabs" && !winChrome && tabCount < 2))[0];
   const tabsOwnWindowButtons = topFirst === "tabs";
   // The Finder-like and GNOME-like windows put the window buttons in the header row.
-  const headerOwnsControls = chrome !== "windows" && topFirst === "address" && !layout.address.collapsed;
+  const headerOwnsControls = !winChrome && topFirst === "address" && !layout.address.collapsed;
 
   const renderLive = (id: PanelId, dock: string) => {
     const vertical = dock === "left" || dock === "right";
     switch (id) {
       case "tabs":
         // Finder and GNOME Files show the tab strip only once there is more than one tab.
-        if (chrome !== "windows" && tabCount < 2) return null;
+        if (!winChrome && tabCount < 2) return null;
         return <TabBar controls={tabsOwnWindowButtons && dock === "top"} vertical={vertical} />;
       case "address":
         if (chrome === "macos")

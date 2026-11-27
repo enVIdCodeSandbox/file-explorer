@@ -94,7 +94,7 @@ export function useAppearance() {
     }
     root.style.setProperty("--font-size", `${style.fontSize}px`);
     root.style.setProperty("--radius", `${style.radius}px`);
-    root.style.setProperty("--radius-small", `${Math.max(2, Math.round(style.radius / 2))}px`);
+    root.style.setProperty("--radius-small", `${style.radius <= 1 ? style.radius : Math.max(1, Math.round(style.radius / 2))}px`);
     root.dataset.menu = style.menu;
     root.dataset.icons = style.icons;
     root.dataset.folder = style.folderColor;

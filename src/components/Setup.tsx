@@ -68,7 +68,8 @@ function Tile({ icon, title, hint, on, onToggle }: { icon: ReactNode; title: str
 }
 
 const OS_CARDS: { id: Platform; name: string; tagline: string }[] = [
-  { id: "windows", name: "Windows", tagline: "Like File Explorer in Windows 11" },
+  { id: "windows", name: "Windows 11", tagline: "Like File Explorer in Windows 11" },
+  { id: "windows10", name: "Windows 10", tagline: "Like File Explorer in Windows 10" },
   { id: "macos", name: "macOS", tagline: "Like Finder on a Mac" },
   { id: "linux", name: "Linux", tagline: "Clean and simple, like GNOME or KDE" },
   { id: "google", name: "Google", tagline: "Like Files by Google on a Pixel" },

@@ -652,7 +652,7 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 /* Shared: a "Recommended" tab sits above the recommended card of a row. */
 .setup-stage { width: min(1440px, 100%); }
 .setup-stage[data-fill] { flex: 1; margin: 0 auto; min-height: 0; }
-.os-grid, .setup-modes { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+.os-grid, .setup-modes { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .os-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .os-rec { align-self: center; padding: 4px 16px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; visibility: hidden; position: relative; }
 .os-rec[data-show] { visibility: visible; }
@@ -677,7 +677,14 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .wf-side i { height: 8px; } .wf-side i:first-child { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 .wf-main { flex: 1; display: flex; flex-direction: column; gap: 7px; padding: 6px 2px; }
 .wf-main i { height: 9px; } .wf-main i:nth-child(1) { width: 85%; } .wf-main i:nth-child(2) { width: 62%; } .wf-main i:nth-child(3) { width: 74%; } .wf-main i:nth-child(4) { width: 55%; } .wf-main i:nth-child(5) { width: 68%; }
-/* Windows: tabs, address bar, then a wide pane. macOS: one toolbar. Linux: one header, narrow sidebar. */
+/* Windows 11: tabs, address bar, then a wide pane. Windows 10: sharp edges, ribbon bar above compact list. macOS: one toolbar. Linux: one header, narrow sidebar. */
+.os-preview[data-os="windows10"] { border-radius: 2px; gap: 4px; }
+.os-preview[data-os="windows10"] .wf-top { height: 16px; }
+.os-preview[data-os="windows10"] .wf-top b { border-radius: 0; border-top: 2px solid var(--accent); height: 14px; }
+.os-preview[data-os="windows10"] .wf-top u { border-radius: 0; }
+.os-preview[data-os="windows10"] .wf-bar { height: 20px; border-radius: 0; background: var(--surface-active); border-top: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); }
+.os-preview[data-os="windows10"] .wf-side { border-radius: 0; }
+.os-preview[data-os="windows10"] i, .os-preview[data-os="windows10"] b { border-radius: 0; }
 .os-preview[data-os="macos"] .wf-top { height: 20px; }
 .os-preview[data-os="macos"] .wf-top b { width: 9px; height: 9px; border-radius: 50%; } .os-preview[data-os="macos"] .wf-top b:nth-child(1) { background: #ff5f57; } .os-preview[data-os="macos"] .wf-top b:nth-child(2) { background: #febc2e; } .os-preview[data-os="macos"] .wf-top b:nth-child(3) { background: #28c840; }
 .os-preview[data-os="macos"] .wf-bar { display: none; }
@@ -802,6 +809,90 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 :root[data-chrome="macos"] .sidebar .side-item { height: 28px; border-radius: 6px; font-size: 13px; }
 :root[data-chrome="macos"] .title-bar:not(.caption-strip) { justify-content: center; }
 :root[data-chrome="macos"] .title-bar .tab-bar { flex: 1 1 auto; justify-content: center; }
+
+/* ---- Windows 10: File Explorer Ribbon, Quick Access Toolbar & sharp geometry ---- */
+:root[data-chrome="windows10"] .content { border-radius: 0; }
+:root[data-chrome="windows10"] .title-bar { min-height: calc(var(--tab-height, 34px) + 2px); align-items: stretch; background: var(--bg); }
+:root[data-chrome="windows10"] .caption-strip { min-height: 30px; padding-left: 6px; }
+:root[data-chrome="windows10"] .title-bar .tab-bar { padding: 2px 6px 0 2px; min-height: 32px; gap: 1px; align-items: stretch; }
+:root[data-chrome="windows10"] .tab { border-radius: 0; height: auto; padding: 0 8px 0 10px; border-top: 2px solid transparent; border-left: 1px solid transparent; border-right: 1px solid transparent; }
+:root[data-chrome="windows10"] .tab[data-active] { border-top-color: var(--accent); border-left-color: var(--border); border-right-color: var(--border); box-shadow: none; background: var(--surface); }
+:root[data-chrome="windows10"] .tab-close,
+:root[data-chrome="windows10"] .tab-new,
+:root[data-chrome="windows10"] .tab-scroll,
+:root[data-chrome="windows10"] .toolbar button,
+:root[data-chrome="windows10"] .address-bar,
+:root[data-chrome="windows10"] .address-bar .crumb,
+:root[data-chrome="windows10"] .search-box,
+:root[data-chrome="windows10"] .cmd,
+:root[data-chrome="windows10"] .side-item,
+:root[data-chrome="windows10"] .file-row,
+:root[data-chrome="windows10"] .file-tile,
+:root[data-chrome="windows10"] .card,
+:root[data-chrome="windows10"] .primary,
+:root[data-chrome="windows10"] .secondary,
+:root[data-chrome="windows10"] .text-input,
+:root[data-chrome="windows10"] select,
+:root[data-chrome="windows10"] input[type="number"],
+:root[data-chrome="windows10"] .context-menu,
+:root[data-chrome="windows10"] .menu-item,
+:root[data-chrome="windows10"] .dialog,
+:root[data-chrome="windows10"] .settings,
+:root[data-chrome="windows10"] .setting,
+:root[data-chrome="windows10"] .preset-card,
+:root[data-chrome="windows10"] .filter-panel,
+:root[data-chrome="windows10"] .transfer-card,
+:root[data-chrome="windows10"] .transfer-window,
+:root[data-chrome="windows10"] .toast,
+:root[data-chrome="windows10"] .notice,
+:root[data-chrome="windows10"] .tooltip { border-radius: var(--radius-small, 1px); }
+:root[data-chrome="windows10"] input[type="checkbox"] { border-radius: 1px; }
+:root[data-chrome="windows10"] .side-item[data-active]::before { top: 2px; bottom: 2px; border-radius: 0; }
+:root[data-chrome="windows10"] .tab-drop-shadow,
+:root[data-chrome="windows10"] .tab-ghost,
+:root[data-chrome="windows10"] .tab-group-chip { border-radius: 0; }
+:root[data-chrome="windows10"] .window-controls button { width: 46px; height: 30px; border-radius: 0; }
+
+/* Title bar Quick Access icon shortcuts (Properties, New folder, Undo, Redo, Rename, Delete) */
+.win10-qat { display: flex; align-items: center; gap: 1px; padding: 0 4px 0 6px; flex: none; -webkit-app-region: no-drag; }
+.win10-qat .qat-btn { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 1px; color: var(--text); }
+.win10-qat .qat-btn:hover:not(:disabled) { background: var(--surface-hover); }
+.win10-qat-sep { width: 1px; height: 15px; margin: 0 4px; background: var(--border-strong); }
+
+/* Address bar row sits cleanly beneath the Ribbon with sharp 1px inputs */
+:root[data-chrome="windows10"] .toolbar { padding: 4px 8px; gap: 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
+:root[data-chrome="windows10"] .toolbar button { height: 26px; min-width: 26px; padding: 0 6px; }
+:root[data-chrome="windows10"] .toolbar .address-bar,
+:root[data-chrome="windows10"] .toolbar .search-box { height: 26px; border-color: var(--border-strong); background: var(--bg); }
+:root[data-chrome="windows10"] .toolbar .search-box { width: 220px; }
+:root[data-chrome="windows10"] .toolbar .crumb { height: 22px; font-size: 12.5px; }
+:root[data-chrome="windows10"] .status-bar { height: 22px; font-size: 11.5px; background: var(--surface); }
+
+/* Windows 10 Ribbon: File | Home | Share | View + grouped actions bar */
+.win10-ribbon { display: flex; flex-direction: column; width: 100%; background: var(--surface); border-bottom: 1px solid var(--border-strong); }
+.win10-ribbon-tabs { display: flex; align-items: stretch; gap: 1px; padding: 0 6px; height: 24px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.win10-ribbon[data-collapsed] .win10-ribbon-tabs { border-bottom: 0; }
+.win10-file-tab { height: 24px; padding: 0 14px; font-size: 12px; font-weight: 500; background: var(--accent); color: var(--accent-text); border-radius: 0; }
+.win10-file-tab:hover { filter: brightness(1.08); }
+.win10-ribbon-tab { height: 24px; padding: 0 13px; font-size: 12px; color: var(--text-muted); border: 1px solid transparent; border-bottom: 0; border-radius: 0; }
+.win10-ribbon-tab:hover { color: var(--text); background: var(--surface-hover); }
+.win10-ribbon-tab[data-active] { color: var(--text); font-weight: 600; background: var(--surface); border-color: var(--border); margin-bottom: -1px; padding-bottom: 1px; border-top: 2px solid var(--accent); }
+.win10-ribbon-meta { display: flex; align-items: center; gap: 2px; }
+.win10-ribbon-meta .win10-cmd { height: 22px; padding: 0 7px; font-size: 11.5px; }
+.win10-ribbon-toggle { width: 22px; height: 22px; display: grid; place-items: center; color: var(--text-muted); border-radius: 1px; }
+.win10-ribbon-toggle:hover { background: var(--surface-hover); color: var(--text); }
+
+.win10-ribbon-body { display: flex; align-items: stretch; flex-wrap: wrap; gap: 0; padding: 4px 6px 2px; background: var(--surface); min-height: 46px; }
+.win10-group { display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 0 8px 1px; border-right: 1px solid var(--border); gap: 2px; }
+.win10-group:last-child { border-right: 0; }
+.win10-group-items { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.win10-group-label { font-size: 10px; color: var(--text-muted); line-height: 1; letter-spacing: 0.01em; user-select: none; }
+.win10-cmd { height: 25px; padding: 0 7px; font-size: 12px; gap: 5px; border: 1px solid transparent; }
+.win10-cmd:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border); }
+.win10-cmd[data-on] { background: var(--selection); border-color: var(--selection-border); }
+.win10-check { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; font-size: 12px; white-space: nowrap; cursor: default; }
+.win10-check:hover { background: var(--surface-hover); }
+.win10-check input[type="checkbox"] { width: 14px; height: 14px; }
 
 /* ---- Linux: GNOME Files ---- */
 :root[data-chrome="linux"] .toolbar { min-height: 50px; padding: 0 8px 0 10px; gap: 8px; background: var(--surface); border-bottom: 1px solid var(--border); }

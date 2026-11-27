@@ -364,7 +364,7 @@ export function recommendPerf(totalRamMb: number, cpus: number, laptop: boolean)
 // Interface presets (Windows, macOS, Linux; Google, Samsung, Apple on phones)
 // ---------------------------------------------------------------------------
 
-export type Platform = "windows" | "macos" | "linux" | "google" | "samsung" | "apple";
+export type Platform = "windows" | "windows10" | "macos" | "linux" | "google" | "samsung" | "apple";
 
 export interface UiPreset {
   id: Platform;
@@ -425,9 +425,9 @@ const LINUX_KEYS: Record<string, string> = {
 export const UI_PRESETS: UiPreset[] = [
   {
     id: "windows",
-    name: "Windows",
+    name: "Windows 11",
     description: "Arranged like File Explorer in Windows 11: tabs, then the address bar, then the command bar; navigation pane on the left, details view. Windows 11 colors, rounded corners, Fluent-style icons, window buttons on the right and Windows shortcuts (F2 rename, Alt+Up, Alt+Enter).",
-    recommendedFor: "Anyone used to Windows, on any system.",
+    recommendedFor: "Anyone used to Windows 11, on any system.",
     themes: { dark: "win11-dark", light: "win11-light" },
     start: { "appearance.viewLevel": 0 },
     patch: {
@@ -438,6 +438,30 @@ export const UI_PRESETS: UiPreset[] = [
       "appearance.style.icons": "fluent",
       "appearance.style.radius": 8,
       "appearance.style.menu": "glass",
+      "appearance.style.folderColor": "classic",
+      "appearance.style.font": "system",
+      "appearance.showDetailsPane": false,
+      "advanced.ui.windowControlsSide": "right",
+      "advanced.files.singleClickOpen": false,
+      "advanced.files.sizeUnits": "windows",
+      keys: {},
+    },
+  },
+  {
+    id: "windows10",
+    name: "Windows 10",
+    description: "Arranged like File Explorer in Windows 10: sharp square corners, Quick Access shortcuts in the title bar, the ribbon-style command bar above the address bar with nuanced top actions (Select all/none/invert, Copy path, Properties, Show/hide), compact rows, outline icons, Windows 10 colors, window buttons on the right and Windows shortcuts.",
+    recommendedFor: "Anyone who prefers classic Windows 10 File Explorer.",
+    themes: { dark: "win10-dark", light: "win10-light" },
+    start: { "appearance.viewLevel": 0 },
+    patch: {
+      "appearance.layout": layoutOf("classic"),
+      "advanced.ui.chrome": "windows10",
+      "advanced.ui.statusBar": true,
+      "appearance.density": "compact",
+      "appearance.style.icons": "outline",
+      "appearance.style.radius": 2,
+      "appearance.style.menu": "flat",
       "appearance.style.folderColor": "classic",
       "appearance.style.font": "system",
       "appearance.showDetailsPane": false,

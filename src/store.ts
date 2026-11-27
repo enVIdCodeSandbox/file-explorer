@@ -2001,7 +2001,7 @@ export async function promptText(title: string, initial: string): Promise<string
 
 /** Folder views, from the most detail to the biggest icons. */
 /** Things the bars around the folder view ask it to do. The last six are used by the phone layout. */
-export type FolderCommand = "selectAll" | "selectNone" | "invert" | "selectGroup" | "deselectGroup" | "restoreSelection" | "rename" | "select" | "newFolder" | "newFile" | "paste" | "refresh" | "menu";
+export type FolderCommand = "selectAll" | "selectNone" | "invert" | "selectGroup" | "deselectGroup" | "restoreSelection" | "rename" | "select" | "newFolder" | "newFile" | "paste" | "refresh" | "menu" | "open" | "quickLook";
 
 export const VIEW_LEVELS = ["details", "list", "small", "medium", "large", "xl"] as const;
 export type ViewLevel = (typeof VIEW_LEVELS)[number];

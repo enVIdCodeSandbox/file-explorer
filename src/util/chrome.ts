@@ -5,12 +5,16 @@
 import { adv } from "../settings/advanced";
 import { useStore } from "../store";
 
-export type Chrome = "windows" | "macos" | "linux";
+export type Chrome = "windows" | "windows10" | "macos" | "linux";
 /** The phone arrangements, each like the file manager that comes with that maker's phones. */
 export type PhoneChrome = "google" | "samsung" | "apple";
 
 /** The computer arrangement to use. A phone look saved in the settings shows as the nearest computer one. */
-export const asChrome = (v: unknown): Chrome => (v === "macos" || v === "apple" ? "macos" : v === "linux" ? "linux" : "windows");
+export const asChrome = (v: unknown): Chrome =>
+  v === "windows10" ? "windows10" : v === "macos" || v === "apple" ? "macos" : v === "linux" ? "linux" : "windows";
+
+/** True for either Windows desktop chrome (Windows 11 or Windows 10). */
+export const isWindowsChrome = (c: Chrome): boolean => c === "windows" || c === "windows10";
 
 /** The phone arrangement to use. A computer look saved in the settings shows as the nearest phone one. */
 export const asPhoneChrome = (v: unknown): PhoneChrome => (v === "samsung" ? "samsung" : v === "apple" || v === "macos" ? "apple" : "google");
@@ -27,6 +31,7 @@ export function useChrome(): Chrome {
  * own name everywhere: renaming it "Recents" put two sections of that name side by side, since Recents is a section too. */
 export const SIDE_NAMES: Record<Chrome, Record<string, string>> = {
   windows: {},
+  windows10: {},
   macos: { Navigation: "", Pinned: "Favorites", Drives: "Locations", Servers: "Shared" },
   linux: { Navigation: "", Pinned: "Starred", Drives: "Devices", Servers: "Network" },
 };

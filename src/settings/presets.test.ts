@@ -139,8 +139,10 @@ describe("performance presets", () => {
 });
 
 describe("interface presets", () => {
-  it("covers the three platforms and the three phone looks with real themes and shortcut ids", () => {
-    expect(UI_PRESETS.map((p) => p.id)).toEqual(["windows", "macos", "linux", "google", "samsung", "apple"]);
+  it("covers the platforms and phone looks with real themes and shortcut ids", () => {
+    expect(UI_PRESETS.map((p) => p.id)).toEqual(["windows", "windows10", "macos", "linux", "google", "samsung", "apple"]);
+    expect(UI_PRESETS.find((p) => p.id === "windows")?.name).toBe("Windows 11");
+    expect(UI_PRESETS.find((p) => p.id === "windows10")?.name).toBe("Windows 10");
     const ids = new Set(THEMES.map((t) => t.id));
     const commands = new Set(KEY_COMMANDS.map((k) => k.id));
     for (const p of UI_PRESETS) {
@@ -150,22 +152,32 @@ describe("interface presets", () => {
   });
   it("applies the dark or light variant and swaps shortcuts", () => {
     const s = blank();
-    applyUiPreset(s, UI_PRESETS[1], true);
+    const byId = (id: string) => UI_PRESETS.find((p) => p.id === id)!;
+    applyUiPreset(s, byId("macos"), true);
     expect(s.appearance.theme).toBe("mac-dark");
     expect(s.keys.rename).toBe("Enter");
     expect(s.advanced["ui.windowControlsSide"]).toBe("left");
-    applyUiPreset(s, UI_PRESETS[0], false);
+    applyUiPreset(s, byId("windows"), false);
     expect(s.keys).toEqual({});
     expect(s.appearance.style.icons).toBe("fluent");
-    expect(differences(s, UI_PRESETS[0].patch)).toEqual([]);
+    expect(s.appearance.theme).toBe("win11-light");
+    expect(differences(s, byId("windows").patch)).toEqual([]);
+    applyUiPreset(s, byId("windows10"), false);
+    expect(s.appearance.theme).toBe("win10-light");
+    expect(s.appearance.style.icons).toBe("outline");
+    expect(s.appearance.style.radius).toBeLessThanOrEqual(2);
+    expect(s.appearance.density).toBe("compact");
+    expect(s.appearance.layout.commands.order).toBeLessThan(s.appearance.layout.address.order);
+    expect(differences(s, byId("windows10").patch)).toEqual([]);
   });
   it("recognizes an applied preset even when saved keys come back in another order", () => {
     const s = blank();
-    applyUiPreset(s, UI_PRESETS[2], true);
+    const linux = UI_PRESETS.find((p) => p.id === "linux")!;
+    applyUiPreset(s, linux, true);
     // The backend returns object keys alphabetically.
     const sortDeep = (o: unknown): unknown => (o && typeof o === "object" && !Array.isArray(o) ? Object.fromEntries(Object.entries(o).sort(([a], [b]) => b.localeCompare(a)).map(([k, v]) => [k, sortDeep(v)])) : o);
     s.appearance.layout = sortDeep(s.appearance.layout);
-    expect(differences(s, UI_PRESETS[2].patch)).toEqual([]);
+    expect(differences(s, linux.patch)).toEqual([]);
   });
   it("gives no two shortcuts the same key within a preset", () => {
     for (const p of UI_PRESETS) {

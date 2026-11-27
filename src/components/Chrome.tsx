@@ -11,9 +11,12 @@ import { api, type Drive, type TerminalMode } from "../api";
 import {
   GROUP_COLORS,
   VIEW_LEVELS,
+  compressPaths,
   createPath,
   deletePaths,
   extractAndOpenTerminal,
+  extractArchive,
+  isArchiveName,
   openFile,
   promptText,
   showProperties,
@@ -71,7 +74,7 @@ import { fileToolsItems } from "./toolsOpen";
 import { openCount } from "./todoNotes";
 import { isMobileOs } from "../util/native";
 import { FileIcon, Icon } from "./Icons";
-import { useTasksRunning } from "./tasksUtil";
+import { taskFromSelection, useTasksRunning } from "./tasksUtil";
 
 // ---------------------------------------------------------------------------
 // Tabs
@@ -152,14 +155,91 @@ function TrafficLights() {
   );
 }
 
+const tipKey = (label: string, keyId?: string, extra?: string) => {
+  const k = keyId ? sk(keyId) : "";
+  return `${label}${k ? ` (${k})` : ""}${extra ? ` — ${extra}` : ""}`;
+};
+
+/** Classic Windows 10 Quick Access icon strip pinned to the top-left of the title bar. */
+function QuickAccessBar() {
+  const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location ?? HOME);
+  const selection = useStore((s) => s.selection);
+  const undoCount = useStore((s) => s.undo.length);
+  const redoCount = useStore((s) => s.redo.length);
+  const loc = parseLocation(location);
+  const folder = loc.kind === "folder" ? loc.path : null;
+  const hasSel = selection.length > 0;
+  return (
+    <div className="win10-qat" role="toolbar" aria-label="Quick Access Toolbar">
+      <button
+        className="qat-btn"
+        aria-label="Properties"
+        title={tipKey("Properties", "properties")}
+        disabled={!hasSel && !folder}
+        onClick={() => void showProperties(hasSel ? selection : folder ? [folder] : [])}
+      >
+        <Icon name="info" size={13} />
+      </button>
+      <button
+        className="qat-btn"
+        aria-label="New folder"
+        title={tipKey("New folder", "newFolder")}
+        disabled={!folder}
+        onClick={() => useStore.getState().runCommand("newFolder")}
+      >
+        <Icon name="folderOpen" size={13} />
+      </button>
+      <button
+        className="qat-btn"
+        aria-label="Undo"
+        title={tipKey("Undo", "undo")}
+        disabled={undoCount === 0}
+        onClick={() => void undoLast()}
+      >
+        <Icon name="undo" size={13} />
+      </button>
+      <button
+        className="qat-btn"
+        aria-label="Redo"
+        title={tipKey("Redo", "redo")}
+        disabled={redoCount === 0}
+        onClick={() => void redoLast()}
+      >
+        <Icon name="redo" size={13} />
+      </button>
+      <button
+        className="qat-btn"
+        aria-label="Rename"
+        title={tipKey("Rename", "rename")}
+        disabled={selection.length < 1}
+        onClick={() => useStore.getState().runCommand("rename")}
+      >
+        <Icon name="rename" size={13} />
+      </button>
+      <button
+        className="qat-btn"
+        aria-label="Delete"
+        title={tipKey("Delete", "delete", "Shift+click deletes permanently")}
+        disabled={!hasSel}
+        onClick={(e) => void deletePaths(selection, e.shiftKey)}
+      >
+        <Icon name="trash" size={13} />
+      </button>
+      <span className="win10-qat-sep" aria-hidden="true" />
+    </div>
+  );
+}
+
 /** A slim strip with the window buttons, for when the tabs are not in the top row. */
 export function CaptionStrip() {
   const os = useStore((s) => s.info?.os);
+  const chrome = useChrome();
   const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   return (
     <div className="title-bar caption-strip" data-tauri-drag-region data-os={os}>
       {os === "macos" && <TrafficLights />}
       {os !== "macos" && side === "left" && <WindowControls side="left" />}
+      {chrome === "windows10" && <QuickAccessBar />}
       <span className="caption-title" data-tauri-drag-region>FAST File Explorer</span>
       <div className="title-drag" data-tauri-drag-region />
       {os !== "macos" && side === "right" && <WindowControls />}
@@ -177,6 +257,7 @@ function HeaderControls() {
 
 export function TabBar({ controls = true, vertical = false }: { controls?: boolean; vertical?: boolean } = {}) {
   const os = useStore((s) => s.info?.os);
+  const chrome = useChrome();
   const side = useStore((s) => (adv<string>(s.settings, "ui.windowControlsSide") === "left" ? "left" : "right"));
   const incoming = useStore((s) => s.incomingTab);
   const closedCount = useStore((s) => s.closedTabs.length);
@@ -382,6 +463,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
     <div className="title-bar" data-tauri-drag-region data-os={os} data-vertical={vertical || undefined} data-controls={controls || undefined}>
      {controls && os === "macos" && <TrafficLights />}
      {controls && os !== "macos" && side === "left" && <WindowControls side="left" />}
+     {!vertical && chrome === "windows10" && <QuickAccessBar />}
      <div className="tab-strip" data-vertical={vertical || undefined}>
       {more.before && (
         <button className="tab-scroll" aria-label="Scroll tabs back" title="Scroll tabs back" onClick={() => scrollBy(-1)}>
@@ -692,16 +774,16 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
       {controls && controlsSide === "left" && <HeaderControls />}
       {has("nav") && (
       <div className="nav-buttons">
-        <button aria-label="Back" title="Back (Alt+Left)" disabled={!tab || tab.historyIndex === 0} onClick={back}>
+        <button aria-label="Back" title={tipKey("Back", "back")} disabled={!tab || tab.historyIndex === 0} onClick={back}>
           <Icon name="back" />
         </button>
-        <button aria-label="Forward" title="Forward (Alt+Right)" disabled={!tab || tab.historyIndex >= tab.history.length - 1} onClick={forward}>
+        <button aria-label="Forward" title={tipKey("Forward", "forward")} disabled={!tab || tab.historyIndex >= tab.history.length - 1} onClick={forward}>
           <Icon name="forward" />
         </button>
-        <button aria-label="Up" data-nav="up" title="Up (Alt+Up)" disabled={!up} onClick={() => up && navigate(up)}>
+        <button aria-label="Up" data-nav="up" title={up ? tipKey(`Up to "${tabTitle(up)}"`, "goUp") : tipKey("Up", "goUp")} disabled={!up} onClick={() => up && navigate(up)}>
           <Icon name="up" />
         </button>
-        <button aria-label="Refresh" data-nav="refresh" data-spinning={spinning} title={`Refresh (${[keyFor(settings, "refresh"), keyFor(settings, "refreshAlt")].filter(Boolean).join(" or ")})`} onClick={() => useStore.getState().refreshTab()}>
+        <button aria-label="Refresh" data-nav="refresh" data-spinning={spinning} title={`Refresh (${[sk("refresh"), sk("refreshAlt")].filter(Boolean).join(" or ")})`} onClick={() => useStore.getState().refreshTab()}>
           <Icon name="refresh" />
         </button>
       </div>
@@ -717,6 +799,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
       <div
         className="address-bar"
         data-editing={editing || undefined}
+        title={editing ? undefined : `Type a path or shell command (${[sk("focusAddressAlt"), sk("focusAddressF4"), sk("focusAddress")].filter(Boolean).join(", ")})`}
         onMouseDown={(e) => {
           // Anywhere on the bar except a breadcrumb starts typing, on every page.
           if (!editing && e.button === 0 && !(e.target as HTMLElement).closest(".crumb")) {
@@ -813,7 +896,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
           value={query}
           placeholder={scopeRef.current ? `Search ${tabTitle(scopeRef.current)}` : `Search ${thisPcLabel(info?.os)}`}
           aria-label="Search"
-          title="Try: report *.pdf ext:jpg type:folder size:>10mb"
+          title={`Search (${[sk("focusSearch"), sk("searchGlobal")].filter(Boolean).join(", ")}) — try: report *.pdf ext:jpg type:folder size:>10mb`}
           onChange={(e) => onSearch(e.target.value)}
           onFocus={() => setBoxFocused(true)}
           onKeyDown={(e) => {
@@ -885,7 +968,7 @@ export function Toolbar({ parts = ALL_PARTS, controls = false, extra }: { parts?
       </div>
       )}
       {has("terminal") && (
-      <button className="icon-button" aria-label="Open terminal" title="Open terminal" onClick={terminalMenu}>
+      <button className="icon-button" aria-label="Open terminal" title={tipKey("Open terminal", "toggleTerminal")} onClick={terminalMenu}>
         <Icon name="terminal" />
       </button>
       )}
@@ -918,19 +1001,36 @@ const SORT_NAMES: [string, string][] = [
 ];
 
 export function CommandBar({ onFilter, vertical = false, only, iconOnly = false }: { onFilter: (anchor: DOMRect) => void; vertical?: boolean; only?: string[]; iconOnly?: boolean }) {
+  const chrome = useChrome();
   const os = useStore((s) => s.info?.os);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location ?? HOME);
   const selection = useStore((s) => s.selection);
+  const pins = useStore((s) => s.pins);
   const undoCount = useStore((s) => s.undo.length);
   const redoCount = useStore((s) => s.redo.length);
   const sort = useStore((s) => s.sort);
   const filter = useStore((s) => s.filter);
   const drives = useStore((s) => s.drives);
   const settings = useStore((s) => s.settings)!;
-  const { setClipboard, setSort, updateSettings, setViewLevel, showToast } = useStore.getState();
+  const terminalOpen = useTerminal((t) => t.open);
+  const { setClipboard, setSort, updateSettings, setViewLevel, showToast, togglePin } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [ribbonTab, setRibbonTab] = useState<"home" | "share" | "view">("home");
+  const [ribbonCollapsed, setRibbonCollapsed] = useState(false);
   const tasksShown = adv(settings, "tasks.showButton") === true && os !== "android" && os !== "ios";
   const tasksBusy = useTasksRunning();
+
+  useEffect(() => {
+    if (chrome !== "windows10" || vertical || only) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === "F1") {
+        e.preventDefault();
+        setRibbonCollapsed((c) => !c);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chrome, vertical, only]);
 
   const loc = parseLocation(location);
   const folder = loc.kind === "folder" ? loc.path : null;
@@ -1049,17 +1149,334 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
     </button>
   );
 
+  if (chrome === "windows10" && !vertical && !only) {
+    const localFolder = !!folder && !isRemote(folder) && !isArchiveLoc(folder);
+    const singleSel = selection.length === 1 ? selection[0] : null;
+    const pinTarget = singleSel ?? folder;
+    const pinned = !!pinTarget && pins.some((p) => p.path === pinTarget);
+    const copyPathsText = (paths: string[], msg: string) =>
+      void navigator.clipboard.writeText(paths.join("\n")).then(() => showToast(msg));
+    const ribbonBtn = (id: string, label: string, icon: string, run: (e: React.MouseEvent) => void, opts?: { disabled?: boolean; caret?: boolean; on?: boolean; keyId?: string; hint?: string; title?: string }) => (
+      <button
+        key={id}
+        className="cmd win10-cmd"
+        data-cmd={id}
+        data-on={opts?.on || undefined}
+        disabled={opts?.disabled}
+        title={opts?.title ?? tipKey(label, opts?.keyId, opts?.hint)}
+        onClick={run}
+      >
+        <Icon name={icon} size={15} />
+        <span>{label}</span>
+        {opts?.caret && <Icon name="expand" size={8} />}
+      </button>
+    );
+    const group = (label: string, children: React.ReactNode) => (
+      <div className="win10-group" role="group" aria-label={label}>
+        <div className="win10-group-items">{children}</div>
+        <span className="win10-group-label">{label}</span>
+      </div>
+    );
+    const fileMenu = (e: React.MouseEvent) =>
+      below(e, [
+        { id: "newWin", label: "Open new window", disabled: !localFolder, run: () => localFolder && void api.openWindow(folder!).catch((err) => showToast(String(err))) },
+        { id: "newTab", label: "Open in new tab", shortcut: sk("newTab"), run: () => useStore.getState().newTab() },
+        ...(localFolder
+          ? [
+              { id: "term", label: "Open terminal here", icon: "terminal", separatorBefore: true, run: () => void api.openTerminal(folder!, "here").catch((err) => showToast(String(err))) },
+              { id: "termAdmin", label: os === "windows" ? "Open terminal as administrator" : "Open terminal as root", run: () => void api.openTerminal(folder!, "admin").catch((err) => showToast(String(err))) },
+            ]
+          : []),
+        { id: "fileTools", label: "File tools", separatorBefore: true, disabled: !inFolder, children: fileToolsItems(selection) },
+        { id: "undo", label: "Undo", icon: "undo", shortcut: sk("undo"), separatorBefore: true, disabled: undoCount === 0, run: () => void undoLast() },
+        { id: "redo", label: "Redo", icon: "redo", shortcut: sk("redo"), disabled: redoCount === 0, run: () => void redoLast() },
+        { id: "options", label: "Change folder and search options", icon: "settings", shortcut: sk("settings"), separatorBefore: true, run: () => useStore.getState().openSettings() },
+      ]);
+    const pickTab = (tab: "home" | "share" | "view") => {
+      if (ribbonTab === tab) setRibbonCollapsed((c) => !c);
+      else {
+        setRibbonTab(tab);
+        setRibbonCollapsed(false);
+      }
+    };
+    const checkboxes = adv<boolean>(settings, "files.checkboxes");
+    const singleArchive = !!singleSel && !isArchiveLoc(singleSel) && isArchiveName(baseName(singleSel));
+
+    return (
+      <div className="win10-ribbon" role="toolbar" aria-label="Explorer Ribbon" data-collapsed={ribbonCollapsed || undefined}>
+        <div className="win10-ribbon-tabs" role="tablist" aria-label="Ribbon tabs">
+          <button className="win10-file-tab" aria-haspopup="menu" onClick={fileMenu}>
+            File
+          </button>
+          {(["home", "share", "view"] as const).map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={!ribbonCollapsed && ribbonTab === tab}
+              className="win10-ribbon-tab"
+              data-active={(!ribbonCollapsed && ribbonTab === tab) || undefined}
+              onClick={() => pickTab(tab)}
+            >
+              {tab === "home" ? "Home" : tab === "share" ? "Share" : "View"}
+            </button>
+          ))}
+          <span className="cmd-grow" />
+          <div className="win10-ribbon-meta">
+            {tasksShown && ribbonBtn("tasks", tasksBusy > 0 ? `Tasks (${tasksBusy})` : "Tasks", "clock", () => useStore.getState().openTasks(), {
+              on: tasksBusy > 0,
+              title: tasksBusy > 0 ? `Tasks: ${tasksBusy} running` : "Tasks: automatic copying, moving, cleaning and backups",
+            })}
+            <button
+              className="win10-ribbon-toggle"
+              aria-label={ribbonCollapsed ? "Expand the Ribbon" : "Minimize the Ribbon"}
+              title={`${ribbonCollapsed ? "Expand the Ribbon" : "Minimize the Ribbon"} (Ctrl+F1)`}
+              onClick={() => setRibbonCollapsed((c) => !c)}
+            >
+              <Icon name={ribbonCollapsed ? "expand" : "collapse"} size={11} />
+            </button>
+            <button
+              className="win10-ribbon-toggle"
+              aria-label="Settings"
+              title={tipKey("Options & settings", "settings")}
+              onClick={() => useStore.getState().openSettings()}
+            >
+              <Icon name="settings" size={13} />
+            </button>
+          </div>
+        </div>
+        {!ribbonCollapsed && (
+          <div className="win10-ribbon-body">
+            {ribbonTab === "home" && (
+              <>
+                {group(
+                  "Clipboard",
+                  <>
+                    {ribbonBtn(
+                      "pin",
+                      pinned ? "Unpin" : "Pin",
+                      "pin",
+                      () => {
+                        if (singleSel) void api.resolvePath(singleSel).then((r) => togglePin(singleSel, !r.isDir)).catch(() => togglePin(singleSel, false));
+                        else if (folder) togglePin(folder, false);
+                      },
+                      {
+                        disabled: !pinTarget || isArchiveLoc(pinTarget),
+                        on: pinned,
+                        title: pinned ? "Unpin from sidebar" : "Pin to Quick access in sidebar",
+                      },
+                    )}
+                    {ribbonBtn("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, keyId: "copy" })}
+                    {ribbonBtn("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, keyId: "paste" })}
+                    {ribbonBtn("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, keyId: "cut" })}
+                    {ribbonBtn("copyPath", "Copy path", "copy", () => copyPathsText(hasSel ? selection : folder ? [folder] : [], "Path copied."), {
+                      disabled: !hasSel && !folder,
+                      keyId: "copyPath",
+                    })}
+                  </>,
+                )}
+                {group(
+                  "Organize",
+                  <>
+                    {ribbonBtn("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), {
+                      disabled: !hasSel,
+                      keyId: "delete",
+                      hint: "Shift+click deletes permanently",
+                    })}
+                    {ribbonBtn("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, keyId: "rename" })}
+                  </>,
+                )}
+                {group(
+                  "New",
+                  <>
+                    {ribbonBtn("newFolder", "New folder", "folderOpen", () => useStore.getState().runCommand("newFolder"), { disabled: !inFolder, keyId: "newFolder" })}
+                    {ribbonBtn("new", "New item", "newItem", newMenu, { disabled: !inFolder, caret: true })}
+                  </>,
+                )}
+                {group(
+                  "Open",
+                  <>
+                    {ribbonBtn("properties", "Properties", "info", () => void showProperties(hasSel ? selection : folder ? [folder] : []), {
+                      disabled: !hasSel && !folder,
+                      keyId: "properties",
+                    })}
+                    {ribbonBtn("open", "Open", "folderOpen", () => useStore.getState().runCommand("open"), { disabled: !inFolder || !hasSel, keyId: "open" })}
+                    {ribbonBtn("quickLook", "Quick look", "search", () => useStore.getState().runCommand("quickLook"), { disabled: !inFolder || !hasSel, keyId: "quickLook" })}
+                    {ribbonBtn("permissions", "Permissions", "shield", () => useStore.getState().showPermissions(singleSel ?? (folder ?? "")), {
+                      disabled: selection.length > 1 || (!hasSel && !folder),
+                    })}
+                  </>,
+                )}
+                {group(
+                  "Select",
+                  <>
+                    {ribbonBtn("selectAll", "Select all", "check", () => useStore.getState().runCommand("selectAll"), { disabled: !inFolder, keyId: "selectAll" })}
+                    {ribbonBtn("selectNone", "Select none", "close", () => useStore.getState().runCommand("selectNone"), { disabled: !inFolder || !hasSel })}
+                    {ribbonBtn("invert", "Invert selection", "filter", () => useStore.getState().runCommand("invert"), { disabled: !inFolder, keyId: "invertSelection" })}
+                    {ribbonBtn("selectGroup", "By pattern…", "more", () => useStore.getState().runCommand("selectGroup"), { disabled: !inFolder, keyId: "selectGroup" })}
+                  </>,
+                )}
+              </>
+            )}
+            {ribbonTab === "share" && (
+              <>
+                {group(
+                  "Send",
+                  <>
+                    {ribbonBtn("share", "Share link…", "share", () => useStore.setState({ shareFor: selection }), { disabled: !hasSel })}
+                    {ribbonBtn("zip", "Zip", "archive", () => void compressPaths(selection), { disabled: !hasSel, title: "Compress selected items to ZIP" })}
+                    {ribbonBtn("extract", "Extract", "archive", () => singleSel && void extractArchive(singleSel, false), {
+                      disabled: !singleArchive,
+                      title: "Extract selected archive into its own folder",
+                    })}
+                  </>,
+                )}
+                {group(
+                  "Copy",
+                  <>
+                    {ribbonBtn("copyPath", "Copy path", "copy", () => copyPathsText(hasSel ? selection : folder ? [folder] : [], "Path copied."), {
+                      disabled: !hasSel && !folder,
+                      keyId: "copyPath",
+                    })}
+                    {ribbonBtn("copyName", "Copy name", "rename", () => copyPathsText(selection.map(baseName), "Name copied."), { disabled: !hasSel })}
+                    {ribbonBtn(
+                      "copyLink",
+                      "Copy link",
+                      "share",
+                      () => copyPathsText(selection.map((p) => `file:///${p.replace(/\\/g, "/").replace(/^\//, "")}`.replace(/ /g, "%20")), "Link copied."),
+                      { disabled: !hasSel },
+                    )}
+                  </>,
+                )}
+                {group(
+                  "Tools",
+                  <>
+                    {ribbonBtn(
+                      "shortcut",
+                      "Shortcut",
+                      "forward",
+                      () =>
+                        singleSel &&
+                        void api
+                          .createShortcut(singleSel)
+                          .then(() => showToast("Shortcut created."))
+                          .catch((err) => showToast(String(err))),
+                      { disabled: !singleSel || !localFolder },
+                    )}
+                    {ribbonBtn(
+                      "automate",
+                      "Automate…",
+                      "clock",
+                      () => useStore.getState().openTasks(taskFromSelection(selection, folder)),
+                      { disabled: !localFolder && !hasSel },
+                    )}
+                  </>,
+                )}
+              </>
+            )}
+            {ribbonTab === "view" && (
+              <>
+                {group(
+                  "Panes",
+                  <>
+                    {ribbonBtn(
+                      "sidebar",
+                      "Navigation pane",
+                      "sidebar",
+                      () => updateSettings((s) => void (s.appearance.sidebarCollapsed = !s.appearance.sidebarCollapsed)),
+                      { on: !settings.appearance.sidebarCollapsed, keyId: "toggleSidebar" },
+                    )}
+                    {ribbonBtn(
+                      "details",
+                      "Details pane",
+                      "details",
+                      () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)),
+                      { on: settings.appearance.showDetailsPane, keyId: "toggleDetails" },
+                    )}
+                    {ribbonBtn("terminal", "Terminal", "terminal", toggleTerminalPanel, { on: terminalOpen, keyId: "toggleTerminal" })}
+                  </>,
+                )}
+                {group(
+                  "Layout",
+                  <>
+                    {([...VIEW_LEVELS].reverse()).map((name) =>
+                      ribbonBtn(
+                        `view-${name}`,
+                        name === "xl" ? "Extra large" : name[0].toUpperCase() + name.slice(1),
+                        name === "details" || name === "list" ? "list" : "grid",
+                        () => setViewLevel(VIEW_LEVELS.indexOf(name)),
+                        { on: VIEW_LEVELS[level] === name, title: VIEW_NAMES[name] },
+                      ),
+                    )}
+                  </>,
+                )}
+                {group(
+                  "Current view",
+                  <>
+                    {ribbonBtn("sort", "Sort by", "sort", sortMenu, { disabled: !inFolder, caret: true })}
+                    {ribbonBtn("filter", isFiltering(filter) ? "Filter •" : "Filter", "filter", (e) => onFilter((e.currentTarget as HTMLElement).getBoundingClientRect()), {
+                      disabled: !inFolder,
+                      caret: true,
+                      on: isFiltering(filter),
+                    })}
+                    {ribbonBtn("columns", "Choose columns…", "list", () => useStore.setState({ chooseDetailsOpen: true }), { disabled: !inFolder })}
+                    {ribbonBtn(
+                      "miller",
+                      "Miller columns",
+                      "split",
+                      () => updateSettings((s) => void (s.advanced["view.miller"] = !adv<boolean>(s, "view.miller"))),
+                      { on: adv<boolean>(settings, "view.miller") },
+                    )}
+                  </>,
+                )}
+                {group(
+                  "Show / hide",
+                  <>
+                    <label className="win10-check" title="Show selection checkboxes on items">
+                      <input
+                        type="checkbox"
+                        checked={checkboxes}
+                        onChange={() => updateSettings((s) => void (s.advanced = { ...s.advanced, ["files.checkboxes"]: !checkboxes }))}
+                      />
+                      <span>Item check boxes</span>
+                    </label>
+                    <label className="win10-check" title="Show file name extensions (.txt, .pdf, ...)">
+                      <input
+                        type="checkbox"
+                        checked={settings.general.showExtensions}
+                        onChange={() => updateSettings((s) => void (s.general.showExtensions = !s.general.showExtensions))}
+                      />
+                      <span>File name extensions</span>
+                    </label>
+                    <label className="win10-check" title={tipKey("Show or hide hidden files and folders", "toggleHidden")}>
+                      <input
+                        type="checkbox"
+                        checked={settings.general.showHidden}
+                        onChange={() => updateSettings((s) => void (s.general.showHidden = !s.general.showHidden))}
+                      />
+                      <span>Hidden items</span>
+                    </label>
+                  </>,
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      </div>
+    );
+  }
+
   return (
     <div className="command-bar" role="toolbar" aria-label="Actions" data-vertical={vertical || undefined} data-icons={iconOnly || undefined}>
       {button("new", "New", "newItem", newMenu, { disabled: !inFolder, caret: true })}
       {!only && <span className="cmd-sep" />}
-      {button("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, title: "Cut (Ctrl+X)" })}
-      {button("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, title: "Copy (Ctrl+C)" })}
-      {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: "Paste (Ctrl+V)" })}
-      {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, title: selection.length > 1 ? "Rename the selected items (F2)" : "Rename (F2)" })}
+      {button("cut", "Cut", "cut", () => setClipboard({ paths: selection, op: "move" }), { disabled: !hasSel, title: tipKey("Cut", "cut") })}
+      {button("copy", "Copy", "copy", () => setClipboard({ paths: selection, op: "copy" }), { disabled: !hasSel, title: tipKey("Copy", "copy") })}
+      {button("paste", "Paste", "paste", () => folder && void useStore.getState().pasteInto(folder), { disabled: !inFolder, title: tipKey("Paste", "paste") })}
+      {button("rename", "Rename", "rename", () => useStore.getState().runCommand("rename"), { disabled: selection.length < 1, title: tipKey(selection.length > 1 ? "Rename the selected items" : "Rename", "rename") })}
       {button("share", "Share", "share", share, { disabled: !hasSel, caret: true })}
       {tasksShown && button("tasks", tasksBusy > 0 ? `Tasks (${tasksBusy})` : "Tasks", "clock", () => useStore.getState().openTasks(), { title: tasksBusy > 0 ? `Tasks: ${tasksBusy} running` : "Tasks: automatic copying, moving, cleaning and backups", on: tasksBusy > 0 })}
-      {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: "Delete (Del) — Shift+click deletes permanently" })}
+      {button("delete", "Delete", "trash", (e) => void deletePaths(selection, e.shiftKey), { disabled: !hasSel, title: tipKey("Delete", "delete", "Shift+click deletes permanently") })}
       {!only && <span className="cmd-sep" />}
       {button("sort", "Sort", "sort", sortMenu, { disabled: !inFolder, caret: true })}
       {button("view", "View", "view", viewMenu, { caret: true })}
@@ -1067,8 +1484,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       {!only && <span className="cmd-sep" />}
       {button("more", "", "more", more, { title: "See more" })}
       {!only && <span className="cmd-grow" />}
-      {button("details", "Details", "details", () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)), { on: settings.appearance.showDetailsPane })}
-      {button("settings", "Settings", "settings", () => useStore.getState().openSettings(), { title: "Settings (Ctrl+,)" })}
+      {button("details", "Details", "details", () => updateSettings((s) => void (s.appearance.showDetailsPane = !s.appearance.showDetailsPane)), { on: settings.appearance.showDetailsPane, title: tipKey("Details pane", "toggleDetails") })}
+      {button("settings", "Settings", "settings", () => useStore.getState().openSettings(), { title: tipKey("Settings", "settings") })}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

@@ -62,7 +62,7 @@ describe("phone performance presets", () => {
 describe("phone looks", () => {
   it("are offered on phones only, and the computer looks on computers only", () => {
     expect(uiPresetsFor(true).map((p) => p.id)).toEqual(["google", "samsung", "apple"]);
-    expect(uiPresetsFor(false).map((p) => p.id)).toEqual(["windows", "macos", "linux"]);
+    expect(uiPresetsFor(false).map((p) => p.id)).toEqual(["windows", "windows10", "macos", "linux"]);
     for (const p of UI_PRESETS) expect(p.patch["advanced.ui.chrome"]).toBe(p.id);
   });
 

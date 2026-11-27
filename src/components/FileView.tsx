@@ -460,6 +460,13 @@ export function FileView({ path }: { path: string }) {
     else if (command.name === "paste") paste();
     else if (command.name === "refresh") refresh();
     else if (command.name === "menu") showMenu(window.innerWidth, 0, null);
+    else if (command.name === "open") {
+      const first = entries.find((e) => selected.has(e.name));
+      if (first) open(first);
+    } else if (command.name === "quickLook") {
+      const first = entries.find((e) => selected.has(e.name));
+      if (first && !first.isDir) viewFile(first, true);
+    }
   }, [command?.tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
