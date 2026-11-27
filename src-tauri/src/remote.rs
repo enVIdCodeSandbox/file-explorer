@@ -46,6 +46,7 @@ struct Lease {
 
 impl Lease {
     fn new(st: &Shared, key: &str, fresh: bool) -> Result<Lease, String> {
+        let mut from_saved = false;
         let (server, idle) = {
             let mut remotes = st.remotes.lock();
             if !remotes.contains_key(key) {
@@ -53,6 +54,12 @@ impl Lease {
                 match Location::parse(key) {
                     Ok(loc) if loc.protocol == Protocol::Mtp => {
                         remotes.insert(key.to_string(), Remote { server: loc.server(), idle: Vec::new() });
+                    }
+                    Ok(loc) if matches!(loc.protocol, Protocol::Ssh | Protocol::Sftp) => {
+                        if let Some(saved) = saved_ssh_server(st, key) {
+                            from_saved = true;
+                            remotes.insert(key.to_string(), Remote { server: saved, idle: Vec::new() });
+                        }
                     }
                     _ => {}
                 }
@@ -65,7 +72,20 @@ impl Lease {
             Some(s) => s,
             None => {
                 apply_proxy(st);
-                remote::connect(&server, &st.paths.known_hosts).map_err(err)?
+                match remote::connect(&server, &st.paths.known_hosts) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if from_saved {
+                            st.remotes.lock().remove(key);
+                            let msg = err(e);
+                            if server.password.is_empty() && (msg.contains("key file") || msg.contains("did not accept the login")) {
+                                return Err(format!("{NEEDS_LOGIN}{key}"));
+                            }
+                            return Err(msg);
+                        }
+                        return Err(err(e));
+                    }
+                }
             }
         };
         Ok(Lease { st: st.clone(), key: key.to_string(), session: Some(session), from_pool, broken: false })
@@ -124,7 +144,13 @@ fn apply_proxy(st: &Shared) {
 /// Log in to a server. Returns the address of `path`, or of the server's
 /// starting folder when `path` is empty.
 #[tauri::command]
-pub async fn remote_connect(state: State<'_, Shared>, server: Server, path: Option<String>) -> CmdResult<String> {
+pub async fn remote_connect(
+    state: State<'_, Shared>,
+    server: Server,
+    path: Option<String>,
+    save_login: Option<bool>,
+    save_passphrase: Option<bool>,
+) -> CmdResult<String> {
     let st = state.inner().clone();
     blocking(move || {
         apply_proxy(&st);
@@ -139,6 +165,30 @@ pub async fn remote_connect(state: State<'_, Shared>, server: Server, path: Opti
         let key = loc.key();
         let mut remembered = server;
         remembered.trust = None;
+        if matches!(loc.protocol, Protocol::Ssh | Protocol::Sftp) {
+            let (allow_login, allow_pass) = {
+                let s = st.settings.read();
+                (s.remember_ssh_logins, s.remember_ssh_passphrase)
+            };
+            let persist_login = allow_login && save_login.unwrap_or(true);
+            let persist_pass = persist_login && allow_pass && save_passphrase.unwrap_or(true);
+            if persist_login {
+                upsert_credential(
+                    &st.paths.ssh_logins,
+                    SavedCredential {
+                        key: key.clone(),
+                        protocol: remembered.protocol,
+                        host: remembered.host.clone(),
+                        port: remembered.port,
+                        user: remembered.user.clone(),
+                        key_file: remembered.key_file.clone().filter(|k| !k.trim().is_empty()),
+                        passphrase: if persist_pass { remembered.password.clone() } else { String::new() },
+                    },
+                )?;
+            } else if save_login == Some(false) {
+                let _ = remove_credential(&st.paths.ssh_logins, &key);
+            }
+        }
         st.remotes.lock().insert(key, Remote { server: remembered, idle: vec![session] });
         Ok(loc.url())
     })
@@ -160,9 +210,9 @@ pub async fn remote_is_connected(state: State<'_, Shared>, location: String) -> 
     Ok(state.remotes.lock().contains_key(&key))
 }
 
-/// In-memory server credentials/options for a connected remote key (`ssh://user@host`).
+/// Server credentials/options for a connected or opted-in saved SSH key (`ssh://user@host`).
 pub fn server_for(st: &Shared, key: &str) -> Option<Server> {
-    st.remotes.lock().get(key).map(|r| r.server.clone())
+    st.remotes.lock().get(key).map(|r| r.server.clone()).or_else(|| saved_ssh_server(st, key))
 }
 
 pub fn list(st: &Shared, url: &str) -> CmdResult<Listing> {
@@ -368,7 +418,11 @@ pub async fn servers_list(state: State<'_, Shared>) -> CmdResult<Vec<SavedServer
 }
 
 #[tauri::command]
-pub async fn servers_save(state: State<'_, Shared>, entry: SavedServer, previous_name: Option<String>) -> CmdResult<Vec<SavedServer>> {
+pub async fn servers_save(state: State<'_, Shared>, mut entry: SavedServer, previous_name: Option<String>) -> CmdResult<Vec<SavedServer>> {
+    // Only keep SSH key file locations between sessions when explicitly enabled.
+    if !state.settings.read().remember_ssh_logins && matches!(entry.protocol, Protocol::Ssh | Protocol::Sftp) {
+        entry.key_file = None;
+    }
     let mut list = load_saved(&state.paths.servers);
     let prev = previous_name.as_deref().map(str::trim).filter(|n| !n.is_empty());
     list.retain(|s| s.name != entry.name && prev.is_none_or(|p| s.name != p));
@@ -416,6 +470,158 @@ pub async fn servers_forget_host(state: State<'_, Shared>, host: String, port: u
     let text = std::fs::read_to_string(file).unwrap_or_default();
     let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with(&wanted)).collect();
     std::fs::write(file, kept.join("\n") + if kept.is_empty() { "" } else { "\n" }).map_err(err)
+}
+
+// ---------------------------------------------------------------------------
+// Saved SSH keys, logins and consented passphrases (opt-in only)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedCredential {
+    pub key: String,
+    pub protocol: Protocol,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub key_file: Option<String>,
+    /// Saved ONLY when `remember_ssh_passphrase` consent is enabled.
+    #[serde(default)]
+    pub passphrase: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SshCredentialStatus {
+    pub count: usize,
+    pub with_passphrase: usize,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SshCredentialLookup {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_file: Option<String>,
+    pub has_passphrase: bool,
+}
+
+fn load_credentials(path: &Path) -> Vec<SavedCredential> {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn store_credentials(path: &Path, list: &[SavedCredential]) -> CmdResult<()> {
+    if list.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body = serde_json::to_string_pretty(list).map_err(err)?;
+    std::fs::write(path, body).map_err(err)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn upsert_credential(path: &Path, entry: SavedCredential) -> CmdResult<()> {
+    let mut list = load_credentials(path);
+    list.retain(|c| c.key != entry.key);
+    list.push(entry);
+    store_credentials(path, &list)
+}
+
+fn remove_credential(path: &Path, key: &str) -> CmdResult<()> {
+    let mut list = load_credentials(path);
+    list.retain(|c| c.key != key);
+    store_credentials(path, &list)
+}
+
+fn strip_passphrases(path: &Path) -> CmdResult<()> {
+    let mut list = load_credentials(path);
+    for c in &mut list {
+        c.passphrase.clear();
+    }
+    store_credentials(path, &list)
+}
+
+fn saved_ssh_server(st: &Shared, key: &str) -> Option<Server> {
+    let (allow_login, allow_pass) = {
+        let s = st.settings.read();
+        (s.remember_ssh_logins, s.remember_ssh_passphrase)
+    };
+    if !allow_login {
+        return None;
+    }
+    let cred = load_credentials(&st.paths.ssh_logins).into_iter().find(|c| c.key == key)?;
+    Some(Server {
+        protocol: cred.protocol,
+        host: cred.host,
+        port: cred.port,
+        user: cred.user,
+        password: if allow_pass { cred.passphrase } else { String::new() },
+        key_file: cred.key_file,
+        tls: false,
+        trust: None,
+    })
+}
+
+#[tauri::command]
+pub async fn ssh_credentials_status(state: State<'_, Shared>) -> CmdResult<SshCredentialStatus> {
+    if !state.settings.read().remember_ssh_logins {
+        return Ok(SshCredentialStatus { count: 0, with_passphrase: 0 });
+    }
+    let list = load_credentials(&state.paths.ssh_logins);
+    let with_passphrase = if state.settings.read().remember_ssh_passphrase {
+        list.iter().filter(|c| !c.passphrase.is_empty()).count()
+    } else {
+        0
+    };
+    Ok(SshCredentialStatus { count: list.len(), with_passphrase })
+}
+
+#[tauri::command]
+pub async fn ssh_credentials_lookup(state: State<'_, Shared>, location: String) -> CmdResult<Option<SshCredentialLookup>> {
+    if !state.settings.read().remember_ssh_logins {
+        return Ok(None);
+    }
+    let Ok(loc) = Location::parse(&location) else { return Ok(None) };
+    let key = loc.key();
+    let allow_pass = state.settings.read().remember_ssh_passphrase;
+    Ok(load_credentials(&state.paths.ssh_logins).into_iter().find(|c| c.key == key).map(|c| SshCredentialLookup {
+        host: c.host,
+        port: c.port,
+        user: c.user,
+        key_file: c.key_file,
+        has_passphrase: allow_pass && !c.passphrase.is_empty(),
+    }))
+}
+
+#[tauri::command]
+pub async fn ssh_credentials_clear(state: State<'_, Shared>, clear_keys: bool) -> CmdResult<Vec<SavedServer>> {
+    if clear_keys {
+        let _ = std::fs::remove_file(&state.paths.ssh_logins);
+        let mut servers = load_saved(&state.paths.servers);
+        let mut changed = false;
+        for s in &mut servers {
+            if matches!(s.protocol, Protocol::Ssh | Protocol::Sftp) && s.key_file.is_some() {
+                s.key_file = None;
+                changed = true;
+            }
+        }
+        if changed {
+            store_saved(&state.paths.servers, &servers)?;
+        }
+        return Ok(servers);
+    }
+    strip_passphrases(&state.paths.ssh_logins)?;
+    Ok(load_saved(&state.paths.servers))
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,4 +1487,36 @@ pub async fn remote_stage_start(app: AppHandle, state: State<'_, Shared>, source
         out.failed = tally.failed;
         Ok(out)
     })
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn saves_looks_up_and_strips_ssh_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ssh-logins.json");
+        let cred = SavedCredential {
+            key: "ssh://me@example.com".into(),
+            protocol: Protocol::Ssh,
+            host: "example.com".into(),
+            port: 22,
+            user: "me".into(),
+            key_file: Some("/home/me/.ssh/id_ed25519".into()),
+            passphrase: "secret".into(),
+        };
+        upsert_credential(&file, cred.clone()).unwrap();
+        assert_eq!(load_credentials(&file), vec![cred]);
+
+        strip_passphrases(&file).unwrap();
+        let loaded = load_credentials(&file);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].key_file.as_deref(), Some("/home/me/.ssh/id_ed25519"));
+        assert!(loaded[0].passphrase.is_empty());
+
+        remove_credential(&file, "ssh://me@example.com").unwrap();
+        assert!(load_credentials(&file).is_empty());
+        assert!(!file.exists());
+    }
 }

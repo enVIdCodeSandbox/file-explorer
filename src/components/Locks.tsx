@@ -8,9 +8,9 @@
 // unreadable to others, use disk or file encryption.
 
 import { useEffect, useRef, useState } from "react";
-import { api, type LocksState } from "../api";
+import { api, type LocksState, type SshCredentialStatus } from "../api";
 import { adv } from "../settings/advanced";
-import { useStore } from "../store";
+import { ask, useStore } from "../store";
 import { Icon } from "./Icons";
 
 const MIN_PASSCODE = 4;
@@ -337,6 +337,136 @@ export function DeleteGuardPanel() {
         )}
       </div>
       {message && <p className="muted">{message}</p>}
+    </div>
+  );
+}
+
+/** Explicit, high-visibility consent prompt before allowing SSH keys/logins to be saved across sessions. */
+export async function confirmSaveSshLogins(): Promise<boolean> {
+  const r = await ask({
+    title: "Not recommended: Save SSH keys and logins?",
+    message:
+      "IT IS HIGHLY RECOMMENDED NOT TO ENABLE THIS.\n\n" +
+      "Saving your SSH key file location, username, and server lets FAST File Explorer reconnect automatically after closing and reopening the app. Anyone who can use this account or read your app data folder could reach those SSH servers without signing in again.\n\n" +
+      "Only turn this on if you understand and accept the risk. You can disable it anytime in Settings > Privacy and locks.",
+    buttons: [
+      { id: "cancel", label: "Keep disabled (recommended)", primary: true },
+      { id: "enable", label: "I understand the risk — enable", danger: true },
+    ],
+  });
+  return r?.button === "enable";
+}
+
+/** Explicit consent prompt before saving SSH key passphrases or login passwords between sessions. */
+export async function confirmSaveSshPassphrase(): Promise<boolean> {
+  const r = await ask({
+    title: "Not recommended: Save SSH key passphrases?",
+    message:
+      "IT IS HIGHLY RECOMMENDED NOT TO SAVE PASSPHRASES.\n\n" +
+      "Saving your key passphrase or login password stores it on this computer between sessions. Anyone able to read your app data folder could unlock your SSH key without knowing your passphrase.\n\n" +
+      "Only consent if you accept this risk. You can disable it anytime in Settings > Privacy and locks.",
+    buttons: [
+      { id: "cancel", label: "Do not save passphrase (recommended)", primary: true },
+      { id: "enable", label: "I consent — save passphrase", danger: true },
+    ],
+  });
+  return r?.button === "enable";
+}
+
+/** Toggle saving SSH key paths/logins between sessions, prompting with a warning on enable and clearing saved credentials on disable. */
+export async function toggleRememberSshLogins(enable: boolean): Promise<boolean> {
+  const st = useStore.getState();
+  if (enable) {
+    const ok = await confirmSaveSshLogins();
+    if (!ok) return false;
+    await st.updateSettings((s) => {
+      s.rememberSshLogins = true;
+    });
+    return true;
+  }
+  await st.updateSettings((s) => {
+    s.rememberSshLogins = false;
+    s.rememberSshPassphrase = false;
+  });
+  const servers = await api.sshCredentialsClear(true).catch(() => null);
+  if (servers) st.setServers(servers);
+  return true;
+}
+
+/** Toggle saving SSH key passphrases/passwords between sessions, clearing stored passphrases on disable. */
+export async function toggleRememberSshPassphrase(enable: boolean): Promise<boolean> {
+  const st = useStore.getState();
+  if (enable) {
+    if (!st.settings?.rememberSshLogins) {
+      const okLogin = await toggleRememberSshLogins(true);
+      if (!okLogin) return false;
+    }
+    const ok = await confirmSaveSshPassphrase();
+    if (!ok) return false;
+    await st.updateSettings((s) => {
+      s.rememberSshPassphrase = true;
+    });
+    return true;
+  }
+  await st.updateSettings((s) => {
+    s.rememberSshPassphrase = false;
+  });
+  await api.sshCredentialsClear(false).catch(() => null);
+  return true;
+}
+
+/** Settings > Privacy and locks: opt-in persistence for SSH key paths, usernames, servers, and consented passphrases. */
+export function SshLoginsPanel() {
+  const rememberLogins = useStore((s) => !!s.settings?.rememberSshLogins);
+  const rememberPassphrase = useStore((s) => !!s.settings?.rememberSshPassphrase);
+  const [status, setStatus] = useState<SshCredentialStatus>({ count: 0, withPassphrase: 0 });
+  const refresh = () => void api.sshCredentialsStatus().then(setStatus).catch(() => {});
+  useEffect(refresh, [rememberLogins, rememberPassphrase]);
+
+  const clearAll = async () => {
+    const servers = await api.sshCredentialsClear(true).catch(() => null);
+    if (servers) useStore.getState().setServers(servers);
+    refresh();
+    useStore.getState().showToast("Saved SSH logins and passphrases cleared.");
+  };
+
+  return (
+    <div className="locks-panel">
+      <div className="update-failed" role="note">
+        <strong>Highly recommended not to turn this on</strong>
+        <p>
+          Saving SSH key file locations, usernames, servers, or passphrases lets FAST File Explorer reconnect automatically after you close and reopen the app. Anyone who can access this user account or app data folder could connect to those servers without asking. Keep these options off unless you understand the risk.
+        </p>
+      </div>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={rememberLogins}
+          onChange={(e) => void toggleRememberSshLogins(e.target.checked).then(refresh)}
+        />
+        <span>Save SSH key file location, username, and server between sessions</span>
+      </label>
+      <label className="check-row" style={{ marginLeft: 20 }}>
+        <input
+          type="checkbox"
+          checked={rememberPassphrase}
+          disabled={!rememberLogins}
+          onChange={(e) => void toggleRememberSshPassphrase(e.target.checked).then(refresh)}
+        />
+        <span>Also save the key passphrase / password between sessions (requires explicit consent)</span>
+      </label>
+      <div className="button-row">
+        <span className="muted">
+          {status.count === 0
+            ? "No SSH logins or passphrases are saved on disk."
+            : `${status.count} saved SSH login${status.count === 1 ? "" : "s"}${status.withPassphrase > 0 ? ` (${status.withPassphrase} with passphrase saved)` : " (passphrase not saved)"}.`}
+        </span>
+        {status.count > 0 && (
+          <button className="secondary" onClick={() => void clearAll()}>
+            Clear saved credentials
+          </button>
+        )}
+      </div>
     </div>
   );
 }

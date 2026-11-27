@@ -5,6 +5,7 @@ import { useTerminal } from "../terminal/state";
 import { pickFile, sshFolder } from "../util/pickFile";
 import { rawRemoteLabel, splitRemote } from "../util/path";
 import { migrateServerIcon } from "./driveActions";
+import { toggleRememberSshLogins, toggleRememberSshPassphrase } from "./Locks";
 
 const PROTOCOLS: { id: ServerProtocol; label: string }[] = [
   { id: "sftp", label: "SFTP (SSH)" },
@@ -66,16 +67,37 @@ export function ConnectServer() {
   const [error, setError] = useState<string | null>(null);
   /** A server key that has to be confirmed before logging in. */
   const [confirm, setConfirm] = useState<{ fingerprint: string; changed: boolean } | null>(null);
+  const [saveLogin, setSaveLogin] = useState(false);
+  const [savePassphrase, setSavePassphrase] = useState(false);
   const hostRef = useRef<HTMLInputElement>(null);
   const passRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!request) return;
-    const base = request.saved ? fieldsFromSaved(request.saved) : request.url ? fieldsFromUrl(request.url) : {};
+    const st = useStore.getState();
+    const allowLogin = !!st.settings?.rememberSshLogins;
+    const allowPass = allowLogin && !!st.settings?.rememberSshPassphrase;
+    let base: Partial<Fields> = request.saved ? fieldsFromSaved(request.saved) : request.url ? fieldsFromUrl(request.url) : {};
+    if (!request.saved && request.url && base.host && base.protocol) {
+      const defPort = DEFAULT_PORT(base.protocol, !!base.tls);
+      const wantPort = base.port ? Number(base.port) : defPort;
+      const match = st.servers.find(
+        (sv) => sv.protocol === base.protocol && sv.host === base.host && sv.port === wantPort && sv.user === (base.user ?? ""),
+      );
+      if (match) base = { ...fieldsFromSaved(match), ...base, keyFile: match.keyFile ?? base.keyFile ?? "", name: match.name };
+    }
     setF({ ...EMPTY, ...base, remember: !request.url || !!request.saved });
+    setSaveLogin(allowLogin);
+    setSavePassphrase(allowPass);
     setBusy(false);
     setError(request.message ?? null);
     setConfirm(null);
+    if (!request.saved && request.url && allowLogin && (base.protocol === "ssh" || base.protocol === "sftp")) {
+      void api.sshCredentialsLookup(request.url).then((cred) => {
+        if (!cred) return;
+        setF((cur) => (cur.keyFile ? cur : { ...cur, keyFile: cred.keyFile ?? "" }));
+      }).catch(() => {});
+    }
     setTimeout(() => (base.host ? passRef.current : hostRef.current)?.focus(), 0);
   }, [request]);
 
@@ -95,7 +117,12 @@ export function ConnectServer() {
     const usesSshKey = f.protocol === "sftp" || f.protocol === "ssh";
     const server: Server = { protocol: f.protocol, host: f.host.trim(), port, user: f.user.trim(), password: f.password, keyFile: usesSshKey && f.keyFile.trim() ? f.keyFile.trim() : null, tls: f.protocol === "dav" && f.tls, trust: trust ?? null };
     try {
-      const url = await api.remoteConnect(server, f.path.trim() || undefined);
+      const url = await api.remoteConnect(
+        server,
+        f.path.trim() || undefined,
+        usesSshKey ? saveLogin : undefined,
+        usesSshKey ? saveLogin && savePassphrase : undefined,
+      );
       if (f.remember) {
         const previous = request.saved?.name;
         const entry: SavedServer = { name: f.name.trim() || rawRemoteLabel(url), protocol: server.protocol, host: server.host, port: server.port, user: server.user, tls: server.tls, keyFile: server.keyFile, path: f.path.trim() };
@@ -235,7 +262,76 @@ export function ConnectServer() {
             </label>
           )}
         </div>
-        <p className="batch-hint muted">The password is only used for this session. It is never saved.</p>
+        {(f.protocol === "ssh" || f.protocol === "sftp") ? (
+          <>
+            <label className="check-row" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={saveLogin}
+                onChange={(e) => {
+                  const want = e.target.checked;
+                  if (!want) {
+                    setSaveLogin(false);
+                    setSavePassphrase(false);
+                    return;
+                  }
+                  if (useStore.getState().settings?.rememberSshLogins) {
+                    setSaveLogin(true);
+                  } else {
+                    void toggleRememberSshLogins(true).then((ok) => ok && setSaveLogin(true));
+                  }
+                }}
+              />
+              <span>Save SSH key location, username and server between sessions</span>
+            </label>
+            {saveLogin && (
+              <label className="check-row" style={{ marginLeft: 20 }}>
+                <input
+                  type="checkbox"
+                  checked={savePassphrase}
+                  onChange={(e) => {
+                    const want = e.target.checked;
+                    if (!want) {
+                      setSavePassphrase(false);
+                      return;
+                    }
+                    if (useStore.getState().settings?.rememberSshPassphrase) {
+                      setSavePassphrase(true);
+                    } else {
+                      void toggleRememberSshPassphrase(true).then((ok) => ok && setSavePassphrase(true));
+                    }
+                  }}
+                />
+                <span>Also save key passphrase / password between sessions</span>
+              </label>
+            )}
+            {saveLogin && (
+              <p className="connect-warning" role="note">
+                Warning: saving SSH logins{savePassphrase ? " and passphrases" : ""} lets anyone on this account reconnect automatically. You can turn this off anytime in Settings → Privacy and locks.
+              </p>
+            )}
+            <p className="batch-hint muted">
+              {saveLogin
+                ? savePassphrase
+                  ? "Key path, username, server, and passphrase will be saved until you turn it off in Settings > Privacy and locks."
+                  : "Key path, username, and server will be saved (passphrase is not saved). Manage or disable in Settings > Privacy and locks."
+                : "Highly recommended to leave off. You can enable or disable saving SSH logins and passphrases in Settings > Privacy and locks."}{" "}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  close();
+                  useStore.setState({ settingsSection: "Privacy and locks" });
+                  useStore.getState().openSettings();
+                }}
+              >
+                Open Settings
+              </button>
+            </p>
+          </>
+        ) : (
+          <p className="batch-hint muted">The password is only used for this session. It is never saved.</p>
+        )}
 
         <div className="dialog-buttons">
           <button className="primary" onClick={() => void connect()} disabled={!valid || busy}>{busy ? "Connecting…" : "Connect"}</button>

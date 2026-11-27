@@ -34,6 +34,10 @@ pub struct Settings {
     pub active_profile: String,
     /// False until the person has been through the first-run setup.
     pub setup_done: bool,
+    /// Off by default. Saves SSH key file path, username and server across app restarts.
+    pub remember_ssh_logins: bool,
+    /// Off by default. Also saves SSH key passphrases/passwords across restarts when consented.
+    pub remember_ssh_passphrase: bool,
     /// What the person decided about macOS folder permissions (see `access.rs`).
     pub mac_access: MacAccess,
 }

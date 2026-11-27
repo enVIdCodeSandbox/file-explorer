@@ -706,8 +706,25 @@ export interface Settings {
   activeProfile: string;
   /** False until the first-run setup has been completed or skipped. */
   setupDone: boolean;
+  /** Off by default. Saves SSH key file path, username and server between sessions. */
+  rememberSshLogins?: boolean;
+  /** Off by default. Also saves SSH key passphrases/passwords between sessions when consented. */
+  rememberSshPassphrase?: boolean;
   /** What the person decided about macOS folder permissions. */
   macAccess: MacAccessSettings;
+}
+
+export interface SshCredentialStatus {
+  count: number;
+  withPassphrase: number;
+}
+
+export interface SshCredentialLookup {
+  host: string;
+  port: number;
+  user: string;
+  keyFile?: string | null;
+  hasPassphrase: boolean;
 }
 
 export interface MacAccessSettings {
@@ -987,7 +1004,8 @@ export const api = {
   /** With a ticket, the folder's items also arrive as `dir-chunk` events while it is read. */
   listDir: (path: string, ticket?: number) => invoke<Listing>("list_dir", { path, ticket }),
   listDirCancel: (ticket: number) => invoke<void>("list_dir_cancel", { ticket }),
-  remoteConnect: (server: Server, path?: string) => invoke<string>("remote_connect", { server, path: path ?? null }),
+  remoteConnect: (server: Server, path?: string, saveLogin?: boolean, savePassphrase?: boolean) =>
+    invoke<string>("remote_connect", { server, path: path ?? null, saveLogin: saveLogin ?? null, savePassphrase: savePassphrase ?? null }),
   remoteDisconnect: (location: string) => invoke<void>("remote_disconnect", { location }),
   remoteIsConnected: (location: string) => invoke<boolean>("remote_is_connected", { location }),
   remoteMkdir: (parent: string, name: string) => invoke<string>("remote_mkdir", { parent, name }),
@@ -1011,6 +1029,9 @@ export const api = {
   serversRename: (oldName: string, newName: string) => invoke<SavedServer[]>("servers_rename", { oldName, newName }),
   serversRemove: (name: string) => invoke<SavedServer[]>("servers_remove", { name }),
   serversForgetHost: (host: string, port: number) => invoke<void>("servers_forget_host", { host, port }),
+  sshCredentialsStatus: () => invoke<SshCredentialStatus>("ssh_credentials_status"),
+  sshCredentialsLookup: (location: string) => invoke<SshCredentialLookup | null>("ssh_credentials_lookup", { location }),
+  sshCredentialsClear: (clearKeys: boolean) => invoke<SavedServer[]>("ssh_credentials_clear", { clearKeys }),
   prefetch: (paths: string[]) => invoke<void>("prefetch", { paths }),
   recordVisit: (from: string | null, to: string) => invoke<string[]>("record_visit", { from, to }),
   statMany: (paths: string[]) => invoke<LiveStat[]>("stat_many", { paths }),

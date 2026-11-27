@@ -47,6 +47,8 @@ pub struct Paths {
     pub known_hosts: PathBuf,
     /// Saved server addresses (never passwords).
     pub servers: PathBuf,
+    /// Opt-in SSH key locations, usernames and consented passphrases saved between sessions.
+    pub ssh_logins: PathBuf,
     /// Files fetched from a server to open them.
     pub remote_tmp: PathBuf,
     /// Automated tasks, what they have done, and where the scheduler had got to.
@@ -84,6 +86,7 @@ impl Paths {
             thumbs: cache.join("thumbnails"),
             known_hosts: config.join("known_hosts"),
             servers: config.join("servers.json"),
+            ssh_logins: config.join("ssh-logins.json"),
             remote_tmp: cache.join("remote"),
             tasks: config.join("tasks.json"),
             task_history: config.join("task-history.jsonl"),

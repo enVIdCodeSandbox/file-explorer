@@ -15,7 +15,7 @@ import { useStore } from "../store";
 import { adv } from "../settings/advanced";
 import { MENU_CATALOG } from "./ContextMenu";
 import { Icon } from "./Icons";
-import { DeleteGuardPanel, LocksPanel } from "./Locks";
+import { DeleteGuardPanel, LocksPanel, SshLoginsPanel } from "./Locks";
 import { MacAccessPanel } from "./MacAccess";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
@@ -136,6 +136,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <ResourcesPanel />;
     case "locks":
       return <LocksPanel />;
+    case "sshLogins":
+      return <SshLoginsPanel />;
     case "deleteGuard":
       return <DeleteGuardPanel />;
     case "macAccess":

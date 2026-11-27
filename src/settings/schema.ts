@@ -25,6 +25,7 @@ export type Control =
   | { type: "profiles" }
   | { type: "resources" }
   | { type: "locks" }
+  | { type: "sshLogins" }
   | { type: "macAccess" }
   | { type: "deleteGuard" }
   | { type: "defaultFm" }
@@ -228,6 +229,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "privacy.locks", section: "Privacy and locks", label: "Locked folders and drives", description: "Passcodes that keep folders and drives closed inside this app.", control: { type: "locks" }, keywords: "passcode password lock protect private secure hide" },
 
   { key: "privacy.deleteGuard", section: "Privacy and locks", label: "Password for deleting for good", description: "Off by default. Asks for a password before anything is deleted permanently, so nothing goes by accident.", control: { type: "deleteGuard" }, keywords: "password permanent delete shift delete confirm protect accident empty trash recycle bin" },
+  { key: "privacy.sshLogins", section: "Privacy and locks", label: "Save SSH keys and logins between sessions", description: "Off by default (highly recommended to leave off). Optionally saves SSH key file paths, usernames, servers and passphrases across restarts.", control: { type: "sshLogins" }, keywords: "ssh sftp key passphrase password login save remember credentials server" },
   { key: "privacy.mac", section: "macOS permissions", label: "Full Disk Access and folder permissions", description: "One switch so macOS stops asking folder by folder, whether it is working, and what the app may search in the background.", control: { type: "macAccess" }, os: ["macos"], keywords: "permission full disk access mac macos privacy allow folders desktop documents downloads prompt" },
 
   // ---- Right-click menu ----
