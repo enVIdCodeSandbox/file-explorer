@@ -483,7 +483,7 @@ export interface JobStats {
   samples: number;
 }
 
-export type ServerProtocol = "ftp" | "sftp" | "dav";
+export type ServerProtocol = "ftp" | "sftp" | "ssh" | "dav";
 
 /** Everything needed to log in to a server. The password is never saved. */
 export interface Server {

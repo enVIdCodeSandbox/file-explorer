@@ -13,6 +13,7 @@ mod http;
 pub mod mtp;
 pub mod proxy;
 mod sftp;
+pub mod ssh;
 mod webdav;
 
 use crate::error::{CoreError, Result};
@@ -25,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub enum Protocol {
     Ftp,
     Sftp,
+    Ssh,
     /// WebDAV over HTTP or HTTPS.
     Dav,
     /// A phone, camera or player plugged in (see [`mtp`]); the host is the device's key.
@@ -35,7 +37,7 @@ impl Protocol {
     pub fn default_port(self, tls: bool) -> u16 {
         match (self, tls) {
             (Protocol::Ftp, _) => 21,
-            (Protocol::Sftp, _) => 22,
+            (Protocol::Sftp | Protocol::Ssh, _) => 22,
             (Protocol::Dav, false) => 80,
             (Protocol::Dav, true) => 443,
             (Protocol::Mtp, _) => 0,
@@ -71,6 +73,7 @@ impl Server {
         let scheme = match (self.protocol, self.tls) {
             (Protocol::Ftp, _) => "ftp",
             (Protocol::Sftp, _) => "sftp",
+            (Protocol::Ssh, _) => "ssh",
             (Protocol::Dav, false) => "dav",
             (Protocol::Dav, true) => "davs",
             (Protocol::Mtp, _) => "mtp",
@@ -101,7 +104,7 @@ pub struct Location {
 
 /// Whether text is the address of something on a server.
 pub fn is_remote(s: &str) -> bool {
-    ["ftp://", "sftp://", "dav://", "davs://", "mtp://"].iter().any(|p| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p))
+    ["ftp://", "sftp://", "ssh://", "dav://", "davs://", "mtp://"].iter().any(|p| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p))
 }
 
 /// Whether text is the address of something on a plugged-in device (a phone or camera).
@@ -116,6 +119,7 @@ impl Location {
         let (protocol, tls) = match scheme.to_ascii_lowercase().as_str() {
             "ftp" => (Protocol::Ftp, false),
             "sftp" => (Protocol::Sftp, false),
+            "ssh" => (Protocol::Ssh, false),
             "dav" => (Protocol::Dav, false),
             "davs" => (Protocol::Dav, true),
             "mtp" => (Protocol::Mtp, false),
@@ -312,6 +316,7 @@ pub fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Session>> 
     match server.protocol {
         Protocol::Ftp => ftp::connect(server),
         Protocol::Sftp => sftp::connect(server, known_hosts),
+        Protocol::Ssh => ssh::connect(server, known_hosts),
         Protocol::Dav => webdav::connect(server),
         Protocol::Mtp => mtp::connect(&server.host),
     }
@@ -688,10 +693,13 @@ mod tests {
     #[test]
     fn recognizes_server_addresses_only() {
         assert!(is_remote("sftp://h/x"));
+        assert!(is_remote("ssh://u@h/x"));
         assert!(is_remote("FTP://h"));
         assert!(!is_remote("/home/x"));
         assert!(!is_remote("C:\\x"));
         assert!(!is_remote("https://h"));
+        let s = Location::parse("ssh://me@example.com:2222/var/www").unwrap();
+        assert_eq!((s.protocol, s.port, s.path.as_str()), (Protocol::Ssh, 2222, "/var/www"));
     }
 
     #[test]

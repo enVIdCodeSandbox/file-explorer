@@ -14,7 +14,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 
-struct Client {
+pub(super) struct Client {
     /// The fingerprint that is acceptable, if any.
     accept: Option<String>,
     /// The fingerprint the server showed.
@@ -45,7 +45,7 @@ struct Sftp {
     raw_failed: bool,
 }
 
-pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Session>> {
+pub(super) fn connect_handle(server: &Server, known_hosts: &Path) -> Result<(Runtime, Handle<Client>)> {
     // One background thread keeps the connection alive between calls.
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().map_err(fail)?;
     let known = known_host(known_hosts, &server.host, server.port);
@@ -55,7 +55,7 @@ pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Ses
     let handler = Client { accept, seen: seen.clone() };
     let config = Arc::new(client::Config { inactivity_timeout: Some(Duration::from_secs(3600)), keepalive_interval: Some(Duration::from_secs(30)), ..Default::default() });
 
-    let (handle, sftp) = rt.block_on(async {
+    let handle = rt.block_on(async {
         let addr = (server.host.as_str(), server.port);
         // Through the proxy, when one is set: the connection is made first and handed to the SSH client.
         let connecting = async {
@@ -97,10 +97,7 @@ pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Ses
         if !authed.success() {
             return Err(fail("The server did not accept the login (check the user name and password or key)."));
         }
-        let channel = handle.channel_open_session().await.map_err(fail)?;
-        channel.request_subsystem(true, "sftp").await.map_err(|_| fail("The server does not offer SFTP."))?;
-        let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| fail(format!("Could not start SFTP: {e}")))?;
-        Ok((handle, sftp))
+        Ok(handle)
     })?;
 
     // The key was acceptable: remember it (a no-op when it was already known).
@@ -109,7 +106,24 @@ pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Ses
             remember_host(known_hosts, &server.host, server.port, &fp);
         }
     }
-    Ok(Box::new(Sftp { rt, _handle: handle, sftp, raw: None, raw_failed: false }))
+    Ok((rt, handle))
+}
+
+pub(super) fn try_from_handle(rt: Runtime, handle: Handle<Client>) -> std::result::Result<Box<dyn Session>, (Runtime, Handle<Client>, CoreError)> {
+    let opened = rt.block_on(async {
+        let channel = handle.channel_open_session().await.map_err(fail)?;
+        channel.request_subsystem(true, "sftp").await.map_err(|_| fail("The server does not offer SFTP."))?;
+        SftpSession::new(channel.into_stream()).await.map_err(|e| fail(format!("Could not start SFTP: {e}")))
+    });
+    match opened {
+        Ok(sftp) => Ok(Box::new(Sftp { rt, _handle: handle, sftp, raw: None, raw_failed: false })),
+        Err(e) => Err((rt, handle, e)),
+    }
+}
+
+pub(super) fn connect(server: &Server, known_hosts: &Path) -> Result<Box<dyn Session>> {
+    let (rt, handle) = connect_handle(server, known_hosts)?;
+    try_from_handle(rt, handle).map_err(|(_, _, e)| e)
 }
 
 fn sftp_err(path: &str, e: russh_sftp::client::error::Error) -> CoreError {

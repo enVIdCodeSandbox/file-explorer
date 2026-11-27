@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type SavedServer, type Server, type ServerProtocol } from "../api";
 import { useStore } from "../store";
+import { useTerminal } from "../terminal/state";
 import { pickFile, sshFolder } from "../util/pickFile";
 import { rawRemoteLabel, splitRemote } from "../util/path";
 
 const PROTOCOLS: { id: ServerProtocol; label: string }[] = [
   { id: "sftp", label: "SFTP (SSH)" },
+  { id: "ssh", label: "SSH" },
   { id: "ftp", label: "FTP" },
   { id: "dav", label: "WebDAV" },
 ];
 
-const DEFAULT_PORT = (p: ServerProtocol, tls: boolean) => (p === "ftp" ? 21 : p === "sftp" ? 22 : tls ? 443 : 80);
+const DEFAULT_PORT = (p: ServerProtocol, tls: boolean) => (p === "ftp" ? 21 : p === "sftp" || p === "ssh" ? 22 : tls ? 443 : 80);
 
 interface Fields {
   protocol: ServerProtocol;
@@ -40,7 +42,7 @@ export function fieldsFromUrl(url: string): Partial<Fields> {
   const colon = hostport.lastIndexOf(":");
   const hasPort = colon > 0 && /^\d+$/.test(hostport.slice(colon + 1));
   return {
-    protocol: scheme === "ftp" ? "ftp" : scheme === "sftp" ? "sftp" : "dav",
+    protocol: scheme === "ftp" ? "ftp" : scheme === "sftp" ? "sftp" : scheme === "ssh" ? "ssh" : "dav",
     tls: scheme === "davs",
     user,
     host: hasPort ? hostport.slice(0, colon) : hostport,
@@ -89,7 +91,8 @@ export function ConnectServer() {
     if (busy || !valid) return;
     setBusy(true);
     setError(null);
-    const server: Server = { protocol: f.protocol, host: f.host.trim(), port, user: f.user.trim(), password: f.password, keyFile: f.protocol === "sftp" && f.keyFile.trim() ? f.keyFile.trim() : null, tls: f.protocol === "dav" && f.tls, trust: trust ?? null };
+    const usesSshKey = f.protocol === "sftp" || f.protocol === "ssh";
+    const server: Server = { protocol: f.protocol, host: f.host.trim(), port, user: f.user.trim(), password: f.password, keyFile: usesSshKey && f.keyFile.trim() ? f.keyFile.trim() : null, tls: f.protocol === "dav" && f.tls, trust: trust ?? null };
     try {
       const url = await api.remoteConnect(server, f.path.trim() || undefined);
       if (f.remember) {
@@ -98,6 +101,7 @@ export function ConnectServer() {
       }
       close();
       useStore.getState().navigate(url);
+      if (server.protocol === "ssh") void useTerminal.getState().openForSsh(url);
     } catch (e) {
       const text = String(e instanceof Error ? e.message : e);
       if (text.startsWith("untrusted-host:")) setConfirm({ fingerprint: text.slice("untrusted-host:".length), changed: false });
@@ -148,12 +152,12 @@ export function ConnectServer() {
           <span>Address (paste a whole address to fill in the rest)</span>
           <input
             className="text-input"
-            placeholder="sftp://me@files.example.com/photos"
+            placeholder="sftp://me@files.example.com/photos or ssh://me@host"
             spellCheck={false}
             autoCapitalize="none"
             autoCorrect="off"
             inputMode="url"
-            onChange={(e) => /^(s?ftp|davs?):\/\//i.test(e.target.value.trim()) && setF((x) => ({ ...x, ...fieldsFromUrl(e.target.value.trim()) }))}
+            onChange={(e) => /^(s?ftp|ssh|davs?):\/\//i.test(e.target.value.trim()) && setF((x) => ({ ...x, ...fieldsFromUrl(e.target.value.trim()) }))}
           />
         </label>
         {error && <p className="connect-error" role="alert">{error}</p>}
@@ -181,12 +185,12 @@ export function ConnectServer() {
             <input className="text-input" value={f.user} placeholder={f.protocol === "ftp" ? "leave empty to log in anonymously" : ""} spellCheck={false} autoCapitalize="none" autoCorrect="off" autoComplete="off" onChange={(e) => set("user", e.target.value)} />
           </label>
           <label className="batch-field">
-            <span>{f.protocol === "sftp" && f.keyFile ? "Key passphrase" : "Password"}</span>
+            <span>{(f.protocol === "sftp" || f.protocol === "ssh") && f.keyFile ? "Key passphrase" : "Password"}</span>
             <input ref={passRef} className="text-input" type="password" value={f.password} autoComplete="off" onChange={(e) => set("password", e.target.value)} />
           </label>
         </div>
 
-        {f.protocol === "sftp" && (
+        {(f.protocol === "sftp" || f.protocol === "ssh") && (
           <label className="batch-field">
             <span>Private key file (optional)</span>
             <div className="key-row">

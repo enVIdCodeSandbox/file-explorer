@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { baseName, crumbs, isRemote, joinPath, maskAddresses, parentPath, remoteLabel, setAddressPrivacy, setDeviceNames, splitRemote } from "./path";
+import { baseName, crumbs, isRemote, isSshLoc, joinPath, maskAddresses, parentPath, remoteLabel, savedServerUrl, setAddressPrivacy, setDeviceNames, splitRemote } from "./path";
 import { fieldsFromUrl } from "../components/ConnectServer";
 
 describe("server addresses", () => {
   it("are recognized", () => {
-    for (const u of ["sftp://u@h/", "ftp://h", "dav://h/x", "davs://h:8443/x", "SFTP://h/"]) expect(isRemote(u)).toBe(true);
+    for (const u of ["sftp://u@h/", "ssh://u@h/", "ftp://h", "dav://h/x", "davs://h:8443/x", "SFTP://h/", "SSH://h/"]) expect(isRemote(u)).toBe(true);
     for (const u of ["/home/me", "C:\\Users", "fast://home", "ftpfolder/x", "http://h/"]) expect(isRemote(u)).toBe(false);
+    expect(isSshLoc("ssh://u@h/var/www")).toBe(true);
+    expect(isSshLoc("sftp://u@h/var/www")).toBe(false);
   });
 
   it("split into server and folder", () => {
@@ -36,8 +38,10 @@ describe("server addresses", () => {
 
   it("fill the login form", () => {
     expect(fieldsFromUrl("sftp://anna@example.com:2222/home/anna")).toMatchObject({ protocol: "sftp", user: "anna", host: "example.com", port: "2222", path: "/home/anna", tls: false });
+    expect(fieldsFromUrl("ssh://anna@example.com:2200/var/www")).toMatchObject({ protocol: "ssh", user: "anna", host: "example.com", port: "2200", path: "/var/www", tls: false });
     expect(fieldsFromUrl("davs://cloud.example.com/remote.php/dav")).toMatchObject({ protocol: "dav", tls: true, host: "cloud.example.com", port: "", user: "" });
     expect(fieldsFromUrl("ftp://files.example.com/")).toMatchObject({ protocol: "ftp", host: "files.example.com", path: "" });
+    expect(savedServerUrl({ protocol: "ssh", host: "box", port: 22, user: "me", tls: false, path: "srv" })).toBe("ssh://me@box/srv");
   });
 });
 

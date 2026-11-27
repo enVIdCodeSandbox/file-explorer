@@ -8,8 +8,21 @@ export const TRASH = "fast://trash";
 
 export const isAppLocation = (loc: string) => loc.startsWith("fast://");
 
-/** An address on a server: `sftp://user@host/folder` (also ftp, dav, davs). */
-export const isRemote = (loc: string) => /^(ftp|sftp|dav|davs|mtp):\/\//i.test(loc);
+/** An address on a server: `sftp://user@host/folder` (also ssh, ftp, dav, davs). */
+export const isRemote = (loc: string) => /^(ftp|sftp|ssh|dav|davs|mtp):\/\//i.test(loc);
+
+/** A location connected over pure SSH (`ssh://...`). */
+export const isSshLoc = (loc: string) => /^ssh:\/\//i.test(loc);
+
+/** Build the URL a saved server entry opens at. */
+export function savedServerUrl(s: { protocol: "ftp" | "sftp" | "ssh" | "dav"; host: string; port: number; user: string; tls: boolean; path: string }): string {
+  const scheme = s.protocol === "dav" ? (s.tls ? "davs" : "dav") : s.protocol;
+  const defPort = s.protocol === "ftp" ? 21 : s.protocol === "sftp" || s.protocol === "ssh" ? 22 : s.tls ? 443 : 80;
+  const port = s.port === defPort ? "" : `:${s.port}`;
+  const user = s.user ? `${s.user}@` : "";
+  const path = s.path ? (s.path.startsWith("/") ? s.path : `/${s.path}`) : "/";
+  return `${scheme}://${user}${s.host}${port}${path}`;
+}
 
 // ---- Archives opened like folders ---------------------------------------
 // `archive:///home/me/photos.zip!/2024/trip` is the folder "2024/trip" inside

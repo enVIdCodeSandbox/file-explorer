@@ -132,6 +132,7 @@ pub fn server_method(places: &[&str]) -> String {
         let scheme = p.split("://").next().filter(|_| p.contains("://")).unwrap_or("").to_ascii_lowercase();
         let k = match scheme.as_str() {
             "sftp" => "SFTP (over SSH)",
+            "ssh" => "SSH",
             "ftp" => "FTP",
             "dav" | "davs" => "WebDAV",
             "mtp" => "MTP (phone or camera on a cable)",
