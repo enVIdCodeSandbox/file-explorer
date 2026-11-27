@@ -1516,6 +1516,91 @@ pub async fn remote_stage_start(app: AppHandle, state: State<'_, Shared>, source
     })
 }
 
+/// Classify a remote filename when extension or well-known Unix name makes it clear whether it is
+/// text (`Some(true)`), byte-based/binary (`Some(false)`), or ambiguous (`None`, check leading bytes).
+pub fn classify_remote_filename(name: &str) -> Option<bool> {
+    let lower = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    // Rotated or numbered archive backups (e.g. `alternatives.tar.0`, `backup.tar.1`).
+    if lower.contains(".tar.") {
+        return Some(false);
+    }
+    const BINARY_EXTS: &[&str] = &[
+        "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "zst", "lz4", "cab", "wim", "arj", "lzh", "lha", "cpio",
+        "iso", "img", "dmg", "vhd", "vhdx", "vmdk", "exe", "msi", "app", "apk", "deb", "rpm", "appimage", "pkg", "dll", "so", "dylib", "sys",
+        "bin", "dat", "o", "a", "obj", "lib", "wasm", "pyc", "class", "jar",
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "heic", "heif", "avif", "psd", "ai", "xcf", "fig", "sketch",
+        "mp4", "mkv", "mov", "avi", "webm", "wmv", "flv", "m4v", "mpg", "mpeg", "3gp", "3g2", "m2ts", "m2t", "m2v", "ogv", "ogm", "vob", "asf", "divx", "f4v", "rm", "rmvb", "mxf", "tod",
+        "mp3", "flac", "wav", "ogg", "m4a", "aac", "opus", "wma", "aiff", "mid", "midi",
+        "pdf", "doc", "docx", "docm", "odt", "pages", "xls", "xlsx", "xlsm", "ods", "numbers", "ppt", "pptx", "pps", "ppsx", "odp", "key", "epub", "mobi", "azw3",
+        "db", "sqlite", "sqlite3", "mdb", "accdb", "ttf", "otf", "woff", "woff2", "fbx", "stl", "blend", "glb", "kdbx", "pfx", "gpg",
+    ];
+    const TEXT_EXTS: &[&str] = &[
+        "txt", "md", "markdown", "rst", "adoc", "tex", "rtf", "csv", "tsv", "log", "out", "err",
+        "js", "mjs", "cjs", "jsx", "ts", "tsx", "rs", "py", "go", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "java", "kt", "kts", "swift",
+        "cs", "vb", "php", "rb", "lua", "dart", "scala", "r", "jl", "zig", "hs", "ex", "exs", "erl", "clj", "sql",
+        "html", "htm", "css", "scss", "sass", "less", "vue", "svelte", "astro", "sh", "bash", "zsh", "fish", "ksh", "csh",
+        "bat", "cmd", "ps1", "awk", "sed", "pl", "pm", "patch", "diff", "graphql", "gql", "proto",
+        "json", "jsonc", "json5", "yaml", "yml", "toml", "xml", "svg", "ini", "cfg", "conf", "cnf", "cf", "env", "properties", "props",
+        "plist", "reg", "lock", "service", "socket", "timer", "target", "mount", "automount", "path", "slice", "scope", "rules", "list", "sources",
+        "repo", "desktop", "gitignore", "gitattributes", "gitmodules", "editorconfig", "htaccess", "npmrc", "yarnrc",
+        "bak", "old", "orig", "sample", "example", "dist", "default", "pem", "crt", "cer", "pub", "nix", "mk", "cmake", "gradle", "tf", "tfvars", "hcl", "dockerfile",
+    ];
+    const TEXT_NAMES: &[&str] = &[
+        "makefile", "gnumakefile", "cmakelists.txt", "dockerfile", "containerfile", "vagrantfile", "procfile", "gemfile", "rakefile",
+        "license", "copying", "notice", "authors", "changelog", "readme", "todo", "hosts", "hostname", "resolv.conf", "nsswitch.conf",
+        "fstab", "mtab", "crypttab", "exports", "passwd", "passwd-", "group", "group-", "shadow", "shadow-", "gshadow", "gshadow-",
+        "sudoers", "shells", "profile", "bash_profile", "bash_logout", "bashrc", "zshrc", "zprofile", "vimrc", "nanorc", "tmux.conf",
+        "gitconfig", "authorized_keys", "known_hosts", "config", "issue", "motd", "os-release", "lsb-release", "crontab", "anacrontab", "inittab", "modules", "sysctl.conf",
+    ];
+    if let Some((_, ext)) = lower.rsplit_once('.') {
+        if BINARY_EXTS.contains(&ext) {
+            return Some(false);
+        }
+        if TEXT_EXTS.contains(&ext) {
+            return Some(true);
+        }
+    }
+    if TEXT_NAMES.contains(&lower.as_str()) {
+        return Some(true);
+    }
+    None
+}
+
+/// Say whether a file on a remote server is text-based (`true`) or byte-based (`false`),
+/// checking filename first and falling back to sniffing up to 4 KB without a full copy.
+#[tauri::command]
+pub async fn remote_is_text(state: State<'_, Shared>, path: String) -> CmdResult<bool> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let loc = Location::parse(&path).map_err(err)?;
+        if let Some(known) = classify_remote_filename(loc.name()) {
+            return Ok(known);
+        }
+        let mut lease = Lease::new(&st, &loc.key(), false)?;
+        let Ok(head) = lease.get().read_head(&loc.path, 4096) else {
+            return Ok(false);
+        };
+        Ok(fast_core::columns_extra::is_text(&head))
+    })
+    .await
+}
+
+/// Open an SSH/SFTP file in Visual Studio Code using VS Code Remote-SSH (`--file-uri`), without copying bytes first.
+#[tauri::command]
+pub async fn remote_open_vscode(path: String) -> CmdResult<()> {
+    blocking(move || {
+        let loc = Location::parse(&path).map_err(err)?;
+        if !matches!(loc.protocol, Protocol::Ssh | Protocol::Sftp) {
+            return Err("Only SSH and SFTP files can open in VS Code Remote-SSH.".into());
+        }
+        fast_core::openwith::open_vscode_ssh(&loc.user, &loc.host, loc.port, &loc.path).map_err(err)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod credential_tests {
     use super::*;
@@ -1568,5 +1653,17 @@ mod credential_tests {
         std::fs::write(&present, b"hello").unwrap();
         finalize_staged_open(Some(&stage), &present, &[], 1).unwrap();
         assert!(present.exists());
+    }
+
+    #[test]
+    fn classifies_remote_text_and_binary_filenames() {
+        assert_eq!(classify_remote_filename("shadow.bak"), Some(true));
+        assert_eq!(classify_remote_filename("gshadow.bak"), Some(true));
+        assert_eq!(classify_remote_filename("notes.txt"), Some(true));
+        assert_eq!(classify_remote_filename("Makefile"), Some(true));
+        assert_eq!(classify_remote_filename("alternatives.tar.0"), Some(false));
+        assert_eq!(classify_remote_filename("archive.tar.gz"), Some(false));
+        assert_eq!(classify_remote_filename("photo.png"), Some(false));
+        assert_eq!(classify_remote_filename("mystery_file"), None);
     }
 }

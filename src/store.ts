@@ -43,7 +43,8 @@ import { syncDetailsPane } from "./util/layout";
 import { orderRenames, type RenameInput, type RenamePlan } from "./util/batchRename";
 import { formatDate, formatDuration, formatSize, steadyFraction } from "./util/format";
 import { flushBoot, readBoot, writeBoot, type Boot } from "./util/bootCache";
-import { HOME, THIS_PC, trashLabel, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, joinPath, parentPath, parseLocation } from "./util/path";
+import { HOME, THIS_PC, trashLabel, splitArchive, baseName, insideArchive, isInside, isAppLocation, isArchiveFile, isArchiveLoc, isRemote, isSshLoc, joinPath, parentPath, parseLocation } from "./util/path";
+import { classifyRemoteFile } from "./util/remoteFileKind";
 import { moveGroupBlock } from "./util/tabs";
 import { resetSize, zoomBy, type ZoomState } from "./util/viewZoom";
 import { viewLevelOf } from "./util/viewLevel";
@@ -2112,11 +2113,60 @@ export async function retryTransferAsAdmin(spec: TransferSpec): Promise<void> {
  * program to use, the way the person chose in Settings: this app's own chooser,
  * the system's (Windows), or just a message.
  */
+export async function openSshFile(path: string, mode: "auto" | "terminal" | "vscode" | "copy" = "auto"): Promise<void> {
+  const { showToast, settings } = useStore.getState();
+  if (mode === "copy") {
+    api.remoteCopyStart([path], "", false, true).catch((err) => showToast(String(err)));
+    return;
+  }
+  if (mode === "terminal") {
+    const { useTerminal } = await import("./terminal/state");
+    await useTerminal.getState().openFileInSsh(path);
+    return;
+  }
+  if (mode === "vscode") {
+    try {
+      await api.remoteOpenVscode(path);
+      return;
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("vscode-not-found")) {
+        if (isSshLoc(path)) {
+          showToast("Visual Studio Code was not found; opening with nano in the SSH terminal.");
+          const { useTerminal } = await import("./terminal/state");
+          await useTerminal.getState().openFileInSsh(path);
+          return;
+        }
+        showToast("Visual Studio Code was not found on this computer.");
+        return;
+      }
+      showToast(msg);
+      return;
+    }
+  }
+  const pref = adv<string>(settings, "files.sshTextOpen");
+  if (pref === "copy") {
+    return openSshFile(path, "copy");
+  }
+  const hint = classifyRemoteFile(baseName(path));
+  let isText = hint === "text";
+  if (hint === "unknown") {
+    isText = await api.remoteIsText(path).catch(() => false);
+  }
+  if (!isText) {
+    return openSshFile(path, "copy");
+  }
+  return openSshFile(path, pref === "vscode" ? "vscode" : "terminal");
+}
+
 export async function openFile(path: string): Promise<void> {
   // Choosing a file for a form: opening it picks it instead.
   const picking = useStore.getState().picker;
   if (picking) return picking.done(path);
   const { showToast, chooseApp, info } = useStore.getState();
+  if (isSshLoc(path)) {
+    return openSshFile(path, "auto");
+  }
   if (isRemote(path)) {
     api.remoteCopyStart([path], "", false, true).catch((err) => showToast(String(err)));
     return;

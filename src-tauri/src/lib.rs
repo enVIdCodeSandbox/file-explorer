@@ -362,6 +362,8 @@ pub fn run() {
             commands::transfer_resolve,
             commands::check_access,
             commands::elevated_start,
+            remote::remote_is_text,
+            remote::remote_open_vscode,
             #[cfg(desktop)]
             terminal::term_info,
             #[cfg(desktop)]

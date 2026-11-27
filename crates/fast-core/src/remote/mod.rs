@@ -280,6 +280,11 @@ pub trait Session: Send {
     }
     fn download(&mut self, remote: &str, local: &Path, ctl: &Control) -> Result<u64>;
     fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64>;
+    /// Read up to `limit` leading bytes of a remote file to tell text from binary without copying the whole file.
+    fn read_head(&mut self, remote: &str, limit: usize) -> Result<Vec<u8>> {
+        let _ = (remote, limit);
+        Err(fail("Cannot inspect remote file contents."))
+    }
     /// Whether `read_stream` and `write_stream` work on this kind of connection. Copying from one server (or phone)
     /// to another passes the bytes straight through when both ends can, with nothing kept on this computer.
     fn streams(&self) -> bool {

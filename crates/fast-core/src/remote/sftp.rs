@@ -260,6 +260,24 @@ impl Session for Sftp {
         result
     }
 
+    fn read_head(&mut self, remote: &str, limit: usize) -> Result<Vec<u8>> {
+        let cap = limit.min(64 * 1024);
+        self.rt.block_on(async {
+            let mut src = self.sftp.open(remote).await.map_err(|e| sftp_err(remote, e))?;
+            let mut out = vec![0u8; cap];
+            let mut len = 0usize;
+            while len < cap {
+                let n = src.read(&mut out[len..]).await.map_err(fail)?;
+                if n == 0 {
+                    break;
+                }
+                len += n;
+            }
+            out.truncate(len);
+            Ok(out)
+        })
+    }
+
     fn upload(&mut self, local: &Path, remote: &str, ctl: &Control) -> Result<u64> {
         let result: Result<u64> = self.rt.block_on(async {
             let mut src = tokio::fs::File::open(local).await.map_err(|e| CoreError::io(local, e))?;

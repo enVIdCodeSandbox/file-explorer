@@ -22,6 +22,7 @@ import {
   extractArchive,
   isArchiveName,
   openFile,
+  openSshFile,
   promptText,
   renamePath,
   showPermissions,
@@ -45,6 +46,7 @@ import { MacAccessHelp } from "./MacAccess";
 import { commandsFor, keyFor } from "../settings/keys";
 import { beginDrag, type DragPayload } from "../dnd";
 import { analyzeLocation, archiveUrl, insideArchive, isArchiveFile, isArchiveLoc, isRemote, isSshLoc, baseName, joinPath, parentPath, remoteLabel, splitArchive } from "../util/path";
+import { classifyRemoteFile } from "../util/remoteFileKind";
 import { useTerminal } from "../terminal/state";
 import { takeSelection } from "../util/unload";
 import { usePulse } from "../util/pulse";
@@ -593,8 +595,8 @@ export function FileView({ path }: { path: string }) {
         return;
       }
       if (isRemote(target)) {
-        // A file on a server is fetched to a temporary place and opened from there.
-        api.remoteCopyStart([target], "", false, true).catch((err) => showToast(String(err)));
+        // SSH text files open via nano/VS Code; byte-based files download a full copy to open locally.
+        void openFile(target);
         return;
       }
       addRecent(target, false);
@@ -683,6 +685,28 @@ export function FileView({ path }: { path: string }) {
     const items: (MenuItem | false | null | undefined)[] = target
       ? [
           single && { id: "open", label: "Open", hint: openHint, shortcut: sk("open"), run: () => open(single) },
+          ...(single && !single.isDir && isSshLoc(fullPath(single.name))
+            ? ([
+                classifyRemoteFile(single.name) !== "binary" && {
+                  id: "openSshNano",
+                  label: "Edit with nano in terminal",
+                  icon: "terminal",
+                  run: () => void openSshFile(fullPath(single.name), "terminal"),
+                },
+                classifyRemoteFile(single.name) !== "binary" && {
+                  id: "openSshVscode",
+                  label: "Open in VS Code",
+                  icon: "popout",
+                  run: () => void openSshFile(fullPath(single.name), "vscode"),
+                },
+                {
+                  id: "openSshCopy",
+                  label: "Copy full file & open locally",
+                  icon: "copy",
+                  run: () => void openSshFile(fullPath(single.name), "copy"),
+                },
+              ] as (MenuItem | false)[])
+            : []),
           picked.length > 0 && { id: "fileTools", label: "File tools", children: fileToolsItems(picked.map((x) => fullPath(x.name))) },
           single && !single.isDir && { id: "view", label: "View", shortcut: sk("view"), run: () => viewFile(single, false) },
           single && !single.isDir && { id: "quickLook", label: "Quick look", shortcut: sk("quickLook"), run: () => viewFile(single, true) },

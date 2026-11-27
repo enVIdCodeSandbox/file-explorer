@@ -1168,6 +1168,8 @@ export const api = {
     invoke<string>("create_item", { dir, name, folder }),
   /** Resolves with the name of the program used when it was picked as the likely one (the system had none set). */
   openItem: (path: string) => invoke<string | null>("open_item", { path }),
+  remoteIsText: (path: string) => invoke<boolean>("remote_is_text", { path }),
+  remoteOpenVscode: (path: string) => invoke<void>("remote_open_vscode", { path }),
   openChoices: (path: string) => invoke<OpenChoices>("open_choices", { path }),
   defaultApp: (path: string, icon: boolean) => invoke<Opener>("default_app", { path, icon }),
   installedApps: (path: string) => invoke<OpenApp[]>("installed_apps", { path }),

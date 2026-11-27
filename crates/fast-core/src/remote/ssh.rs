@@ -140,6 +140,31 @@ impl Session for SshExec {
         self.write_stream(&mut src, size, remote, ctl)
     }
 
+    fn read_head(&mut self, remote: &str, limit: usize) -> Result<Vec<u8>> {
+        let cap = limit.min(64 * 1024);
+        let q = shell_quote(remote);
+        let cmd = format!("head -c {cap} {q} 2>/dev/null || dd bs=1 count={cap} < {q} 2>/dev/null");
+        self.rt.block_on(async {
+            let mut ch = self.handle.channel_open_session().await.map_err(fail)?;
+            ch.exec(true, cmd.into_bytes()).await.map_err(fail)?;
+            let mut out = Vec::new();
+            while let Some(msg) = ch.wait().await {
+                match msg {
+                    ChannelMsg::Data { data } => {
+                        let take = (cap - out.len()).min(data.len());
+                        out.extend_from_slice(&data[..take]);
+                        if out.len() >= cap {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            Ok(out)
+        })
+    }
+
     fn streams(&self) -> bool {
         true
     }

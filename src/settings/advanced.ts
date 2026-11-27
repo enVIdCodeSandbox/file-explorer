@@ -51,6 +51,18 @@ export const ADVANCED: AdvDef[] = [
   text("", "servers.proxy", "Transfers", "Connect to FTP and SFTP servers through a proxy", "Empty = connect directly", "socks5://host:1080, socks5://user:password@host:1080, socks4://host:1080 or http://host:8080 (HTTP CONNECT). Used for the connection to the server and, for FTP, for every file transfer. Applies to FTP and SFTP; WebDAV and phones are not routed through it. Takes effect for the next connection."),
   text("", "terminal.shell", "Terminal panel", "Shell to run", "Default: PowerShell or Command Prompt on Windows, your login shell on Mac and Linux", "For example pwsh, wsl.exe, or \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i. Leave empty for the default."),
   sel("folder", "terminal.startIn", "Terminal panel", "New terminals start in", [["folder", "The folder being viewed"], ["home", "Your home folder"]]),
+  sel(
+    "terminal",
+    "files.sshTextOpen",
+    "Terminal panel",
+    "Text files on SSH servers open with",
+    [
+      ["terminal", "Built-in SSH terminal (nano)"],
+      ["vscode", "Visual Studio Code (Remote-SSH, falls back to terminal nano)"],
+      ["copy", "Download a full copy and open locally"],
+    ],
+    "Text-based SSH files (configs, scripts, logs, backups) open directly without copying the whole file. Byte-based files (archives, images, videos, programs) always download a full copy.",
+  ),
   sel("external", "address.shellWords", "Terminal panel", "Typing cmd, powershell… in the address bar", [["external", "Open the real program (Command Prompt, PowerShell, Terminal) in this folder"], ["builtin", "Open a tab in the built-in terminal in this folder"], ["off", "Do nothing special (treat it as a path)"]], "As in Windows Explorer, typing the name of a shell (cmd, powershell, pwsh, wt, wsl; terminal, bash or zsh elsewhere) and pressing Enter opens it in the folder being viewed. The real program is the one chosen in Settings → Terminal."),
   {
     key: "terminal.fontFamily",
