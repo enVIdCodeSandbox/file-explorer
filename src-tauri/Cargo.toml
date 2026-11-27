@@ -59,12 +59,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 
 # Desktop only: system clipboard with files, dragging files out to other apps, and extended hardware telemetry.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-sysinfo = { version = "0.33", default-features = false, features = ["system", "network", "component", "disk"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system", "network", "disk"] }
 clipboard-rs = "0.3"
 open = "5"
 drag = "2"
 tauri-plugin-single-instance = "2"
 ureq = "3"
+
+# Unix desktop hardware temperature sensors (avoids COM/WMI bloat in main Windows process).
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
+sysinfo = { version = "0.33", default-features = false, features = ["component"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -14,16 +14,37 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+#[cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))]
+use sysinfo::Components;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::State;
 
 static RTT_PROBING: AtomicBool = AtomicBool::new(false);
+
+fn cached_static_sys_info() -> (&'static str, &'static str) {
+    static INFO: OnceLock<(String, String)> = OnceLock::new();
+    let (os, kern) = INFO.get_or_init(|| {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            (
+                System::long_os_version().unwrap_or_else(|| platform::os_name().to_string()),
+                System::kernel_version().unwrap_or_default(),
+            )
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            (platform::os_name().to_string(), String::new())
+        }
+    });
+    (os.as_str(), kern.as_str())
+}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct DesktopHardwareState {
     sys: Option<System>,
     networks: Option<Networks>,
+    #[cfg(unix)]
     components: Option<Components>,
     disks: Option<Disks>,
     last_slow_refresh: Option<Instant>,
@@ -31,6 +52,8 @@ struct DesktopHardwareState {
     last_disk_write: u64,
     last_net_rx: u64,
     last_net_tx: u64,
+    cached_threads: usize,
+    cached_handles: u32,
     cached_disks: Vec<DiskVolumeMetric>,
     cached_temps: Vec<TempMetric>,
 }
@@ -41,6 +64,7 @@ impl Default for DesktopHardwareState {
         Self {
             sys: None,
             networks: None,
+            #[cfg(unix)]
             components: None,
             disks: None,
             last_slow_refresh: None,
@@ -48,6 +72,8 @@ impl Default for DesktopHardwareState {
             last_disk_write: 0,
             last_net_rx: 0,
             last_net_tx: 0,
+            cached_threads: 0,
+            cached_handles: 0,
             cached_disks: Vec::new(),
             cached_temps: Vec::new(),
         }
@@ -94,17 +120,46 @@ fn sampler() -> &'static Mutex<SamplerState> {
     S.get_or_init(Default::default)
 }
 
-pub fn set_active(client: &str, active: bool) {
-    let mut g = sampler().lock();
-    if active {
-        g.subscribers.insert(client.to_string());
-    } else {
-        g.subscribers.remove(client);
+fn trim_working_set() {
+    #[cfg(windows)]
+    {
+        use std::ffi::c_void;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut c_void;
+            fn SetProcessWorkingSetSize(process: *mut c_void, min: usize, max: usize) -> i32;
+        }
+        // SAFETY: Passing (usize::MAX, usize::MAX) instructs Windows to trim unused pages from the working set.
+        unsafe {
+            let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+        }
     }
-    let any = !g.subscribers.is_empty();
-    telemetry::set_active(any);
-    if !any {
-        g.clear_samplers();
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: `malloc_trim(0)` releases free heap pages back to the OS.
+    unsafe {
+        let _ = libc::malloc_trim(0);
+    }
+}
+
+pub fn set_active(client: &str, active: bool) {
+    let became_inactive = {
+        let mut g = sampler().lock();
+        if active {
+            g.subscribers.insert(client.to_string());
+        } else {
+            g.subscribers.remove(client);
+        }
+        let any = !g.subscribers.is_empty();
+        telemetry::set_active(any);
+        if !any {
+            g.clear_samplers();
+            true
+        } else {
+            false
+        }
+    };
+    if became_inactive {
+        trim_working_set();
     }
 }
 
@@ -505,6 +560,8 @@ struct HardwareSample {
     app_cpu_percent: f32,
     app_memory_bytes: u64,
     app_virtual_bytes: u64,
+    app_threads: usize,
+    app_handles: u32,
     app_disk_read_per_sec: f64,
     app_disk_write_per_sec: f64,
     app_disk_read_total: u64,
@@ -523,12 +580,18 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
     let pid = sysinfo::get_current_pid().map_err(|e| e.to_string())?;
     let had_prev = g.last_sample.is_some();
     let hw = &mut g.hw;
-    let do_slow = hw.last_slow_refresh.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1));
+    let do_slow = hw.last_slow_refresh.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(2));
 
-    let sys = hw.sys.get_or_insert_with(System::new_all);
+    // Use `System::new()` (empty, < 1 MB) rather than `System::new_all()`, which
+    // enumerates every OS process and pins hundreds of MB of heap/PEB state.
+    let sys = hw.sys.get_or_insert_with(System::new);
     sys.refresh_memory();
     sys.refresh_cpu_usage();
-    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::everything());
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_cpu().with_memory().with_disk_usage(),
+    );
 
     let p = sys.process(pid).ok_or("Could not inspect current process.")?;
     let proc_disk = p.disk_usage();
@@ -548,7 +611,7 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
     let swap_used = sys.used_swap();
 
     let networks = hw.networks.get_or_insert_with(Networks::new_with_refreshed_list);
-    networks.refresh(true);
+    networks.refresh(false);
     let mut net_total_rx = 0u64;
     let mut net_total_tx = 0u64;
     let mut interfaces = Vec::new();
@@ -601,6 +664,8 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
     };
 
     if do_slow {
+        hw.cached_threads = process_threads();
+        hw.cached_handles = process_handles();
         let disks = hw.disks.get_or_insert_with(Disks::new_with_refreshed_list);
         disks.refresh(true);
         hw.cached_disks = disks
@@ -616,20 +681,23 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
             })
             .collect();
 
-        let comps = hw.components.get_or_insert_with(Components::new_with_refreshed_list);
-        comps.refresh(true);
-        hw.cached_temps = comps
-            .iter()
-            .filter_map(|c| {
-                let t = c.temperature()?;
-                Some(TempMetric {
-                    label: c.label().to_string(),
-                    celsius: t,
-                    max_celsius: c.max(),
-                    critical_celsius: c.critical(),
+        #[cfg(unix)]
+        {
+            let comps = hw.components.get_or_insert_with(Components::new_with_refreshed_list);
+            comps.refresh(true);
+            hw.cached_temps = comps
+                .iter()
+                .filter_map(|c| {
+                    let t = c.temperature()?;
+                    Some(TempMetric {
+                        label: c.label().to_string(),
+                        celsius: t,
+                        max_celsius: c.max(),
+                        critical_celsius: c.critical(),
+                    })
                 })
-            })
-            .collect();
+                .collect();
+        }
         hw.last_slow_refresh = Some(now);
     }
 
@@ -638,10 +706,11 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
     hw.last_net_rx = net_total_rx;
     hw.last_net_tx = net_total_tx;
 
+    let (os_name, kernel_version) = cached_static_sys_info();
     let load = System::load_average();
     Ok(HardwareSample {
-        os_name: System::long_os_version().unwrap_or_else(|| platform::os_name().to_string()),
-        kernel_version: System::kernel_version().unwrap_or_default(),
+        os_name: os_name.to_string(),
+        kernel_version: kernel_version.to_string(),
         uptime_secs: System::uptime(),
         load_avg: [load.one, load.five, load.fifteen],
         cpu_percent,
@@ -658,6 +727,8 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
         app_cpu_percent,
         app_memory_bytes,
         app_virtual_bytes,
+        app_threads: hw.cached_threads,
+        app_handles: hw.cached_handles,
         app_disk_read_per_sec,
         app_disk_write_per_sec,
         app_disk_read_total: proc_disk.total_read_bytes,
@@ -675,9 +746,10 @@ fn sample_hardware(g: &mut SamplerState, now: Instant, dt: f64) -> CmdResult<Har
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn sample_hardware(_g: &mut SamplerState, _now: Instant, _dt: f64) -> CmdResult<HardwareSample> {
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let (os_name, kernel_version) = cached_static_sys_info();
     Ok(HardwareSample {
-        os_name: platform::os_name().to_string(),
-        kernel_version: String::new(),
+        os_name: os_name.to_string(),
+        kernel_version: kernel_version.to_string(),
         uptime_secs: 0,
         load_avg: [0.0, 0.0, 0.0],
         cpu_percent: 0.0,
@@ -694,6 +766,8 @@ fn sample_hardware(_g: &mut SamplerState, _now: Instant, _dt: f64) -> CmdResult<
         app_cpu_percent: 0.0,
         app_memory_bytes: 0,
         app_virtual_bytes: 0,
+        app_threads: hw.app_threads,
+        app_handles: hw.app_handles,
         app_disk_read_per_sec: 0.0,
         app_disk_write_per_sec: 0.0,
         app_disk_read_total: 0,
@@ -812,8 +886,8 @@ fn collect_snapshot(st: &Shared) -> CmdResult<MetricsSnapshot> {
         app_cpu_percent: hw.app_cpu_percent,
         app_memory_bytes: hw.app_memory_bytes,
         app_virtual_bytes: hw.app_virtual_bytes,
-        app_threads: process_threads(),
-        app_handles: process_handles(),
+        app_threads: hw.app_threads,
+        app_handles: hw.app_handles,
         app_disk_read_per_sec: hw.app_disk_read_per_sec,
         app_disk_write_per_sec: hw.app_disk_write_per_sec,
         app_disk_read_total: hw.app_disk_read_total,
@@ -1050,5 +1124,20 @@ mod tests {
         assert!(body.contains("{\"a\":1}"));
         assert!(body.contains("{\"a\":2}"));
         assert_eq!(Path::new(&path).parent().unwrap(), dir.path());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sampler_only_tracks_current_process_and_clears_on_close() {
+        set_active("test-mem", true);
+        {
+            let mut g = sampler().lock();
+            let hw = sample_hardware(&mut g, Instant::now(), 0.1).unwrap();
+            assert_eq!(g.hw.sys.as_ref().unwrap().processes().len(), 1);
+            assert!(hw.app_memory_bytes > 0);
+            assert!(hw.app_memory_bytes < 150 * 1024 * 1024, "unexpectedly high test process RSS: {}", hw.app_memory_bytes);
+        }
+        set_active("test-mem", false);
+        assert!(sampler().lock().hw.sys.is_none());
     }
 }

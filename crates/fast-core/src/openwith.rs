@@ -702,7 +702,7 @@ mod platform {
         }
         let encoded = extract_icon_png(&resolved);
         if let Ok(mut guard) = cache.lock() {
-            if guard.len() > 1024 {
+            if guard.len() > 160 {
                 guard.clear();
             }
             guard.insert(key, encoded.clone());
@@ -717,25 +717,18 @@ mod platform {
             CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush, GetDC, ReleaseDC, SelectObject,
             BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP,
         };
-        use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
-        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL};
+        use windows::Win32::UI::Shell::ExtractIconExW;
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON};
 
         let wfile: Vec<u16> = file.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut shfi = SHFILEINFOW::default();
-        // SAFETY: `wfile` is NUL-terminated; any returned `hIcon` is destroyed below.
-        let ok = unsafe {
-            SHGetFileInfoW(
-                PCWSTR(wfile.as_ptr()),
-                windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
-                Some(&mut shfi),
-                std::mem::size_of::<SHFILEINFOW>() as u32,
-                SHGFI_ICON | SHGFI_LARGEICON,
-            )
-        };
-        if ok == 0 || shfi.hIcon.is_invalid() {
+        let mut hicon = HICON::default();
+        // Extract only the PE icon directly without invoking Shell namespace/overlay COM extensions.
+        // SAFETY: `wfile` is NUL-terminated; `hicon` receives 1 icon handle destroyed below.
+        let count = unsafe { ExtractIconExW(PCWSTR(wfile.as_ptr()), 0, Some(&mut hicon), None, 1) };
+        if count == 0 || hicon.is_invalid() {
             return None;
         }
-        let size = 32i32;
+        let size = 24i32;
         let out = (|| unsafe {
             let screen = GetDC(None);
             let dc = CreateCompatibleDC(Some(screen));
@@ -771,7 +764,7 @@ mod platform {
             let byte_len = (size * size * 4) as usize;
             std::ptr::write_bytes(bits, 0, byte_len);
             let old = SelectObject(dc, dib.into());
-            let _ = DrawIconEx(dc, 0, 0, shfi.hIcon, size, size, 0, None, DI_NORMAL);
+            let _ = DrawIconEx(dc, 0, 0, hicon, size, size, 0, None, DI_NORMAL);
             let _ = GdiFlush();
             let raw = std::slice::from_raw_parts(bits as *const u8, byte_len);
             let mut px = raw.to_vec();
@@ -800,9 +793,9 @@ mod platform {
             img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
             Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)))
         })();
-        // SAFETY: `shfi.hIcon` was returned by `SHGetFileInfoW`.
+        // SAFETY: `hicon` was extracted by `ExtractIconExW`.
         unsafe {
-            let _ = DestroyIcon(shfi.hIcon);
+            let _ = DestroyIcon(hicon);
         }
         out
     }
@@ -1791,12 +1784,16 @@ mod defaults {
     }
 }
 
-fn attach_icons(apps: &mut [App]) {
-    for a in apps.iter_mut() {
+fn attach_icons_limited(apps: &mut [App], limit: usize) {
+    for a in apps.iter_mut().take(limit) {
         if a.icon_url.is_none() {
             a.icon_url = platform::exe_icon_url(&a.id);
         }
     }
+}
+
+fn attach_icons(apps: &mut [App]) {
+    attach_icons_limited(apps, 32);
 }
 
 fn choices_with_opts(path: &Path, with_icons: bool) -> Choices {
@@ -1869,7 +1866,7 @@ fn cached_system_apps() -> Vec<App> {
     base.extend(platform::all_registry_apps());
     base.extend(extras());
     let mut cleaned = tidy_list(base);
-    attach_icons(&mut cleaned);
+    attach_icons_limited(&mut cleaned, 48);
     if let Ok(mut guard) = lock.lock() {
         *guard = Some((std::time::Instant::now(), cleaned.clone()));
     }
@@ -1884,7 +1881,7 @@ pub fn installed_apps(path: &Path) -> Vec<App> {
     all.extend(raw.suggested);
     all.extend(raw.others);
     let mut list = tidy_list(all);
-    attach_icons(&mut list);
+    attach_icons_limited(&mut list, 64);
     list
 }
 

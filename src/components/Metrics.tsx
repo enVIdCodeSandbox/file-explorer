@@ -21,7 +21,7 @@ import { Icon } from "./Icons";
 
 type SectionTab = "all" | "rendering" | "processing" | "network" | "system" | "admin";
 
-const HISTORY_LEN = 60;
+const HISTORY_LEN = 40;
 const PRESET_INTERVALS = [10, 25, 50, 100, 250, 1000] as const;
 
 const rate = (bytesPerSec: number) => `${formatSize(Math.max(0, bytesPerSec))}/s`;
@@ -150,6 +150,7 @@ export function MetricsPanel({
     let inFlight = false;
     let timer: number | null = null;
     let writeQueue = Promise.resolve();
+    let lastChartPush = 0;
 
     const tick = async () => {
       if (cancelled) return;
@@ -162,12 +163,16 @@ export function MetricsPanel({
         const next = await api.metricsSnapshot();
         if (cancelled) return;
         setSnap(next);
-        setCpuHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.cpuPercent]);
-        setFpsHist((h) => [...h.slice(-(HISTORY_LEN - 1)), renderRef.current.fps]);
-        setMemHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.appMemoryBytes]);
-        setNetRxHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.netRxPerSec]);
-        setNetTxHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.netTxPerSec]);
-        setDiskHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.appDiskReadPerSec + next.appDiskWritePerSec]);
+        const nowMs = performance.now();
+        if (nowMs - lastChartPush >= Math.max(100, configuredRefreshMs)) {
+          lastChartPush = nowMs;
+          setCpuHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.cpuPercent]);
+          setFpsHist((h) => [...h.slice(-(HISTORY_LEN - 1)), renderRef.current.fps]);
+          setMemHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.appMemoryBytes]);
+          setNetRxHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.netRxPerSec]);
+          setNetTxHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.netTxPerSec]);
+          setDiskHist((h) => [...h.slice(-(HISTORY_LEN - 1)), next.appDiskReadPerSec + next.appDiskWritePerSec]);
+        }
 
         if (loggingRef.current && logDirRef.current.trim()) {
           const line = serializeJsonlLine({

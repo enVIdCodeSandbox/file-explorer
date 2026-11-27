@@ -680,7 +680,14 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         assert!(can_connect("127.0.0.1", &[port], std::time::Duration::from_millis(1000)));
         drop(l);
-        assert!(!can_connect("127.0.0.1", &[port], std::time::Duration::from_millis(500)));
+        // Use a dedicated ephemeral port that had no queued connection and retry if a concurrent test rebinds it.
+        let closed_ok = (0..5).any(|_| {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let closed_port = probe.local_addr().unwrap().port();
+            drop(probe);
+            !can_connect("127.0.0.1", &[closed_port], std::time::Duration::from_millis(500))
+        });
+        assert!(closed_ok);
         assert_eq!(service_ports(r"\\nas\photos"), &[445, 139]);
         assert_eq!(service_ports("nas:/export"), &[2049, 111]);
     }
