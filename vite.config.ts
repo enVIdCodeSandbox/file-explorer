@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import pkg from "./package.json" with { type: "json" };
-import { THEMES } from "./src/util/themes";
+import { THEMES } from "./src/util/themes.ts";
 
 const version = pkg.version;
 

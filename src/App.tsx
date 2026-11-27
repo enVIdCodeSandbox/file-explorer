@@ -13,6 +13,7 @@ import { Shell, useLayout } from "./components/Layout";
 import { Dialog, DragOverlay, OpenWithDialog, PropertiesDialog, Toast } from "./components/Overlays";
 import { PermissionsDialog } from "./components/PermissionsDialog";
 import { LockDialog } from "./components/Locks";
+import { MacAccessPrompt } from "./components/MacAccess";
 import { IconContextMenu, IconPickerDialog } from "./components/IconPicker";
 import { ChooseDetails } from "./components/ChooseDetails";
 import { openTools } from "./components/toolsOpen";
@@ -53,7 +54,6 @@ const SettingsView = lazy(() => import("./components/SettingsView").then((m) => 
 const TerminalPanel = lazy(() => import("./components/Terminal").then((m) => ({ default: m.TerminalPanel })));
 const DetachedTerminal = lazy(() => import("./components/Terminal").then((m) => ({ default: m.DetachedTerminal })));
 const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({ default: m.BatchRename })));
-const MacAccessPrompt = lazy(() => import("./components/MacAccess").then((m) => ({ default: m.MacAccessPrompt })));
 const NetworkSignIn = lazy(() => import("./components/NetworkSignIn").then((m) => ({ default: m.NetworkSignIn })));
 const ConnectServer = lazy(() => import("./components/ConnectServer").then((m) => ({ default: m.ConnectServer })));
 const ShareDialog = lazy(() => import("./components/Share").then((m) => ({ default: m.ShareDialog })));
@@ -681,7 +681,6 @@ function runAppCommand(command: string, ctx: { typing: boolean; target: HTMLElem
 
 async function toggleFullscreen() {
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen()));
   } catch {

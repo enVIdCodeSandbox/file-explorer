@@ -711,6 +711,7 @@ pub use win::open as open_in_system;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     use std::fs;
 
     fn usb(id: &str, maker: &str, product: &str, serial: &str, classes: &[u8]) -> Usb {
