@@ -7,13 +7,13 @@ import { useSelectionBand } from "./useSelectionBand";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mergeHits } from "../util/searchHits";
 import { levelHits } from "../util/levelSearch";
-import { api, on, type Device, type Drive, type Hit, type SearchResponse } from "../api";
+import { api, on, type Device, type Drive, type Hit, type SearchResponse, type ServerProtocol } from "../api";
 import { ask, compressPaths, deletePaths, extractArchive, isArchiveName, openFile, promptText, renamePath, thisPcLabel, useStore } from "../store";
 import { sameShell, useShellItems } from "./shellMenu";
 import { driveLetter, driveName, driveRemote, hidesAddress, visibleDrives, withoutLetter } from "../util/drives";
 import { iconMenuItems } from "./IconPicker";
 import { driveSlot } from "../util/customIcons";
-import { deviceSlot, deviceTarget, driveTarget } from "../util/iconTarget";
+import { deviceSlot, deviceTarget, driveTarget, serverSlot, serverTarget } from "../util/iconTarget";
 import { KIND_LABEL, deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
 import { applyFilter, isFiltering } from "../util/filter";
 import { adv } from "../settings/advanced";
@@ -23,7 +23,7 @@ import { extensionOf, typeLabel } from "../util/format";
 import { rankHits } from "../util/searchHits";
 import type { SortKey } from "../store";
 import { formatCount, formatDate, formatSize, kindOf } from "../util/format";
-import { analyzeLocation, baseName, isRemote, maskAddresses, parentPath } from "../util/path";
+import { analyzeLocation, baseName, isRemote, maskAddresses, parentPath, savedServerUrl } from "../util/path";
 import { ContextMenu, type MenuItem, type MenuState } from "./ContextMenu";
 import { driveMenuItems, networkMenuItems } from "./driveActions";
 import { FileIcon, Icon } from "./Icons";
@@ -100,6 +100,13 @@ const MEDIA_LABEL: Record<Drive["media"], string> = {
   unknown: "Disk",
 };
 
+const SERVER_PROTOCOL_LABEL: Record<ServerProtocol, string> = {
+  sftp: "SFTP (over SSH)",
+  ssh: "SSH",
+  ftp: "FTP",
+  dav: "WebDAV",
+};
+
 function Donut({ fraction }: { fraction: number }) {
   const r = 26;
   const c = 2 * Math.PI * r;
@@ -125,9 +132,10 @@ export function DrivesView() {
   const drives = useStore((s) => s.drives);
   const fresh = useStore((s) => s.drivesFresh);
   const devices = useStore((s) => s.devices);
+  const servers = useStore((s) => s.servers);
   const os = useStore((s) => s.info?.os);
   const appearance = useStore((s) => s.settings!.appearance);
-  const { navigate, updateSettings } = useStore.getState();
+  const { navigate, showToast, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   const showSpace = appearance.showDriveSpace;
@@ -358,7 +366,58 @@ export function DrivesView() {
             </section>
           ),
       )}
-      {drives.length === 0 && devices.length === 0 && <p className="muted">{fresh ? "No drives found." : "Looking for drives…"}</p>}
+      {servers.length > 0 && (
+        <section key="Servers">
+          <h3>
+            <button className="section-fold" aria-expanded={!folded.Servers} onClick={() => setFolded({ ...folded, Servers: !folded.Servers })}>
+              <Icon name={folded.Servers ? "chevron" : "expand"} size={10} /> Servers <span className="muted">({servers.length})</span>
+            </button>
+          </h3>
+          {!folded.Servers && (
+            <div className="card-grid drives">
+              {servers.map((sv) => {
+                const url = savedServerUrl(sv);
+                const shownUrl = maskAddresses(url);
+                return (
+                  <button
+                    key={sv.name}
+                    className="card drive-card"
+                    onDoubleClick={() => navigate(url)}
+                    onKeyDown={(e) => e.key === "Enter" && navigate(url)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        items: [
+                          { id: "open", label: "Open", run: () => navigate(url) },
+                          { id: "server-login", label: "Log in again…", separatorBefore: true, run: () => useStore.getState().openConnect({ saved: sv }) },
+                          { id: "server-logout", label: "Log out", run: () => void api.remoteDisconnect(url).then(() => showToast(`Logged out of ${sv.name}.`)).catch((err) => showToast(String(err))) },
+                          { id: "server-forget", label: "Remove from the list", separatorBefore: true, run: () => void api.serversRemove(sv.name).then(useStore.getState().setServers).catch((err) => showToast(String(err))) },
+                          ...iconMenuItems(serverTarget(sv.name)).map((m, i) => (i === 0 ? { ...m, separatorBefore: true } : m)),
+                        ],
+                      });
+                    }}
+                    title={`${sv.name}\n${shownUrl}\nDouble-click to open`}
+                  >
+                    <Icon name="network" slot={serverSlot(sv.name)} size={34} />
+                    <div className="drive-info">
+                      <strong>{sv.name}</strong>
+                      <span className="muted path">{shownUrl}</span>
+                      <span className="muted">
+                        {sv.protocol === "dav" && sv.tls ? "WebDAV (HTTPS)" : SERVER_PROTOCOL_LABEL[sv.protocol]}
+                        {sv.user ? ` · ${sv.user}` : ""}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+      {drives.length === 0 && devices.length === 0 && servers.length === 0 && <p className="muted">{fresh ? "No drives found." : "Looking for drives…"}</p>}
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );
