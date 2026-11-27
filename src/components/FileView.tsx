@@ -56,10 +56,14 @@ import { shellPrefetch } from "../util/shellCache";
 import { loadOpener, openerApplies, openerHint, peekOpener, showOpener } from "../util/opener";
 import { Icon } from "./Icons";
 import { shareOutside, useMobile } from "../util/device";
+import { clampUiIconSize } from "../util/limits";
 
 /** How each icon level lays out its items. */
-function layoutFor(level: string, thumbPx: number, scale = 1) {
-  if (level === "list") return { mode: "inline" as const, w: Math.round(230 * scale), h: Math.round(24 * scale), icon: Math.round(16 * scale) };
+function layoutFor(level: string, thumbPx: number, scale = 1, baseIcon = 16) {
+  if (level === "list") {
+    const icon = Math.round(baseIcon * scale);
+    return { mode: "inline" as const, w: Math.round(230 * scale) + Math.max(0, icon - 16), h: Math.max(Math.round(24 * scale), icon + 8), icon };
+  }
   if (level === "small") return { mode: "inline" as const, w: 270, h: 44, icon: 32 };
   return { mode: "tile" as const, w: thumbPx + 28, h: thumbPx + 50, icon: thumbPx };
 }
@@ -97,8 +101,9 @@ export function FileView({ path }: { path: string }) {
   // Details and List have sizes of their own (zooming changes them before it changes the view).
   const sizePct = adv<number>(settings, level === "details" ? "view.zoomDetails" : "view.zoomList");
   const phoneLayout = useMobile();
+  const baseUiIcon = clampUiIconSize(adv<number>(settings, "ui.iconSize"));
   const zoom = (level === "details" || level === "list") && !phoneLayout ? Math.max(0.5, Math.min(2, sizePct / 100)) : 1;
-  const tileLayout = layoutFor(level, thumbPx, zoom);
+  const tileLayout = layoutFor(level, thumbPx, zoom, baseUiIcon);
   // The phone layout has two shapes: a list of two-line rows, and a grid of icons.
   const mobile = useMobile();
   const details = level === "details" || (mobile && (level === "list" || level === "small"));
@@ -508,7 +513,8 @@ export function FileView({ path }: { path: string }) {
   // A phone row is tall enough for a finger: an icon, the name, and a line of date and size.
   // A phone shows two lines of the name under an icon, so its tiles are a little taller.
   const tileH = tileLayout.h + (mobile ? 20 : 0);
-  const rowHeight = details ? (mobile ? Math.max(56, customRow) : Math.round((customRow > 0 ? customRow : compact ? 26 : 34) * zoom)) : tileH;
+  const detailsIcon = Math.round(baseUiIcon * zoom);
+  const rowHeight = details ? (mobile ? Math.max(56, customRow) : Math.max(detailsIcon + 6, Math.round((customRow > 0 ? customRow : compact ? 26 : 34) * zoom))) : tileH;
   const headerHeight = details && !mobile ? 28 : 0;
   // On a phone the icons spread to fill the row instead of leaving a gap on the right.
   const tileW = mobile && !details ? Math.floor((width - 16) / columnsPerRow) : tileLayout.w;
@@ -1526,7 +1532,7 @@ export function FileView({ path }: { path: string }) {
                         d.id === "name" ? (
                           <div className="cell cell-name" key="name" style={{ width: nameWidth }}>
                             {checks && rowCheck(e, row.index)}
-                            <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={Math.round(18 * zoom)} iconSize={Math.round(16 * zoom)} view="details" />
+                            <Thumb path={fullPath(e.name)} name={e.name} isDir={e.isDir} modified={e.modified} size={Math.round((baseUiIcon + 2) * zoom)} iconSize={detailsIcon} view="details" />
                             {nameCell(e)}
                           </div>
                         ) : (

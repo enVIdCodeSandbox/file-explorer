@@ -169,6 +169,7 @@ describe("interface presets", () => {
     expect(s.appearance.style.icons).toBe("outline");
     expect(s.appearance.style.radius).toBeLessThanOrEqual(2);
     expect(s.appearance.density).toBe("compact");
+    expect(s.advanced["ui.iconSize"]).toBe(20);
     const win10Layout = resolveLayout(s.appearance.layout);
     expect(win10Layout.commands.order).toBeLessThan(win10Layout.address.order);
     expect(differences(s, byId("windows10").patch)).toEqual([]);

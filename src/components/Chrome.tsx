@@ -28,6 +28,7 @@ import {
 } from "../store";
 import { adv } from "../settings/advanced";
 import { commandById, commandsFor, keyFor } from "../settings/keys";
+import { clampBarScale } from "../util/limits";
 import { formatSize } from "../util/format";
 import { driveName, driveRemote, driveSpace, hidesAddress, visibleDrives } from "../util/drives";
 import { deviceIcon, deviceStatus, isMainDevice, openDevice } from "../util/devices";
@@ -477,6 +478,7 @@ export function TabBar({ controls = true, vertical = false }: { controls?: boole
         data-tauri-drag-region
         onScroll={measure}
         onWheel={(e) => {
+          if (e.ctrlKey) return;
           const el = barRef.current;
           if (el && !vertical && e.deltaY && !e.deltaX) el.scrollLeft += e.deltaY;
         }}
@@ -1658,7 +1660,8 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   const chrome = useChrome();
   const nm = (t: string) => SIDE_NAMES[chrome][t] ?? t;
   const collapsed = appearance.sidebarCollapsed && !horizontal;
-  const width = collapsed ? COLLAPSED_WIDTH : (dragWidth ?? appearance.sidebarWidth);
+  const leftScale = horizontal ? 1 : clampBarScale(adv<number>(settings, "ui.leftBarScale")) / 100;
+  const width = collapsed ? Math.round(COLLAPSED_WIDTH * leftScale) : Math.round((dragWidth ?? appearance.sidebarWidth) * leftScale);
 
   // The Frequently used list follows what you open; refresh it when you navigate.
   useEffect(() => {
@@ -1674,7 +1677,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
     target.setPointerCapture(e.pointerId);
     let latest = startW;
     const move = (ev: PointerEvent) => {
-      latest = startW + ev.clientX - startX;
+      latest = startW + (ev.clientX - startX) / leftScale;
       setDragWidth(Math.max(COLLAPSED_WIDTH, Math.min(MAX_WIDTH, latest)));
     };
     const up = () => {
@@ -2015,7 +2018,19 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   };
 
   return (
-    <div className="sidebar-wrap" data-horizontal={horizontal || undefined} style={horizontal ? undefined : { width, minWidth: collapsed ? COLLAPSED_WIDTH : MIN_WIDTH, maxWidth: collapsed ? COLLAPSED_WIDTH : `min(${MAX_WIDTH}px, 45vw)` }}>
+    <div
+      className="sidebar-wrap"
+      data-horizontal={horizontal || undefined}
+      style={
+        horizontal
+          ? undefined
+          : {
+              width,
+              minWidth: collapsed ? Math.round(COLLAPSED_WIDTH * leftScale) : Math.round(MIN_WIDTH * leftScale),
+              maxWidth: collapsed ? Math.round(COLLAPSED_WIDTH * leftScale) : `min(${Math.round(MAX_WIDTH * leftScale)}px, 45vw)`,
+            }
+      }
+    >
     <nav className="sidebar" aria-label="Places" data-collapsed={(!horizontal && collapsed) || undefined} data-horizontal={horizontal || undefined} data-scrollbar={adv<string>(settings, "sidebar.scrollbar")}>
       <div className="side-top" data-nav-zone="top">
         <button

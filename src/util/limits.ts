@@ -54,3 +54,15 @@ export const clampFloat = (w: number, h: number) => ({
 
 /** The navigation pane's width, kept in range (the folded width is its own thing). */
 export const clampSidebar = (w: number) => Math.round(Math.max(SIDEBAR_LIMITS.min, Math.min(SIDEBAR_LIMITS.max, w)));
+
+/** Global interface icon size range in pixels. */
+export const UI_ICON_LIMITS = { min: 12, max: 32, step: 2, default: 16, win10: 20 } as const;
+
+/** Percentage zoom limits for the top chrome bars and left navigation bar. */
+export const BAR_SCALE_LIMITS = { min: 75, max: 160, step: 5, default: 100 } as const;
+
+export const clampUiIconSize = (px: number) =>
+  Math.round(Math.max(UI_ICON_LIMITS.min, Math.min(UI_ICON_LIMITS.max, px)));
+
+export const clampBarScale = (pct: number) =>
+  Math.round(Math.max(BAR_SCALE_LIMITS.min, Math.min(BAR_SCALE_LIMITS.max, pct)));

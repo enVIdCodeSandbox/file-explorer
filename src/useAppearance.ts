@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import { api } from "./api";
 import { adv } from "./settings/advanced";
+import { clampBarScale, clampUiIconSize } from "./util/limits";
 import { useStore } from "./store";
 import { configureSort } from "./util/filter";
 import { configureFormat } from "./util/format";
@@ -191,6 +192,9 @@ export function useAppearance() {
     root.style.setProperty("--tab-width", `${adv<number>(settings, "tabs.width")}px`);
     root.style.setProperty("--tab-min-width", `${adv<number>(settings, "tabs.minWidth")}px`);
     root.style.setProperty("--tab-height", `${adv<number>(settings, "tabs.height")}px`);
+    root.style.setProperty("--ui-icon-size", `${clampUiIconSize(adv<number>(settings, "ui.iconSize"))}px`);
+    root.style.setProperty("--top-bar-scale", String(clampBarScale(adv<number>(settings, "ui.topBarScale")) / 100));
+    root.style.setProperty("--left-bar-scale", String(clampBarScale(adv<number>(settings, "ui.leftBarScale")) / 100));
     root.style.setProperty("--selection-alpha", `${adv<number>(settings, "ui.selectionOpacity")}%`);
     const follow = adv<boolean>(settings, "band.followAccent");
     const fill = follow ? "var(--accent)" : adv<string>(settings, "band.fillColor");

@@ -1334,3 +1334,171 @@ body[data-terminal-dragging] * { cursor: grabbing !important; }
 /* Full screen on a Mac: macOS removes its own window buttons, so the app's round ones sit in the same place. */
 .traffic-light-fullscreen { display: flex; align-items: center; }
 .traffic-light-fullscreen .window-controls { margin: 0; padding-left: 14px; align-self: center; }
+
+/* ---- Configurable icon size and independent Top / Left bar zoom ---- */
+:root { --ui-icon-size: 16px; --top-bar-scale: 1; --left-bar-scale: 1; }
+
+.caption-strip,
+.title-bar:not([data-vertical]),
+.toolbar,
+.command-bar:not([data-vertical]),
+.win10-ribbon,
+.tab-strip:not([data-vertical]),
+.dock-top .sidebar-wrap { --bar-scale: var(--top-bar-scale, 1); }
+
+.dock-left .sidebar-wrap,
+.sidebar-wrap:not([data-horizontal]),
+.dock-left .command-bar,
+.dock-left .title-bar { --bar-scale: var(--left-bar-scale, 1); }
+
+.win10-qat .qat-btn > .icon,
+.win10-cmd > .icon:first-child,
+.toolbar .nav-buttons button > .icon,
+.toolbar > .icon-button > .icon,
+.command-bar .cmd > .icon:first-child,
+.tab > .icon,
+.tab > .file-icon,
+.tab-new > .icon,
+.sidebar .side-item > .icon:first-child,
+.sidebar .side-item > .file-icon {
+  width: calc(var(--ui-icon-size, 16px) * var(--bar-scale, 1)) !important;
+  height: calc(var(--ui-icon-size, 16px) * var(--bar-scale, 1)) !important;
+}
+
+.title-bar, .caption-strip { min-height: calc((var(--tab-height, 34px) + 6px) * var(--bar-scale, 1)); }
+.caption-strip, :root[data-chrome="windows10"] .caption-strip {
+  min-height: max(calc(30px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 10px) * var(--bar-scale, 1)));
+}
+.title-bar .tab-bar { min-height: max(calc(34px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 12px) * var(--bar-scale, 1))); }
+.tab {
+  height: auto;
+  min-height: max(calc(var(--tab-height, 34px) * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 12px) * var(--bar-scale, 1)));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+  gap: calc(8px * var(--bar-scale, 1));
+}
+.tab-new, .tab-scroll {
+  width: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 10px) * var(--bar-scale, 1)));
+  height: max(calc((var(--tab-height, 34px) - 4px) * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 10px) * var(--bar-scale, 1)));
+}
+.title-bar .window-controls button,
+:root[data-chrome="windows10"] .window-controls button {
+  height: max(calc(30px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 10px) * var(--bar-scale, 1)));
+  width: calc(46px * var(--bar-scale, 1));
+}
+.win10-qat { gap: calc(2px * var(--bar-scale, 1)); padding: calc(2px * var(--bar-scale, 1)) calc(4px * var(--bar-scale, 1)) calc(2px * var(--bar-scale, 1)) calc(6px * var(--bar-scale, 1)); }
+.win10-qat .qat-btn {
+  width: max(calc(24px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+  height: max(calc(24px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+}
+.win10-qat-sep { height: max(calc(15px * var(--bar-scale, 1)), calc(var(--ui-icon-size, 16px) * var(--bar-scale, 1))); }
+
+.toolbar {
+  padding: calc(5px * var(--bar-scale, 1)) calc(10px * var(--bar-scale, 1));
+  gap: calc(8px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+.toolbar button:not(.crumb):not(.window-controls button) {
+  height: auto;
+  min-height: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 8px) * var(--bar-scale, 1)));
+  min-width: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 8px) * var(--bar-scale, 1)));
+  padding: calc(2px * var(--bar-scale, 1)) calc(7px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+:root[data-chrome="windows10"] .toolbar button:not(.crumb):not(.window-controls button) {
+  min-height: max(calc(26px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+  min-width: max(calc(26px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+}
+.toolbar .address-bar, .toolbar .search-box {
+  height: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 8px) * var(--bar-scale, 1)));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+:root[data-chrome="windows10"] .toolbar .address-bar,
+:root[data-chrome="windows10"] .toolbar .search-box {
+  height: max(calc(26px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+}
+.toolbar .search-box { width: calc(240px * var(--bar-scale, 1)); }
+:root[data-chrome="windows10"] .toolbar .search-box { width: calc(220px * var(--bar-scale, 1)); }
+.toolbar .search-box > .icon {
+  width: calc(max(13px, var(--ui-icon-size, 16px) * 0.85) * var(--bar-scale, 1)) !important;
+  height: calc(max(13px, var(--ui-icon-size, 16px) * 0.85) * var(--bar-scale, 1)) !important;
+}
+.toolbar .crumb {
+  height: calc(22px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+
+.command-bar:not(.popout-panel .command-bar) {
+  min-height: max(calc(38px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 14px) * var(--bar-scale, 1)));
+  padding: calc(4px * var(--bar-scale, 1)) calc(10px * var(--bar-scale, 1));
+}
+.command-bar .cmd:not(.popout-panel .cmd) {
+  height: auto;
+  min-height: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 8px) * var(--bar-scale, 1)));
+  padding: calc(3px * var(--bar-scale, 1)) calc(8px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+  gap: calc(5px * var(--bar-scale, 1));
+}
+.win10-ribbon-tabs {
+  height: auto;
+  min-height: calc(24px * var(--bar-scale, 1));
+  padding: 0 calc(6px * var(--bar-scale, 1));
+}
+.win10-file-tab, .win10-ribbon-tab {
+  height: auto;
+  min-height: calc(24px * var(--bar-scale, 1));
+  padding: calc(3px * var(--bar-scale, 1)) calc(13px * var(--bar-scale, 1));
+  font-size: calc(12px * var(--bar-scale, 1));
+}
+.win10-ribbon-toggle {
+  width: max(calc(22px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 4px) * var(--bar-scale, 1)));
+  height: max(calc(22px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 4px) * var(--bar-scale, 1)));
+}
+.win10-ribbon-toggle > .icon {
+  width: calc(max(12px, var(--ui-icon-size, 16px) * 0.78) * var(--bar-scale, 1)) !important;
+  height: calc(max(12px, var(--ui-icon-size, 16px) * 0.78) * var(--bar-scale, 1)) !important;
+}
+.win10-ribbon-body {
+  min-height: max(calc(46px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 24px) * var(--bar-scale, 1)));
+  padding: calc(4px * var(--bar-scale, 1)) calc(6px * var(--bar-scale, 1)) calc(2px * var(--bar-scale, 1));
+}
+.win10-cmd {
+  height: auto;
+  min-height: max(calc(25px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 8px) * var(--bar-scale, 1)));
+  padding: calc(2px * var(--bar-scale, 1)) calc(7px * var(--bar-scale, 1));
+  font-size: calc(12px * var(--bar-scale, 1));
+  gap: calc(5px * var(--bar-scale, 1));
+}
+.win10-cmd > .icon:last-child:not(:first-child) {
+  width: calc(9px * var(--bar-scale, 1)) !important;
+  height: calc(9px * var(--bar-scale, 1)) !important;
+}
+.win10-check {
+  height: auto;
+  min-height: calc(24px * var(--bar-scale, 1));
+  font-size: calc(12px * var(--bar-scale, 1));
+  gap: calc(6px * var(--bar-scale, 1));
+}
+.win10-group { padding: 0 calc(8px * var(--bar-scale, 1)) calc(1px * var(--bar-scale, 1)); }
+.win10-group-label { font-size: calc(10px * var(--bar-scale, 1)); }
+
+.sidebar {
+  padding: calc(8px * var(--bar-scale, 1)) calc(6px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+.sidebar .side-item,
+:root[data-chrome="macos"] .sidebar .side-item,
+:root[data-chrome="linux"] .sidebar .side-item {
+  height: auto;
+  min-height: max(calc(28px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 10px) * var(--bar-scale, 1)));
+  padding: calc(3px * var(--bar-scale, 1)) calc(10px * var(--bar-scale, 1));
+  gap: calc(10px * var(--bar-scale, 1));
+  font-size: calc(var(--font-size, 13px) * var(--bar-scale, 1));
+}
+:root[data-chrome="windows10"] .sidebar .side-item {
+  min-height: max(calc(26px * var(--bar-scale, 1)), calc((var(--ui-icon-size, 16px) + 6px) * var(--bar-scale, 1)));
+}
+.sidebar .side-heading {
+  font-size: calc(11px * var(--bar-scale, 1));
+  margin: calc(12px * var(--bar-scale, 1)) calc(10px * var(--bar-scale, 1)) calc(4px * var(--bar-scale, 1));
+}
+.sidebar[data-collapsed] .side-item { padding: 0; }

@@ -33,6 +33,8 @@ import { DetachedTransfers, Transfers } from "./components/Transfers";
 import { DrivesView, HomeView, SearchView } from "./components/Views";
 import { commandById, commandsFor, mouseComboOf } from "./settings/keys";
 import { startLiveTracker } from "./util/liveFiles";
+import { barAtElement, stepBarScale, type ZoomableBar } from "./util/barZoom";
+import { wheelSteps } from "./util/zoomKeys";
 import { ask, onJobFinished, redoLast, undoLast, useStore } from "./store";
 import { useAppearance } from "./useAppearance";
 import { HOME, THIS_PC, isAppLocation, isArchiveLoc, isRemote, isSshLoc, parentPath, parseLocation } from "./util/path";
@@ -411,13 +413,34 @@ function AppInner() {
       const el = e.target as HTMLElement;
       if (!["INPUT", "TEXTAREA"].includes(el.tagName)) e.preventDefault();
     };
+    const cursor = lastPointer;
+    let barWheelCarry = 0;
+    const onPointer = (e: PointerEvent) => {
+      cursor.x = e.clientX;
+      cursor.y = e.clientY;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || e.defaultPrevented) return;
+      const bar = barAtElement(e.target);
+      if (!bar) return;
+      e.preventDefault();
+      const r = wheelSteps(barWheelCarry, e.deltaY);
+      barWheelCarry = r.carry;
+      if (r.steps) applyBarZoom(bar, r.steps);
+    };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("pointermove", onPointer, { passive: true });
+    window.addEventListener("pointerdown", onPointer, { passive: true });
+    window.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("contextmenu", onContext);
     window.addEventListener("mousedown", stopNative, true);
     window.addEventListener("mouseup", onMouse, true);
     window.addEventListener("auxclick", stopNative, true);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointermove", onPointer);
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("wheel", onWheel);
       window.removeEventListener("contextmenu", onContext);
       window.removeEventListener("mousedown", stopNative, true);
       window.removeEventListener("mouseup", onMouse, true);
@@ -608,6 +631,16 @@ async function askToRestart() {
   }
 }
 
+const lastPointer = { x: -1, y: -1 };
+
+function applyBarZoom(bar: ZoomableBar, steps: number) {
+  const key = bar === "top" ? "ui.topBarScale" : "ui.leftBarScale";
+  useStore.getState().updateSettings((s) => {
+    const current = adv<number>(s, key);
+    s.advanced = { ...s.advanced, [key]: stepBarScale(current, steps) };
+  });
+}
+
 /** Do what a shortcut says, whether it came from a key or a mouse button. Says whether it was one of ours. */
 function runAppCommand(command: string, ctx: { typing: boolean; target: HTMLElement | null }): boolean {
   const s = useStore.getState();
@@ -625,8 +658,15 @@ function runAppCommand(command: string, ctx: { typing: boolean; target: HTMLElem
     case "zoomOut":
     case "zoomOutNum":
     case "zoomReset": {
+      if (inTerminal) return false;
+      const underCursor = lastPointer.x >= 0 && lastPointer.y >= 0 ? document.elementFromPoint(lastPointer.x, lastPointer.y) : target;
+      const bar = barAtElement(underCursor);
+      if (bar) {
+        applyBarZoom(bar, command === "zoomReset" ? 0 : command.startsWith("zoomIn") ? 1 : -1);
+        return true;
+      }
       // Ctrl + and Ctrl - resize the folder view, as Ctrl + scroll does. (The built-in terminal sizes its own text.)
-      if (isAppLocation(place) || inTerminal || !adv<boolean>(s.settings, "files.wheelZoom")) return false;
+      if (isAppLocation(place) || !adv<boolean>(s.settings, "files.wheelZoom")) return false;
       s.zoomView(command === "zoomReset" ? 0 : command.startsWith("zoomIn") ? 1 : -1);
       return true;
     }
