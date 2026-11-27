@@ -169,3 +169,8 @@ export function typeLabel(name: string, isDir: boolean): string {
   const ext = extensionOf(name);
   return ext ? `${ext.toUpperCase()} File` : "File";
 }
+
+/** Display version without the trailing `.0` for `XX.XX.0` releases (e.g. `37.13.0` -> `37.13`). */
+export function shortVersion(version: string): string {
+  return version.replace(/^([1-9]\d*\.\d+)\.0$/, "$1");
+}

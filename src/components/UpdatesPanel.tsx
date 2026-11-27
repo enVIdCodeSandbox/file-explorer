@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { api, on, type UpdateInfo } from "../api";
 import { useStore } from "../store";
-import { formatDate, formatSize } from "../util/format";
+import { formatDate, formatSize, shortVersion } from "../util/format";
 
-/** "0.3.0 (release)" or "f6e5d4c (build)". */
-export const latestLabel = (l: UpdateInfo["latest"]) => (!l ? "" : l.source === "release" ? `${l.version ?? l.sha.slice(0, 7)} (release)` : `${l.sha.slice(0, 7)} (build)`);
+/** "37.13 (release)" or "f6e5d4c (build)". */
+export const latestLabel = (l: UpdateInfo["latest"]) => (!l ? "" : l.source === "release" ? `${l.version ? shortVersion(l.version) : l.sha.slice(0, 7)} (release)` : `${l.sha.slice(0, 7)} (build)`);
 
 export function UpdatesPanel() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
@@ -43,7 +43,7 @@ export function UpdatesPanel() {
       <dl className="details-list">
         <dt>This build</dt>
         <dd>
-          {info.version}
+          {shortVersion(info.version)}
           {info.sha ? <span className="muted"> · {info.sha.slice(0, 7)}</span> : <span className="muted"> · made by hand (no build number)</span>}
         </dd>
         {latest && (

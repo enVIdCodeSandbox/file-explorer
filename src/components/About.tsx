@@ -7,7 +7,7 @@ import { api, type BatteryInfo, type FullReport, type Lifespan, type PhysicalDis
 import { DEVELOPER, PROJECT } from "../about";
 import { useStore } from "../store";
 import { Icon } from "./Icons";
-import { formatCount, formatDate, formatDuration, formatMemory, formatSize } from "../util/format";
+import { formatCount, formatDate, formatDuration, formatMemory, formatSize, shortVersion } from "../util/format";
 
 type Row = [label: string, value: React.ReactNode];
 
@@ -198,7 +198,7 @@ function asText(r: FullReport): string {
   const { app, system: s } = r;
   const line = (k: string, v: unknown) => (v == null || v === "" || v === false ? "" : `${k}: ${v}\n`);
   return [
-    `${PROJECT.name} ${app.version} (${app.profile}, ${app.os}/${app.arch}, Tauri ${app.tauri}, web view ${app.webview ?? "unknown"})\n\n`,
+    `${PROJECT.name} ${shortVersion(app.version)} (${app.profile}, ${app.os}/${app.arch}, Tauri ${app.tauri}, web view ${app.webview ?? "unknown"})\n\n`,
     "System\n",
     line("  OS", `${s.os.name} ${s.os.version} (kernel ${s.os.kernel})`),
     line("  Computer", [s.machine.manufacturer, s.machine.model].filter(Boolean).join(" ")),
@@ -253,7 +253,7 @@ export function About() {
           <h2>{PROJECT.name}</h2>
           <p className="muted">{PROJECT.tagline}</p>
         </div>
-        <span className="version-pill">Version {info.version}</span>
+        <span className="version-pill">Version {shortVersion(info.version)}</span>
       </div>
 
       <div className="button-row">
@@ -279,7 +279,7 @@ export function About() {
       <Section title="This app">
         <Facts
           rows={[
-            ["Version", `${info.version}${report ? ` (${report.app.profile} build)` : ""}`],
+            ["Version", `${shortVersion(info.version)}${report ? ` (${report.app.profile} build)` : ""}`],
             ["License", report?.app.license ? `${PROJECT.licenseName} (${report.app.license})` : PROJECT.licenseName],
             ["Platform", report && `${report.app.os} ${report.app.arch}`],
             ["Tauri", report && report.app.tauri],

@@ -331,9 +331,19 @@ fn version_parses(v: &str) -> bool {
     v.trim_start_matches('v').split('.').all(|p| p.split(['-', '+']).next().unwrap_or("").parse::<u64>().is_ok())
 }
 
-/// Is `a` a newer "x.y.z" than `b`? Unreadable versions are never newer.
+/// Is `a` a newer version than `b`? Trailing `.0` segments are ignored so "37.13" matches "37.13.0".
 pub fn version_newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Option<Vec<u64>> { v.trim_start_matches('v').split('.').map(|p| p.split(['-', '+']).next().unwrap_or("").parse().ok()).collect() };
+    let parse = |v: &str| -> Option<Vec<u64>> {
+        let mut parts: Vec<u64> = v
+            .trim_start_matches('v')
+            .split('.')
+            .map(|p| p.split(['-', '+']).next().unwrap_or("").parse().ok())
+            .collect::<Option<Vec<_>>>()?;
+        while parts.len() > 2 && parts.last() == Some(&0) {
+            parts.pop();
+        }
+        Some(parts)
+    };
     match (parse(a), parse(b)) {
         (Some(a), Some(b)) => a > b,
         _ => false,
@@ -552,6 +562,7 @@ mod tests {
         assert_eq!(is_newer(Some(" "), "def"), Newer::Unknown);
         assert!(version_newer("0.2.0", "0.1.9") && version_newer("v1.0.0", "0.9.9") && !version_newer("0.2.0", "0.2.0") && !version_newer("x", "0.1.0"));
         assert!(version_newer("0.10.0", "0.9.0"), "numbers, not text");
+        assert!(version_newer("37.13.0", "0.37.12") && version_newer("37.14", "37.13.0") && !version_newer("37.13", "37.13.0"));
     }
 
     #[test]

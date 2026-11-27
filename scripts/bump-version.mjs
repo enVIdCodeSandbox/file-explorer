@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Raises the version everywhere it is written, in one go.
-//   node scripts/bump-version.mjs patch     small fixes and tweaks      0.2.0 -> 0.2.1
-//   node scripts/bump-version.mjs minor     a new feature or several    0.2.1 -> 0.3.0
-//   node scripts/bump-version.mjs major     a big change or a rewrite   0.3.0 -> 1.0.0
-//   node scripts/bump-version.mjs 0.4.2     an exact version
+// Raises the version everywhere it is written, in one go (keeping valid X.Y.0 SemVer for Cargo/Tauri).
+//   node scripts/bump-version.mjs patch     small fixes and tweaks      37.13.0 -> 37.14.0 (0.37.12 -> 37.13.0)
+//   node scripts/bump-version.mjs minor     a larger milestone          37.13.0 -> 38.0.0
+//   node scripts/bump-version.mjs major     a big change or a rewrite   37.13.0 -> 38.0.0
+//   node scripts/bump-version.mjs 37.13     an exact XX.XX version (stored as 37.13.0 in manifests)
 //   node scripts/bump-version.mjs           show the current version
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,8 +22,13 @@ if (!arg) {
   process.exit(0);
 }
 const [maj, min, pat] = current.split(".").map(Number);
-const next = { patch: `${maj}.${min}.${pat + 1}`, minor: `${maj}.${min + 1}.0`, major: `${maj + 1}.0.0` }[arg] ?? arg;
-if (!/^\d+\.\d+\.\d+$/.test(next)) throw new Error(`"${arg}" is not patch, minor, major or a version like 1.2.3`);
+const normalizedArg = /^\d+\.\d+$/.test(arg) ? `${arg}.0` : arg;
+const next = {
+  patch: maj === 0 ? `${min}.${pat + 1}.0` : `${maj}.${min + 1}.0`,
+  minor: `${(maj === 0 ? min : maj) + 1}.0.0`,
+  major: `${(maj === 0 ? min : maj) + 1}.0.0`,
+}[arg] ?? normalizedArg;
+if (!/^\d+\.\d+\.\d+$/.test(next)) throw new Error(`"${arg}" is not patch, minor, major or a version like 37.13`);
 
 // Cargo.toml: the workspace version every crate uses.
 write("Cargo.toml", read("Cargo.toml").replace(/^version = "\d+\.\d+\.\d+"/m, `version = "${next}"`));

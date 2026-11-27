@@ -39,6 +39,7 @@ import { Tooltips } from "./components/Tooltip";
 import { listenForExternalDrops } from "./externalDrop";
 import { panelsAt, type PanelId } from "./util/layout";
 import { useMobile } from "./util/device";
+import { shortVersion } from "./util/format";
 import { crumb, installTrail } from "./util/crashTrail";
 import { whenIdle } from "./util/idle";
 
@@ -257,7 +258,7 @@ function AppInner() {
       on("index-status", (indexStatus) => useStore.setState({ indexStatus })),
       on("update-available", (u) =>
         useStore.getState().notify("info", "A new version is out", `${latestLabel(u.latest)} is ready to download`, {
-          facts: [["Your build", u.sha?.slice(0, 7) ?? u.version], ["New version", latestLabel(u.latest)], ["Where", "Settings > Updates"]],
+          facts: [["Your build", u.sha?.slice(0, 7) ?? shortVersion(u.version)], ["New version", latestLabel(u.latest)], ["Where", "Settings > Updates"]],
         }),
       ),
       on("update-ready", () => void askToRestart()),
