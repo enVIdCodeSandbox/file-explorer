@@ -320,8 +320,11 @@ pub fn is_process_elevated() -> bool {
     }
     #[cfg(unix)]
     {
-        // SAFETY: `geteuid` has no preconditions and always succeeds.
-        unsafe { libc::geteuid() == 0 }
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        // SAFETY: `geteuid` has no preconditions and returns the effective UID cleanly on all Unix targets.
+        unsafe { geteuid() == 0 }
     }
     #[cfg(not(any(windows, unix)))]
     {
