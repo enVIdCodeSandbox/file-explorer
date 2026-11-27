@@ -118,7 +118,7 @@ export const SETTINGS: SettingDef[] = [
   { key: "appearance.driveMetric", section: "Appearance", label: "Drive space shows", control: { type: "select", options: [{ value: "used", label: "Space used" }, { value: "free", label: "Space free" }] } },
 
   // ---- Themes ----
-  { key: "appearance.theme", section: "Themes", label: "Color theme", description: "Nineteen built in, including Windows 11, macOS and GNOME looks. The accent color in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colors scheme" },
+  { key: "appearance.theme", section: "Themes", label: "Color theme", description: "Built-in color schemes, including Windows 11, Windows 10, macOS and GNOME looks. The accent color in Appearance overrides a theme's own accent once you change it.", control: { type: "themes" }, keywords: "dark light colors scheme windows 10 11" },
   { key: "appearance.style.font", section: "Themes", label: "Font", description: "Built-in stacks, or a font file you import below.", control: { type: "font" }, keywords: "typeface text" },
   { key: "font.areas", section: "Themes", label: "Fonts for each part", description: "Give the file list, navigation pane, tabs and toolbar, paths and code, and the terminal a font of their own.", control: { type: "fontAreas" }, keywords: "typeface font family installed system terminal sidebar file list" },
   { key: "appearance.style.fontSize", section: "Themes", label: "Text size", control: { type: "number", min: 10, max: 22, unit: "px" } },

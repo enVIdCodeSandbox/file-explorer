@@ -10,7 +10,8 @@ use tauri::window::Color;
 const BACKGROUNDS: &[(&str, u32)] = &[
     ("dark", 0x1c1c1c), ("light", 0xeef1f5), ("midnight", 0x0b1220), ("graphite", 0x121212), ("nord", 0x2e3440),
     ("dracula", 0x21222c), ("solarized-dark", 0x002b36), ("forest", 0x10190f), ("solarized-light", 0xeee8d5),
-    ("sepia", 0xe9dfcc), ("rose", 0xf6e8ee), ("win11-dark", 0x202020), ("win11-light", 0xf3f3f3), ("mac-dark", 0x1e1e1e),
+    ("sepia", 0xe9dfcc), ("rose", 0xf6e8ee), ("win11-dark", 0x202020), ("win11-light", 0xf3f3f3), ("win10-dark", 0x191919),
+    ("win10-light", 0xf0f0f0), ("win10-slate", 0x141a21), ("mac-dark", 0x1e1e1e),
     ("mac-light", 0xececec), ("adwaita-dark", 0x1e1e1e), ("adwaita-light", 0xfafafb), ("material-dark", 0x131314),
     ("material-light", 0xffffff), ("oneui-dark", 0x000000), ("oneui-light", 0xf2f2f2), ("ios-dark", 0x000000),
     ("ios-light", 0xf2f2f7), ("contrast-dark", 0x000000), ("contrast-light", 0xffffff),
