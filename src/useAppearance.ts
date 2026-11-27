@@ -202,7 +202,9 @@ export function useAppearance() {
     root.style.setProperty("--band-border", follow ? "var(--accent)" : adv<string>(settings, "band.borderColor"));
     root.style.setProperty("--band-border-width", `${adv<number>(settings, "band.borderWidth")}px`);
     root.style.setProperty("--band-border-style", adv<string>(settings, "band.borderStyle"));
-    document.body.style.zoom = String(adv<number>(settings, "ui.scale") / 100);
+    const appScale = Math.max(50, Math.min(200, Number(adv<number>(settings, "ui.scale")) || 100));
+    root.style.zoom = String(appScale / 100);
+    document.body.style.zoom = "";
     configureFormat({ units: adv<"decimal" | "binary" | "windows">(settings, "files.sizeUnits"), dates: adv<string>(settings, "files.dateFormat"), clock: adv<string>(settings, "files.clock") });
     configureSort({ natural: adv<boolean>(settings, "files.naturalSort"), caseSensitive: adv<boolean>(settings, "files.caseSensitive") });
   }, [settings]);

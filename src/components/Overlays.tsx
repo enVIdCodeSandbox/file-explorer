@@ -364,6 +364,7 @@ export function OpenWithDialog() {
         <div className="openwith-footer">
           <button className="secondary" onClick={() => void browse()} disabled={busy}>Find a program…</button>
           <span className="grow" />
+          <button className="secondary" onClick={close} disabled={busy}>Cancel</button>
           <button className="secondary" disabled={!picked || busy} onClick={() => void run(false)} title="Open only this file once without changing the default">Just once</button>
           <button className="primary" disabled={!picked || busy} onClick={() => void run(true)} title="Open this file and remember this app for this file type and its supported media types">Always open</button>
         </div>

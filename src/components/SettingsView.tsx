@@ -72,9 +72,27 @@ function ControlFor({ def }: { def: SettingDef }) {
           ))}
         </select>
       );
-    case "number":
+    case "number": {
+      const clamped = (raw: string) => Math.max(c.min, Math.min(c.max, Math.round(Number(raw) || 0)));
+      const showSlider = c.unit === "%" && c.min >= 10 && c.max <= 250;
       return (
         <span className="number-field">
+          {showSlider && (
+            <input
+              type="range"
+              className="zoom-range"
+              aria-label={`${def.label} slider`}
+              min={c.min}
+              max={c.max}
+              step={c.step ?? 5}
+              value={Math.max(c.min, Math.min(c.max, Number(value) || c.min))}
+              onChange={(e) => {
+                const n = clamped(e.target.value);
+                setDraft(String(n));
+                set(n);
+              }}
+            />
+          )}
           <input
             type="number"
             aria-label={def.label}
@@ -82,13 +100,12 @@ function ControlFor({ def }: { def: SettingDef }) {
             max={c.max}
             step={c.step ?? 1}
             value={draft}
-            onChange={(e) =>
-              setLater(e.target.value, (t) => Math.max(c.min, Math.min(c.max, Math.round(Number(t) || 0))))
-            }
+            onChange={(e) => setLater(e.target.value, clamped)}
           />
           {c.unit && <span className="muted">{c.unit}</span>}
         </span>
       );
+    }
     case "text":
       return (
         <input

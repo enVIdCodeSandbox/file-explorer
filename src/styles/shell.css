@@ -515,14 +515,14 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .sidebar[data-scrollbar="hover"]:hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 40%, transparent); }
 
 /* ---- Open with… chooser ---- */
-.openwith-dialog { width: clamp(520px, 58vw, 860px); max-width: calc(100vw - 32px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.openwith-dialog { width: clamp(580px, 64vw, 900px); max-width: calc(100vw - 32px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .openwith-titlebar { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 16px; flex: none; cursor: grab; user-select: none; touch-action: none; background: color-mix(in srgb, var(--text) 5%, var(--surface)); border-bottom: 1px solid var(--border); font-size: var(--font-size-small); color: var(--text-muted); }
 .openwith-titlebar:active { cursor: grabbing; }
 .openwith-titlebar-text { flex: 1; }
-.openwith-search { margin: 0 32px 10px; }
+.openwith-search { margin: 0 28px 10px; }
 .openwith-search .text-input { width: 100%; }
-.openwith-dialog h3 { margin: 18px 32px 8px; font-size: 20px; font-weight: 600; }
-.openwith-why { margin: 0 32px 14px; color: var(--text-muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; }
+.openwith-dialog h3 { margin: 18px 28px 8px; font-size: 20px; font-weight: 600; }
+.openwith-why { margin: 0 28px 14px; color: var(--text-muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; }
 .openwith-why strong { color: var(--text); font-weight: 600; }
 .openwith-list { height: min(60vh, 600px); min-height: 220px; overflow-y: auto; padding: 0 20px 10px; }
 .openwith-list section { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); column-gap: 8px; }
@@ -534,10 +534,14 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .openwith-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--accent) 22%, var(--surface-hover)); color: var(--text); font-weight: 600; font-size: 17px; flex: none; }
 .openwith-row img { width: 40px; height: 40px; flex: none; object-fit: contain; }
 .openwith-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.openwith-error { margin: 0 32px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
-.openwith-footer { display: flex; align-items: center; gap: 10px; padding: 16px 32px; background: color-mix(in srgb, var(--text) 4%, var(--surface)); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
-.openwith-footer button { min-width: 120px; height: 38px; white-space: nowrap; font-size: 14px; }
-.openwith-footer button.secondary { min-width: 0; padding: 0 18px; }
+.openwith-error { margin: 0 28px 8px; color: var(--danger, #ff7b72); font-size: var(--font-size-small); }
+.openwith-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 24px; background: color-mix(in srgb, var(--text) 4%, var(--surface)); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
+.openwith-footer .grow { min-width: 24px; }
+.openwith-footer button { min-width: 96px; height: 36px; padding: 0 16px; white-space: nowrap; font-size: 13.5px; }
+.openwith-footer button.secondary { min-width: 84px; padding: 0 14px; }
+
+.number-field { display: inline-flex; align-items: center; gap: 8px; }
+.number-field .zoom-range { width: 140px; accent-color: var(--accent); cursor: pointer; }
 
 /* ---- Presets, profiles, resources, locks, setup (added with the 21-item batch) ---- */
 .pill { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); vertical-align: middle; }

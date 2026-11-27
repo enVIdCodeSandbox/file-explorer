@@ -98,7 +98,7 @@ export const ADVANCED: AdvDef[] = [
   sel("auto", "ui.phoneLayout", "Interface", "Phone layout", [["auto", "Automatic (on phones and tablets)"], ["on", "Always"], ["off", "Never"]], "The touch layout: one column, a bar along the bottom, press and hold to select. \"Always\" shows it on a computer too, which is a quick way to see it; make the window narrow."),
   sel("slider", "ui.perfPresetView", "Interface", "Performance presets are shown as", [["slider", "A slider"], ["cards", "Cards"]], "Settings > Presets and profiles has a button for this too."),
   yn(true, "ui.animations", "Interface", "Animations", "Turn off for instant, motion-free changes."),
-  num(100, "ui.scale", "Interface", "Interface zoom", 60, 200, "%", "Makes everything larger or smaller.", 5),
+  num(100, "ui.scale", "Interface", "App zoom", 50, 200, "%", "Scales the entire app up or down in percentages relative to normal size (100%).", 5),
   num(16, "ui.iconSize", "Interface", "Interface icon size", 12, 32, "px", "Size of icons in the ribbon, toolbars, tabs, navigation pane and compact file rows.", 2),
   num(100, "ui.topBarScale", "Interface", "Top bar zoom", 75, 160, "%", "Scales the top bars (tabs, toolbar, ribbon and icons). You can also hover the top bar and use Ctrl + scroll or Ctrl + / -.", 5),
   num(100, "ui.leftBarScale", "Navigation pane", "Left bar zoom", 75, 160, "%", "Scales the left navigation pane and its icons. You can also hover the left bar and use Ctrl + scroll or Ctrl + / -.", 5),
