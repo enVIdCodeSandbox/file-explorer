@@ -487,6 +487,7 @@ export function MobileApp({ location, overlays }: { location: string; overlays: 
       { id: "m-hidden", label: "Show hidden files", checked: settings.general.showHidden, separatorBefore: true, run: () => updateSettings((x) => void (x.general.showHidden = !x.general.showHidden)) },
       { id: "m-transfers", label: "Transfers", icon: "forward", run: () => useStore.setState({ transfersOpen: true }) },
       { id: "m-notices", label: "Recent actions", icon: "info", run: () => useStore.setState({ noticesOpen: true, unreadNotices: 0 }) },
+      { id: "m-metrics", label: "Metrics & telemetry", icon: "chart", run: () => useStore.getState().openMetrics() },
       { id: "m-settings", label: "Settings", icon: "settings", run: openSettings },
     ];
     const folder: MenuItem[] =

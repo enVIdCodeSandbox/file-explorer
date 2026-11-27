@@ -53,6 +53,8 @@ const TasksView = lazy(() => import("./components/Tasks").then((m) => ({ default
 const Viewer = lazy(() => import("./components/Viewer").then((m) => ({ default: m.Viewer })));
 const Setup = lazy(() => import("./components/Setup").then((m) => ({ default: m.Setup })));
 const SettingsView = lazy(() => import("./components/SettingsView").then((m) => ({ default: m.SettingsView })));
+const MetricsModal = lazy(() => import("./components/Metrics").then((m) => ({ default: m.MetricsModal })));
+const DetachedMetrics = lazy(() => import("./components/Metrics").then((m) => ({ default: m.DetachedMetrics })));
 const TerminalPanel = lazy(() => import("./components/Terminal").then((m) => ({ default: m.TerminalPanel })));
 const DetachedTerminal = lazy(() => import("./components/Terminal").then((m) => ({ default: m.DetachedTerminal })));
 const BatchRename = lazy(() => import("./components/BatchRename").then((m) => ({ default: m.BatchRename })));
@@ -93,6 +95,7 @@ function AppInner() {
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
   const activeTab = useStore((s) => s.activeTab);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const metricsOpen = useStore((s) => s.metricsOpen);
   const tasksOpen = useStore((s) => s.tasksOpen);
   const settings = useStore((s) => s.settings);
   const showDetails = useStore((s) => s.settings?.appearance.showDetailsPane);
@@ -459,6 +462,7 @@ function AppInner() {
   }
 
   if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "settings") return <Part><SettingsView detached /></Part>;
+  if ((window as unknown as { __VIEW__?: string }).__VIEW__ === "metrics") return <Part><DetachedMetrics /></Part>;
 
   // Phones and tablets: the same pages and dialogs in a one-column touch layout.
   if (mobile)
@@ -472,6 +476,7 @@ function AppInner() {
             <Notices />
             {settings && !settings.setupDone && <Part><Setup /></Part>}
             {settingsOpen && <Part><SettingsView /></Part>}
+            {metricsOpen && <Part><MetricsModal /></Part>}
             <PropertiesDialog />
             <PermissionsDialog />
             <OpenWithDialog />
@@ -567,6 +572,7 @@ function AppInner() {
       {settings && !settings.setupDone && <Part><Setup /></Part>}
       {filterAnchor && <FilterPanel anchor={filterAnchor} onClose={() => setFilterAnchor(null)} />}
       {settingsOpen && <Part><SettingsView /></Part>}
+      {metricsOpen && <Part><MetricsModal /></Part>}
       {tasksOpen && <Part><TasksView /></Part>}
       <PropertiesDialog />
       <PermissionsDialog />

@@ -20,6 +20,7 @@ import { MacAccessPanel } from "./MacAccess";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { PerfPresetsPanel, ProfilesPanel, ResourcesPanel, UiPresetsPanel } from "./PresetPanels";
 import { ActivityLogPanel } from "./ActivityLogPanel";
+import { MetricsSettingsSection } from "./Metrics";
 import { FolderViewsPanel, CustomActionsPanel, UserCommandsPanel, TransferMethodsPanel, DefaultFileManagerPanel, FontAreasPanel, FontPicker, FontSelect, ImportsManager, KeysPanel, LayoutEditor, MaintenancePanel, StoragePanel, ThemeGallery } from "./SettingsPanels";
 
 function ControlFor({ def }: { def: SettingDef }) {
@@ -171,6 +172,8 @@ function ControlFor({ def }: { def: SettingDef }) {
       return <FontSelect label={def.label} value={String(value ?? "")} onChange={set} fixedWidth={c.fixedWidth} defaultLabel={c.fixedWidth ? "Default fixed-width font" : "Same as the app"} />;
     case "methods":
       return <TransferMethodsPanel />;
+    case "metrics":
+      return <MetricsSettingsSection />;
     case "menuItems": {
       const hidden = new Set(value as string[]);
       return (
@@ -382,7 +385,7 @@ export function SettingsView({ detached = false }: { detached?: boolean }) {
             <section key={name}>
               <h3>{t(name)}</h3>
               {defs.map((d) => {
-                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "activityLog", "perfPresets", "uiPresets", "profiles", "resources", "locks", "deleteGuard", "macAccess", "methods", "icons", "fontAreas"].includes(d.control.type);
+                const wide = ["css", "menuItems", "themes", "imports", "layout", "storage", "activityLog", "perfPresets", "uiPresets", "profiles", "resources", "locks", "deleteGuard", "macAccess", "methods", "metrics", "icons", "fontAreas"].includes(d.control.type);
                 const lockable = PRESET_CONTROLLED_KEYS.has(d.key);
                 const locked = lockable && !!settings && isSettingLocked(settings, d.key);
                 return (

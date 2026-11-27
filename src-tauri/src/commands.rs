@@ -204,6 +204,7 @@ pub fn list_dir_cancel(ticket: u64) {
 /// so the interface can show them at once; the result is still the whole listing.
 #[tauri::command]
 pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String, ticket: Option<u64>) -> CmdResult<Listing> {
+    let op = fast_core::telemetry::begin("list_dir", || path.clone());
     let st = state.inner().clone();
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(t) = ticket {
@@ -271,6 +272,7 @@ pub async fn list_dir(app: AppHandle, state: State<'_, Shared>, path: String, ti
     if let Some(t) = ticket {
         LISTINGS.lock().remove(&t);
     }
+    fast_core::telemetry::finish_guard(op, &result);
     result
 }
 
@@ -634,6 +636,7 @@ pub async fn sniff_types(state: State<'_, Shared>, paths: Vec<String>) -> CmdRes
 
 #[tauri::command]
 pub async fn thumbnail(state: State<'_, Shared>, path: String, size: u32) -> CmdResult<tauri::ipc::Response> {
+    let _op = fast_core::telemetry::begin("thumbnail", || path.clone());
     let st = state.inner().clone();
     if !st.budget.read().thumbnails {
         return Err("thumbnails are disabled".into());
@@ -1283,6 +1286,7 @@ struct SearchBatch {
 /// `search-hits` events as they are found, so nothing waits for a full scan.
 #[tauri::command]
 pub async fn search(app: AppHandle, state: State<'_, Shared>, query: String, scope: Option<String>, id: u64) -> CmdResult<SearchResponse> {
+    let _op = fast_core::telemetry::begin("search", || query.clone());
     let st = state.inner().clone();
     // Only the newest query matters: stop whatever was still running.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -2332,6 +2336,7 @@ pub async fn create_item(
 
 #[tauri::command]
 pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Option<String>> {
+    let _op = fast_core::telemetry::begin("open_item", || path.clone());
     let st = state.inner().clone();
     blocking(move || {
         guard(&st, &path)?;
@@ -2376,6 +2381,7 @@ pub async fn open_item(state: State<'_, Shared>, path: String) -> CmdResult<Opti
 /// Programs that could open a file: the default, the ones made for it, and the rest.
 #[tauri::command]
 pub async fn open_choices(path: String) -> CmdResult<fast_core::openwith::Choices> {
+    let _op = fast_core::telemetry::begin("open_choices", || path.clone());
     blocking(move || Ok(fast_core::openwith::choices(Path::new(&path)))).await
 }
 
@@ -2388,6 +2394,7 @@ pub async fn default_app(path: String, icon: bool) -> CmdResult<fast_core::openw
 /// Every program on this computer that could be chosen to open a file, by name.
 #[tauri::command]
 pub async fn installed_apps(path: String) -> CmdResult<Vec<fast_core::openwith::App>> {
+    let _op = fast_core::telemetry::begin("installed_apps", || path.clone());
     blocking(move || Ok(fast_core::openwith::installed_apps(Path::new(&path)))).await
 }
 
@@ -4116,6 +4123,9 @@ fn open_detached(app: &AppHandle, kind: &'static str, title: &str, size: (f64, f
     let handle = app.clone();
     win.on_window_event(move |e| {
         if matches!(e, tauri::WindowEvent::Destroyed) {
+            if kind == "metrics" {
+                crate::metrics::set_active("window", false);
+            }
             let _ = handle.emit("detached", DetachedEvent { kind: kind.into(), open: false });
         }
     });
@@ -4132,6 +4142,11 @@ pub struct DetachedEvent {
 #[tauri::command]
 pub async fn open_transfers_window(app: AppHandle) -> CmdResult<()> {
     open_detached(&app, "transfers", "Transfers - FAST File Explorer", (780.0, 580.0), (420.0, 300.0))
+}
+
+#[tauri::command]
+pub async fn open_metrics_window(app: AppHandle) -> CmdResult<()> {
+    open_detached(&app, "metrics", "Metrics & Telemetry - FAST File Explorer", (980.0, 740.0), (580.0, 440.0))
 }
 
 /// Show one terminal session in a window of its own (a terminal dragged out of the panel). Each session gets its own

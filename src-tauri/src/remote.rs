@@ -27,6 +27,12 @@ pub struct Remote {
     idle: Vec<Box<dyn Session>>,
 }
 
+impl Remote {
+    pub(crate) fn summary(&self) -> (String, String, u16, usize) {
+        (self.server.base_url(), self.server.host.clone(), self.server.port, self.idle.len())
+    }
+}
+
 fn err<E: ToString>(e: E) -> String {
     e.to_string()
 }
@@ -863,6 +869,7 @@ pub async fn remote_copy_start(app: AppHandle, state: State<'_, Shared>, sources
         let items = AtomicU64::new(0);
         let current = parking_lot::Mutex::new(String::new());
         let on_bytes = |n: u64| {
+            fast_core::telemetry::record_remote_io(if !dest_remote { n } else { 0 }, if dest_remote { n } else { 0 });
             let d = done.fetch_add(n, Ordering::Relaxed) + n;
             rep.running((items.load(Ordering::Relaxed), 0), (d, total.load(Ordering::Relaxed)), &current.lock());
         };

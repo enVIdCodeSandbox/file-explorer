@@ -460,6 +460,9 @@ export function ResourcesPanel() {
         <button className="secondary" onClick={() => void smallest()}>
           Smallest footprint…
         </button>
+        <button className="secondary" onClick={() => useStore.getState().openMetrics()}>
+          <Icon name="chart" size={13} /> Open live Metrics…
+        </button>
       </div>
       <label className="check-line">
         <input

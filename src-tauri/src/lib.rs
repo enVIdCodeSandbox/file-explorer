@@ -4,6 +4,7 @@ mod commands;
 mod iconpacks;
 mod crash;
 mod launch;
+mod metrics;
 // Used by the desktop build only; a phone compiles the code but never calls it.
 #[cfg_attr(not(desktop), allow(unused))]
 mod merge;
@@ -433,6 +434,12 @@ pub fn run() {
             commands::delete_guard_check,
             commands::resource_usage,
             commands::compact_memory,
+            commands::open_metrics_window,
+            metrics::metrics_set_active,
+            metrics::metrics_reset,
+            metrics::metrics_snapshot,
+            metrics::metrics_collect_admin,
+            metrics::metrics_save_file,
             commands::disk_smart_admin,
             commands::clear_cache,
             commands::clear_cache_for,
@@ -504,6 +511,9 @@ pub fn run_helper(args: &[String]) -> i32 {
             Ok(()) => 0,
             Err(_) => 1,
         };
+    }
+    if args.iter().any(|a| a == "--admin-metrics") {
+        return metrics::admin_helper_main(args);
     }
     // An automated task that needs administrator rights.
     if args.iter().any(|a| a == "--run-task") {

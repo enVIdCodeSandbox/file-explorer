@@ -235,6 +235,9 @@ interface State {
   isSecondary: boolean;
   /** Open Settings: in its own window if it is detached, otherwise in this one. */
   openSettings: () => void;
+  metricsOpen: boolean;
+  openMetrics: () => void;
+  closeMetrics: () => void;
   /** Put tabs back into this window, at the place they were taken from. */
   insertTabs: (locations: string[], index?: number) => void;
   sort: { key: SortKey; asc: boolean };
@@ -679,6 +682,9 @@ export const useStore = create<State>((set, get) => ({
     if (get().detached.settings) void api.openSettingsWindow().catch(() => {});
     else set({ settingsOpen: true });
   },
+  metricsOpen: false,
+  openMetrics: () => set({ metricsOpen: true }),
+  closeMetrics: () => set({ metricsOpen: false }),
   insertTabs: (locations, index) => {
     if (!locations.length) return;
     const made = locations.map((l) => makeTab(l));

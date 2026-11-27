@@ -35,6 +35,12 @@ pub struct Bridge {
     next_ssh: AtomicU64,
 }
 
+impl Bridge {
+    pub fn active_ssh_count(&self) -> usize {
+        self.ssh.lock().len()
+    }
+}
+
 #[derive(Serialize, Clone)]
 struct OutEvent {
     sid: String,

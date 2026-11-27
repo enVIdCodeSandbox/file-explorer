@@ -1245,7 +1245,14 @@ export const api = {
   /** These tabs of `source` were taken. */
   mergeDone: (source: string, ids: string[]) => invoke<void>("merge_done", { source, ids }),
   openSettingsWindow: () => invoke<void>("open_settings_window"),
+  openMetricsWindow: () => invoke<void>("open_metrics_window"),
   reattach: (kind: "settings" | "transfers" | "terminal", payload?: unknown) => invoke<void>("reattach", { kind, payload }),
+  metricsSetActive: (client: string, active: boolean) => invoke<void>("metrics_set_active", { client, active }),
+  metricsReset: () => invoke<void>("metrics_reset"),
+  metricsSnapshot: () => invoke<MetricsSnapshot>("metrics_snapshot"),
+  metricsCollectAdmin: () => invoke<PrivilegedMetrics>("metrics_collect_admin"),
+  metricsSaveFile: (folder: string, filename: string, content: string, append = false) =>
+    invoke<string>("metrics_save_file", { folder, filename, content, append }),
   folderSizesStart: (dir: string, names: string[], refresh: boolean, policy: SizePolicy) => invoke<void>("folder_sizes_start", { dir, names, refresh, policy }),
   cacheUsage: () => invoke<CacheEntry[]>("cache_usage"),
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
@@ -1509,4 +1516,179 @@ export interface LockInfo {
 export interface LocksState {
   hasMain: boolean;
   locks: LockInfo[];
+}
+
+export interface NetIfaceMetric {
+  name: string;
+  rxPerSec: number;
+  txPerSec: number;
+  totalRx: number;
+  totalTx: number;
+  packetsRx: number;
+  packetsTx: number;
+  errorsRx: number;
+  errorsTx: number;
+}
+
+export interface TempMetric {
+  label: string;
+  celsius: number;
+  maxCelsius: number | null;
+  criticalCelsius: number | null;
+}
+
+export interface DiskVolumeMetric {
+  name: string;
+  mount: string;
+  fs: string;
+  kind: string;
+  totalBytes: number;
+  availableBytes: number;
+  readOnly: boolean;
+}
+
+export interface RemoteEndpointMetric {
+  url: string;
+  host: string;
+  port: number;
+  idleConnections: number;
+  rttMs: number | null;
+}
+
+export interface OpLatencySummary {
+  op: string;
+  count: number;
+  errors: number;
+  lastMs: number;
+  avgMs: number;
+  p95Ms: number;
+  maxMs: number;
+  expectedMs: number;
+  samplesMs: number[];
+}
+
+export interface RecentOpEvent {
+  seq: number;
+  op: string;
+  detail: string;
+  durationMs: number;
+  ok: boolean;
+  ageMs: number;
+}
+
+export interface TelemetryReport {
+  operations: OpLatencySummary[];
+  recent: RecentOpEvent[];
+}
+
+export interface MetricsSnapshot {
+  sampledAtMs: number;
+  isElevated: boolean;
+  canElevate: boolean;
+  osName: string;
+  kernelVersion: string;
+  uptimeSecs: number;
+  loadAvg: [number, number, number];
+  cpuPercent: number;
+  perCoreCpu: number[];
+  cpuFreqMhz: number;
+  physicalCores: number;
+  logicalCores: number;
+  memoryTotalBytes: number;
+  memoryUsedBytes: number;
+  memoryAvailableBytes: number;
+  swapTotalBytes: number;
+  swapUsedBytes: number;
+  appPid: number;
+  appUptimeSecs: number;
+  appCpuPercent: number;
+  appMemoryBytes: number;
+  appVirtualBytes: number;
+  appThreads: number;
+  appHandles: number;
+  appDiskReadPerSec: number;
+  appDiskWritePerSec: number;
+  appDiskReadTotal: number;
+  appDiskWriteTotal: number;
+  netRxPerSec: number;
+  netTxPerSec: number;
+  netTotalRx: number;
+  netTotalTx: number;
+  interfaces: NetIfaceMetric[];
+  remoteReadPerSec: number;
+  remoteWritePerSec: number;
+  remoteReadTotal: number;
+  remoteWriteTotal: number;
+  remotes: RemoteEndpointMetric[];
+  indexEntries: number;
+  indexMemoryBytes: number;
+  indexState: string;
+  listingsCached: number;
+  listingsMemoryBytes: number;
+  folderSizesCached: number;
+  folderSizesMemoryBytes: number;
+  activeTransfers: number;
+  activeDeletes: number;
+  activeAnalyses: number;
+  activeShares: number;
+  watchedDirs: number;
+  openTerminals: number;
+  thumbWorkersBusy: number;
+  thumbWorkersTotal: number;
+  slowWorkersBusy: number;
+  slowWorkersTotal: number;
+  disks: DiskVolumeMetric[];
+  temperatures: TempMetric[];
+  telemetry: TelemetryReport;
+}
+
+export interface AdminKernelMetrics {
+  nonPagedPoolBytes: number | null;
+  pagedPoolBytes: number | null;
+  commitBytes: number | null;
+  commitLimitBytes: number | null;
+  pageFaultsPerSec: number | null;
+  contextSwitchesPerSec: number | null;
+  systemCallsPerSec: number | null;
+  interruptPercent: number | null;
+  dpcPercent: number | null;
+}
+
+export interface AdminDiskPerf {
+  name: string;
+  queueLength: number;
+  avgReadMs: number;
+  avgWriteMs: number;
+  busyPercent: number;
+}
+
+export interface AdminSocketSummary {
+  tcpEstablished: number;
+  tcpListening: number;
+  tcpTimeWait: number;
+  tcpTotal: number;
+  udpEndpoints: number;
+}
+
+export interface AdminGpuMetric {
+  name: string;
+  dedicatedUsedBytes: number;
+  sharedUsedBytes: number;
+  enginePercent: number | null;
+}
+
+export interface AdminThermalZone {
+  name: string;
+  celsius: number;
+}
+
+export interface PrivilegedMetrics {
+  collectedAtMs: number;
+  elevatedIdentity: string;
+  kernel: AdminKernelMetrics;
+  physicalDisks: AdminDiskPerf[];
+  sockets: AdminSocketSummary;
+  thermalZones: AdminThermalZone[];
+  gpuAdapters: AdminGpuMetric[];
+  notes: string[];
 }

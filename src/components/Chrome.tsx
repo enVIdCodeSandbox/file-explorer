@@ -1138,6 +1138,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
       { id: "fileTools", label: "File tools", disabled: !inFolder, children: fileToolsItems(selection) },
       { id: "permissions", label: "Permissions", icon: "shield", separatorBefore: true, disabled: selection.length > 1 || (!hasSel && !folder), run: () => useStore.getState().showPermissions(selection.length === 1 ? selection[0] : (folder ?? "")) },
       { id: "properties", label: "Properties", icon: "info", disabled: !hasSel && !folder, run: () => void showProperties(hasSel ? selection : folder ? [folder] : []) },
+      { id: "metrics", label: "Metrics & telemetry", icon: "chart", separatorBefore: true, run: () => useStore.getState().openMetrics() },
       { id: "options", label: "Options", icon: "settings", run: () => useStore.getState().openSettings() },
     ]);
   };
@@ -1192,7 +1193,8 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
         { id: "fileTools", label: "File tools", separatorBefore: true, disabled: !inFolder, children: fileToolsItems(selection) },
         { id: "undo", label: "Undo", icon: "undo", shortcut: sk("undo"), separatorBefore: true, disabled: undoCount === 0, run: () => void undoLast() },
         { id: "redo", label: "Redo", icon: "redo", shortcut: sk("redo"), disabled: redoCount === 0, run: () => void redoLast() },
-        { id: "options", label: "Change folder and search options", icon: "settings", shortcut: sk("settings"), separatorBefore: true, run: () => useStore.getState().openSettings() },
+        { id: "metrics", label: "Metrics & telemetry…", icon: "chart", separatorBefore: true, run: () => useStore.getState().openMetrics() },
+        { id: "options", label: "Change folder and search options", icon: "settings", shortcut: sk("settings"), run: () => useStore.getState().openSettings() },
       ]);
     const pickTab = (tab: "home" | "share" | "view") => {
       if (ribbonTab === tab) setRibbonCollapsed((c) => !c);
@@ -1395,6 +1397,7 @@ export function CommandBar({ onFilter, vertical = false, only, iconOnly = false 
                       { on: settings.appearance.showDetailsPane, keyId: "toggleDetails" },
                     )}
                     {ribbonBtn("terminal", "Terminal", "terminal", toggleTerminalPanel, { on: terminalOpen, keyId: "toggleTerminal" })}
+                    {ribbonBtn("metrics", "Metrics", "chart", () => useStore.getState().openMetrics())}
                   </>,
                 )}
                 {group(

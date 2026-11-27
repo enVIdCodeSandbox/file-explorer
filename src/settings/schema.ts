@@ -33,7 +33,8 @@ export type Control =
   | { type: "icons" }
   | { type: "fontAreas" }
   | { type: "fontFamily"; fixedWidth?: boolean }
-  | { type: "methods" };
+  | { type: "methods" }
+  | { type: "metrics" };
 
 export interface SettingDef {
   /** Dotted path into the Settings object, e.g. "general.showHidden". */
@@ -61,6 +62,7 @@ export const SECTIONS = [
   "Navigation pane",
   "Thumbnails",
   "Performance",
+  "Metrics",
   "Storage",
   "Logs",
   "Privacy and locks",
@@ -181,6 +183,10 @@ export const SETTINGS: SettingDef[] = [
   { key: "performance.metadataCaching", section: "Performance", label: "Cache folder listings", description: "Folders you revisit appear instantly and refresh in the background.", control: toggle, keywords: "metadata cache" },
   { key: "performance.predictivePrefetch", section: "Performance", label: "Preload folders you are likely to open", description: "Loads a folder when you point at it, and the ones you usually open next.", control: toggle, keywords: "predict prefetch hover" },
   { key: "performance.lazyLoading", section: "Performance", label: "Lazy rendering", description: "Only draws rows near the screen. Turning this off renders further ahead and uses more memory.", control: toggle, keywords: "virtual scroll" },
+
+  // ---- Metrics ----
+  { key: "performance.metrics", section: "Metrics", label: "Live app & system telemetry", description: "On-demand monitor for rendering FPS, frame timings, expected operation latencies, network & remote throughput, caches, and optional administrator hardware/kernel telemetry. Consumes zero resources when closed.", control: { type: "metrics" }, keywords: "metrics telemetry fps cpu memory latency network kernel admin sudo root benchmark log csv json" },
+
   { key: "performance.thumbnails", section: "Thumbnails", label: "Show thumbnails", description: "The master switch. Off: every file keeps its type icon. Each performance level sets it.", control: toggle, keywords: "preview pictures photos videos documents" },
   { key: "performance.thumbnailSize", section: "Thumbnails", label: "Preview size in the details pane and elsewhere", description: "How large previews are made when no icon size applies.", control: { type: "number", min: 48, max: 256, step: 16, unit: "px" } },
 

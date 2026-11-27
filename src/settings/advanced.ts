@@ -306,6 +306,8 @@ export const ADVANCED: AdvDef[] = [
   num(70, "perf.prefetchDelayMs", "Speed and memory", "Pointer rest before preloading a folder", 0, 1000, "ms"),
   num(90, "perf.thumbDelayMs", "Speed and memory", "Wait before making a thumbnail", 0, 1000, "ms", "Scrolling fast skips the work."),
   num(10, "perf.overscanRows", "Speed and memory", "Extra rows drawn beyond the screen", 2, 200),
+  num(100, "metrics.refreshMs", "Speed and memory", "Metrics and telemetry update interval", 10, 5000, "ms", "How often the on-demand Metrics monitor samples app & system telemetry (10 ms to 5000 ms, default 100 ms). Only active while Metrics is open.", 10),
+  text("", "metrics.logDir", "Logs", "Metrics log and export folder", "Choose a folder inside Metrics or enter a path", "Folder where JSON/CSV snapshots and continuous JSONL telemetry logs are saved from the Metrics window."),
 ];
 
 const BY_KEY = new Map(ADVANCED.map((d) => [d.key, d]));
