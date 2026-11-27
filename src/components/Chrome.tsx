@@ -1232,7 +1232,7 @@ export function Sidebar({ horizontal = false }: { horizontal?: boolean }) {
   const appearance = useStore((s) => s.settings!.appearance);
   const settings = useStore((s) => s.settings);
   const location = useStore((s) => s.tabs.find((t) => t.id === s.activeTab)?.location);
-  const { navigate, newTab, addRecent, showToast, updateSettings } = useStore.getState();
+  const { navigate, newTab, addRecent, updateSettings } = useStore.getState();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const openPathMenu = usePathMenu(setMenu);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
